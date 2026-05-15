@@ -46,7 +46,7 @@ enum Commands {
         #[arg(short, long)]
         follow: bool,
         /// Number of lines to show
-        #[arg(short, long, default_value = "100")]
+        #[arg(short = 'n', long, default_value = "100")]
         lines: usize,
     },
     /// Edit configuration
