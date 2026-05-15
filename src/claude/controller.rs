@@ -52,7 +52,7 @@ impl ClaudeController {
         }
         {
             let mut wd = self.work_dir.write().await;
-            *wd = work_dir;
+            *wd = work_dir.clone();
         }
 
         // Spawn event processor
@@ -140,7 +140,7 @@ impl ClaudeController {
     }
 
     pub fn subscribe_events(&self) -> mpsc::UnboundedReceiver<ControllerEvent> {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (_tx, rx) = mpsc::unbounded_channel();
         // Forward existing receiver events to new subscriber
         // For simplicity, we return a new channel and the engine will broadcast
         rx

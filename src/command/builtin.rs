@@ -122,7 +122,7 @@ Any other text is sent directly to Claude Code."#
         if model.is_empty() {
             let ctrl = self.controller.lock().await;
             return format!(
-                "Current model: {}. Usage: /model <sonnet|opus|haiku|...\u003e",
+                "Current model: {}. Usage: /model [sonnet|opus|haiku|...]",
                 "(default)"
             );
         }
