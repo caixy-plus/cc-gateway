@@ -16,19 +16,19 @@ Gateway for controlling Claude Code via Feishu/Lark and CLI.
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/caixinyun/cc-gateway/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh | bash
 ```
 
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/caixinyun/cc-gateway/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1 | iex
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/caixinyun/cc-gateway.git
+git clone https://github.com/caixy-plus/cc-gateway.git
 cd cc-gateway
 cargo build --release
 ```
