@@ -5,13 +5,17 @@ pub mod state;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::loader::ConfigLoader;
 
 const DAEMON_PID_FILE: &str = "daemon.pid";
+#[allow(dead_code)]
 const DAEMON_SOCKET_FILE: &str = "daemon.sock";
 
+/// Start the daemon in background (idempotent).
+/// If already running, prints status and returns immediately.
+/// Otherwise spawns a detached child process and exits.
 pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
@@ -26,33 +30,63 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
         }
     }
 
+    // Spawn detached child process that runs the actual daemon
+    let exe = std::env::current_exe().context("Failed to get current executable path")?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("_daemon");
+    if let Some(path) = &config_path {
+        cmd.arg("--config").arg(path);
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let child = cmd.spawn().context("Failed to spawn daemon process")?;
+    println!("cc-gateway daemon started (PID: {})", child.id());
+    Ok(())
+}
+
+/// Run the actual daemon engine (called by the _daemon hidden command).
+pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
+    let config_dir = ConfigLoader::ensure_config_dir()?;
+    let pid_file = config_dir.join(DAEMON_PID_FILE);
+
     let config = if let Some(path) = config_path {
         ConfigLoader::load_from(&path)?
     } else {
         ConfigLoader::load()?
     };
 
+    // Initialize logging before anything else so we can see errors.
+    let log_path = shellexpand::tilde(&config.log.file).to_string();
+    let log_dir = std::path::Path::new(&log_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(log_dir)?;
+
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
+
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&config.log.level)
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339())
+        .init();
+
     info!("Starting cc-gateway daemon");
-
-    #[cfg(unix)]
-    {
-        use std::env;
-        if env::var("CC_GATEWAY_DAEMONIZED").is_err() {
-            // Fork to background
-            let daemonize = daemonize::Daemonize::new()
-                .pid_file(&pid_file)
-                .working_directory(&config_dir);
-
-            match daemonize.start() {
-                Ok(()) => {
-                    env::set_var("CC_GATEWAY_DAEMONIZED", "1");
-                }
-                Err(e) => {
-                    warn!("Failed to daemonize (running in foreground): {}", e);
-                }
-            }
-        }
-    }
 
     // Write PID file
     let pid = std::process::id();
@@ -106,10 +140,166 @@ pub async fn stop() -> Result<()> {
     Ok(())
 }
 
+pub async fn status() -> Result<()> {
+    let config_dir = ConfigLoader::ensure_config_dir()?;
+    let pid_file = config_dir.join(DAEMON_PID_FILE);
+
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            if is_process_alive(pid) {
+                println!("cc-gateway daemon is running (PID: {})", pid);
+                return Ok(());
+            }
+        }
+    }
+
+    println!("cc-gateway daemon is not running.");
+    Ok(())
+}
+
 pub async fn restart(config_path: Option<PathBuf>) -> Result<()> {
     stop().await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    start(config_path).await?;
+    start(config_path).await
+}
+
+pub async fn enable() -> Result<()> {
+    let exe = std::env::current_exe()
+        .context("Failed to determine cc-gateway executable path")?;
+    let exe_str = exe.to_string_lossy();
+    let config_dir = ConfigLoader::ensure_config_dir()?;
+    let config_dir_str = config_dir.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist_dir = dirs::home_dir()
+            .context("Failed to get home directory")?
+            .join("Library/LaunchAgents");
+        fs::create_dir_all(&plist_dir)?;
+        let plist_path = plist_dir.join("com.cc-gateway.daemon.plist");
+
+        let plist_content = format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cc-gateway.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+        <string>start</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{}/logs/daemon.stdout</string>
+    <key>StandardErrorPath</key>
+    <string>{}/logs/daemon.stderr</string>
+</dict>
+</plist>"##,
+            exe_str, config_dir_str, config_dir_str
+        );
+        fs::write(&plist_path, plist_content)?;
+
+        let status = std::process::Command::new("launchctl")
+            .args(["load", "-w", plist_path.to_str().unwrap()])
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("launchctl load failed");
+        }
+        println!("Enabled auto-start at login (launchd).");
+        println!("Plist: {}", plist_path.display());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let systemd_dir = dirs::home_dir()
+            .context("Failed to get home directory")?
+            .join(".config/systemd/user");
+        fs::create_dir_all(&systemd_dir)?;
+        let service_path = systemd_dir.join("cc-gateway.service");
+
+        let service_content = format!(
+            r#"[Unit]
+Description=cc-gateway daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={} start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"#,
+            exe_str
+        );
+        fs::write(&service_path, service_content)?;
+
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status()?;
+        let status = std::process::Command::new("systemctl")
+            .args(["--user", "enable", "cc-gateway.service"])
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("systemctl enable failed");
+        }
+        println!("Enabled auto-start at login (systemd).");
+        println!("Service: {}", service_path.display());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("Auto-start is only supported on macOS and Linux.");
+    }
+
+    Ok(())
+}
+
+pub async fn disable() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = dirs::home_dir()
+            .context("Failed to get home directory")?
+            .join("Library/LaunchAgents/com.cc-gateway.daemon.plist");
+
+        if plist_path.exists() {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", "-w", plist_path.to_str().unwrap()])
+                .status()?;
+            fs::remove_file(&plist_path)?;
+        }
+        println!("Disabled auto-start at login (launchd).");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let service_path = dirs::home_dir()
+            .context("Failed to get home directory")?
+            .join(".config/systemd/user/cc-gateway.service");
+
+        if service_path.exists() {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "disable", "cc-gateway.service"])
+                .status()?;
+            fs::remove_file(&service_path)?;
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status()?;
+        }
+        println!("Disabled auto-start at login (systemd).");
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("Auto-start is only supported on macOS and Linux.");
+    }
+
     Ok(())
 }
 
@@ -131,16 +321,34 @@ pub async fn log(follow: bool, lines: usize) -> Result<()> {
     }
 
     if follow {
-        use std::io::{self, BufRead};
+        use std::io::{self, BufRead, Seek};
         println!("\n-- Following log (Ctrl+C to exit) --");
-        let file = std::fs::File::open(&log_path)?;
-        let reader = io::BufReader::new(file);
-        for line in reader.lines().skip(log_lines.len()) {
-            match line {
-                Ok(l) => println!("{}", l),
+        let mut file = std::fs::File::open(&log_path)?;
+        file.seek(io::SeekFrom::End(0))?;
+        let mut reader = io::BufReader::new(file);
+        let mut buf = String::new();
+
+        loop {
+            match reader.read_line(&mut buf) {
+                Ok(0) => {
+                    // EOF: wait a bit then retry, like tail -f
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
+                Ok(_) => {
+                    if !buf.is_empty() {
+                        // Remove trailing newline if present
+                        if buf.ends_with('\n') {
+                            buf.pop();
+                            if buf.ends_with('\r') {
+                                buf.pop();
+                            }
+                        }
+                        println!("{}", buf);
+                        buf.clear();
+                    }
+                }
                 Err(_) => break,
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
 
@@ -150,7 +358,7 @@ pub async fn log(follow: bool, lines: usize) -> Result<()> {
 fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        use nix::sys::signal::{self, Signal};
+        use nix::sys::signal;
         use nix::unistd::Pid;
         signal::kill(Pid::from_raw(pid as i32), None).is_ok()
     }
@@ -162,5 +370,27 @@ fn is_process_alive(pid: u32) -> bool {
             .output()
             .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_process_alive_current_pid() {
+        let current_pid = std::process::id();
+        assert!(
+            is_process_alive(current_pid),
+            "is_process_alive should return true for the current process"
+        );
+    }
+
+    #[test]
+    fn test_is_process_alive_nonexistent_pid() {
+        assert!(
+            !is_process_alive(999_999),
+            "is_process_alive should return false for a non-existent PID"
+        );
     }
 }

@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct GatewayConfig {
     pub log: LogConfig,
-    pub ai: AiConfig,
     pub claude: ClaudeConfig,
     pub feishu: FeishuConfig,
-    pub workspace: WorkspaceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,24 +17,9 @@ pub struct LogConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct AiConfig {
-    pub enabled: bool,
-    pub provider: String,
-    pub api_key: String,
-    pub base_url: String,
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct ClaudeConfig {
     pub cli_path: String,
-    pub mode: String,
-    pub model: String,
-    pub allowed_tools: Vec<String>,
-    pub disallowed_tools: Vec<String>,
-    pub system_prompt: String,
-    pub reasoning_effort: String,
+    pub default_args: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,23 +30,19 @@ pub struct FeishuConfig {
     pub app_secret: String,
     pub allow_from: String,
     pub encrypt_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WorkspaceConfig {
-    pub scan_dirs: Vec<String>,
     pub default_dir: String,
+    /// "websocket" or "webhook"
+    pub mode: String,
+    /// Bind address for webhook server (e.g. "0.0.0.0:3000")
+    pub webhook_bind: String,
 }
 
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             log: LogConfig::default(),
-            ai: AiConfig::default(),
             claude: ClaudeConfig::default(),
             feishu: FeishuConfig::default(),
-            workspace: WorkspaceConfig::default(),
         }
     }
 }
@@ -77,35 +56,11 @@ impl Default for LogConfig {
     }
 }
 
-impl Default for AiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            provider: "openai".to_string(),
-            api_key: "${OPENAI_API_KEY}".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o-mini".to_string(),
-        }
-    }
-}
-
 impl Default for ClaudeConfig {
     fn default() -> Self {
         Self {
             cli_path: "claude".to_string(),
-            mode: "default".to_string(),
-            model: "".to_string(),
-            allowed_tools: vec![
-                "Read".to_string(),
-                "Grep".to_string(),
-                "Glob".to_string(),
-                "Bash".to_string(),
-                "Edit".to_string(),
-                "Write".to_string(),
-            ],
-            disallowed_tools: vec![],
-            system_prompt: "".to_string(),
-            reasoning_effort: "".to_string(),
+            default_args: "--dangerously-skip-permissions".to_string(),
         }
     }
 }
@@ -118,18 +73,100 @@ impl Default for FeishuConfig {
             app_secret: "${FEISHU_APP_SECRET}".to_string(),
             allow_from: "*".to_string(),
             encrypt_key: "".to_string(),
+            default_dir: "~/Workspace".to_string(),
+            mode: "websocket".to_string(),
+            webhook_bind: "0.0.0.0:3000".to_string(),
         }
     }
 }
 
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            scan_dirs: vec![
-                "~/Workspace".to_string(),
-                "~/Projects".to_string(),
-            ],
-            default_dir: "~/Workspace".to_string(),
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gateway_config_default() {
+        let cfg = GatewayConfig::default();
+        assert_eq!(cfg.log.level, "info");
+        assert_eq!(cfg.log.file, "~/.cc-gateway/logs/gateway.log");
+        assert_eq!(cfg.claude.cli_path, "claude");
+        assert_eq!(cfg.claude.default_args, "--dangerously-skip-permissions");
+        assert!(cfg.feishu.enabled);
+        assert_eq!(cfg.feishu.app_id, "${FEISHU_APP_ID}");
+        assert_eq!(cfg.feishu.app_secret, "${FEISHU_APP_SECRET}");
+        assert_eq!(cfg.feishu.allow_from, "*");
+        assert_eq!(cfg.feishu.encrypt_key, "");
+        assert_eq!(cfg.feishu.default_dir, "~/Workspace");
+    }
+
+    #[test]
+    fn test_log_config_default() {
+        let cfg = LogConfig::default();
+        assert_eq!(cfg.level, "info");
+        assert_eq!(cfg.file, "~/.cc-gateway/logs/gateway.log");
+    }
+
+    #[test]
+    fn test_claude_config_default() {
+        let cfg = ClaudeConfig::default();
+        assert_eq!(cfg.cli_path, "claude");
+        assert_eq!(cfg.default_args, "--dangerously-skip-permissions");
+    }
+
+    #[test]
+    fn test_feishu_config_default() {
+        let cfg = FeishuConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.app_id, "${FEISHU_APP_ID}");
+        assert_eq!(cfg.app_secret, "${FEISHU_APP_SECRET}");
+        assert_eq!(cfg.allow_from, "*");
+        assert_eq!(cfg.encrypt_key, "");
+        assert_eq!(cfg.default_dir, "~/Workspace");
+        assert_eq!(cfg.mode, "websocket");
+        assert_eq!(cfg.webhook_bind, "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_gateway_config_serde_roundtrip() {
+        let original = GatewayConfig::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: GatewayConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(original.log.level, deserialized.log.level);
+        assert_eq!(original.claude.cli_path, deserialized.claude.cli_path);
+        assert_eq!(original.feishu.allow_from, deserialized.feishu.allow_from);
+        assert_eq!(original.feishu.default_dir, deserialized.feishu.default_dir);
+    }
+
+    #[test]
+    fn test_log_config_serde_roundtrip() {
+        let original = LogConfig::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: LogConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(original.level, deserialized.level);
+        assert_eq!(original.file, deserialized.file);
+    }
+
+    #[test]
+    fn test_claude_config_serde_roundtrip() {
+        let original = ClaudeConfig::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: ClaudeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(original.cli_path, deserialized.cli_path);
+        assert_eq!(original.default_args, deserialized.default_args);
+    }
+
+    #[test]
+    fn test_feishu_config_serde_roundtrip() {
+        let original = FeishuConfig::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: FeishuConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(original.enabled, deserialized.enabled);
+        assert_eq!(original.app_id, deserialized.app_id);
+        assert_eq!(original.app_secret, deserialized.app_secret);
+        assert_eq!(original.allow_from, deserialized.allow_from);
+        assert_eq!(original.encrypt_key, deserialized.encrypt_key);
+        assert_eq!(original.default_dir, deserialized.default_dir);
+        assert_eq!(original.mode, deserialized.mode);
+        assert_eq!(original.webhook_bind, deserialized.webhook_bind);
     }
 }

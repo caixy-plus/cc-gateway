@@ -1,4 +1,5 @@
 // Daemon state management
+#![allow(dead_code)]
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

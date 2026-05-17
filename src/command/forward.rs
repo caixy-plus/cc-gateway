@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
 
 use crate::claude::controller::ClaudeController;
 
@@ -11,25 +10,6 @@ pub struct ForwardCommand {
 impl ForwardCommand {
     pub fn new(controller: Arc<Mutex<ClaudeController>>) -> Self {
         Self { controller }
-    }
-
-    /// Handle /cc/ prefix commands - forward to Claude as native slash commands
-    pub async fn handle(&self, message: &str) -> Option<String> {
-        // Strip /cc/ prefix
-        let cmd = message.strip_prefix("/cc/").unwrap_or(message);
-        let claude_cmd = format!("/{}", cmd);
-
-        debug!("Forwarding slash command to Claude: {}", claude_cmd);
-
-        let ctrl = self.controller.lock().await;
-        if !ctrl.is_session_active().await {
-            return Some("No active Claude session. Use /claude to start one.".to_string());
-        }
-
-        match ctrl.send_message(&claude_cmd).await {
-            Ok(()) => None, // Response will come through event channel
-            Err(e) => Some(format!("Failed to send command: {}", e)),
-        }
     }
 
     /// Handle regular messages - forward to Claude
@@ -46,5 +26,27 @@ impl ForwardCommand {
             Ok(()) => None, // Response will come through event channel
             Err(e) => Some(format!("Failed to send message: {}", e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::ClaudeConfig;
+
+    fn setup() -> ForwardCommand {
+        let config = ClaudeConfig::default();
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        ForwardCommand::new(controller)
+    }
+
+    #[tokio::test]
+    async fn test_regular_message_returns_prompt_when_inactive() {
+        let forward = setup();
+        let response = forward.handle_regular("hello").await;
+        assert!(response.is_some());
+        let text = response.unwrap();
+        assert!(text.contains("No active Claude session"));
+        assert!(text.contains("hello"));
     }
 }

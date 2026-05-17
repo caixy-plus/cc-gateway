@@ -1,9 +1,9 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-use crate::claude::controller::{ClaudeController, ControllerEvent};
+use crate::claude::controller::ClaudeController;
 use crate::command::router::CommandRouter;
 use crate::config::model::GatewayConfig;
 use crate::platform::feishu::FeishuPlatform;
@@ -21,7 +21,19 @@ impl DaemonEngine {
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             self.config.claude.clone(),
         )));
-        let router = Arc::new(CommandRouter::new(controller.clone()));
+        {
+            let ctrl = controller.lock().await;
+            let cwd = std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "/".to_string())
+                });
+            ctrl.init_work_dir(cwd).await;
+        }
+        let default_dir = &self.config.feishu.default_dir;
+        let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
 
         // Start Feishu platform if enabled
         let mut feishu_handle = None;
@@ -31,11 +43,19 @@ impl DaemonEngine {
                 router.clone(),
                 controller.clone(),
             );
-            feishu_handle = Some(tokio::spawn(async move {
-                if let Err(e) = platform.run().await {
-                    error!("Feishu platform error: {}", e);
-                }
-            }));
+            if self.config.feishu.mode == "webhook" {
+                feishu_handle = Some(tokio::spawn(async move {
+                    if let Err(e) = platform.run_webhook().await {
+                        error!("Feishu webhook server error: {}", e);
+                    }
+                }));
+            } else {
+                feishu_handle = Some(tokio::spawn(async move {
+                    if let Err(e) = platform.run().await {
+                        error!("Feishu platform error: {}", e);
+                    }
+                }));
+            }
         }
 
         info!("cc-gateway daemon is running");

@@ -5,11 +5,10 @@ Gateway for controlling Claude Code via Feishu/Lark and CLI.
 ## Features
 
 - **Remote Control**: Control your local Claude Code from your phone via Feishu (Lark) bot
-- **Local CLI Chat**: Interactive command-line chat with the same capabilities as the Feishu bot
-- **AI Intent Recognition** (optional): Automatically detect which local project you want to work on
-- **Built-in Commands**: `/cd`, `/claude`, `/pwd`, `/model`, `/cc-quit`, `/cc/...`
+- **Local CLI Chat**: Interactive command-line chat with tab completion and inline hints
+- **Session Switching**: `/claude` enters Claude session mode; everything except `/quit` is forwarded directly to Claude
+- **Directory Picker**: `/ll` opens an interactive directory picker (TUI in CLI, card in Feishu)
 - **Daemon Mode**: Run as a background service with `start/stop/restart/log` commands
-- **Permission Handling**: Approve or deny Claude Code tool requests remotely
 
 ## Installation
 
@@ -45,7 +44,7 @@ cargo build --release
 
    Edit `~/.cc-gateway/config.json`:
    - Set `feishu.app_id` and `feishu.app_secret` (from [Feishu Open Platform](https://open.feishu.cn))
-   - Optionally set `ai.api_key` for smart project detection
+   - Set `feishu.default_dir` to the directory Feishu users should browse (e.g. `~/Workspace`)
 
 2. **Start the daemon**
 
@@ -58,7 +57,7 @@ cargo build --release
    ```bash
    cc-gateway
    cc-gateway> /claude
-   cc-gateway> hello, review this code for me
+   ǔcw Working directory ▶ hello, review this code for me
    ```
 
 4. **Stop the daemon**
@@ -84,13 +83,18 @@ cargo build --release
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/cc-quit` | Quit current Claude session |
+| `/quit` | Quit current Claude session (inactive = exit program) |
 | `/cd <path>` | Change working directory and restart Claude |
-| `/claude` | Start or restart Claude session |
+| `/claude [args...]` | Start or restart Claude session (pass args to Claude CLI) |
 | `/pwd` | Show current working directory |
-| `/model <model>` | Switch Claude model |
-| `/status` | Show gateway status |
-| `/cc/<cmd>` | Forward slash command to Claude (e.g. `/cc/clear`) |
+| `/ll` | Open interactive directory picker |
+
+### Session Switching
+
+After running `/claude`, the gateway enters **session mode**:
+- The prompt changes to `ǔcw ~/Workspace ▶` to indicate you are chatting with Claude
+- Everything you type is sent directly to Claude (no prefix needed)
+- Type `/quit` to stop the session and return to gateway command mode
 
 ## Configuration
 

@@ -6,25 +6,40 @@ Run `cc-gateway` without any subcommand to enter interactive chat mode:
 
 ```bash
 $ cc-gateway
-cc-gateway interactive mode
-Type '/help' for available commands, '/quit' to exit.
+cc-gateway interactive mode  Type '/help' for commands, '/quit' to exit.
 
 cc-gateway> /claude
 Claude session started in: /Users/you/Workspace
 
-cc-gateway> hello Claude
+💬 ~/Workspace ▶ hello Claude
 Hello! How can I help you today?
 
-cc-gateway> /pwd
-Current directory: /Users/you/Workspace
-
-cc-gateway> /cd ~/Projects/my-app
-Working directory changed to: /Users/you/Projects/my-app
-
-cc-gateway> /cc-quit
+💬 ~/Workspace ▶ /quit
 Claude session stopped.
 
 cc-gateway> /quit
+```
+
+### Command Completion
+
+Press `Tab` after typing `/` to see a list of available commands with inline descriptions.
+
+### Session Switching
+
+- `/claude` — enters Claude session mode. The prompt changes to `💬 ~/Workspace ▶`
+- In session mode, everything you type goes directly to Claude
+- `/quit` — stops the session and returns to gateway mode
+- When not in a session, `/quit` exits the program entirely
+
+### Directory Navigation
+
+```bash
+cc-gateway> /cd ~/Projects/my-app
+Working directory changed to: /Users/you/Projects/my-app
+
+cc-gateway> /ll
+# Opens an interactive TUI directory picker
+# Use ↑↓ to navigate, Enter to cd, q to cancel
 ```
 
 ## Daemon Mode
@@ -35,9 +50,7 @@ cc-gateway> /quit
 cc-gateway start
 ```
 
-Starts cc-gateway as a background daemon. The daemon listens for:
-- Feishu messages (if configured)
-- CLI commands via `cc-gateway send` (future)
+Starts cc-gateway as a background daemon. The daemon listens for Feishu messages (if configured).
 
 ### Stop
 
@@ -64,30 +77,19 @@ cc-gateway log -n 500       # Show last 500 lines
 Once the daemon is running with Feishu configured, you can:
 
 1. Open Feishu and find your bot
-2. Send messages directly - they are forwarded to Claude Code
-3. Use gateway commands just like in CLI mode: `/cd`, `/claude`, `/pwd`, etc.
+2. Send messages directly — they are forwarded to Claude Code when a session is active
+3. Use gateway commands just like in CLI mode: `/cd`, `/claude`, `/pwd`, `/ll`, `/help`, `/quit`
 
-### Permission Requests
+### Directory Selection Card
 
-When Claude Code asks for permission to use a tool, you'll receive a message in Feishu. Reply with:
-- `allow` or `yes` or `允许` - Approve the request
-- `deny` or `no` or `拒绝` - Deny the request
+Send `/ll` in Feishu to receive an interactive card listing folders from `default_dir`. Tap a folder button to change the working directory.
 
-## Project Auto-Detection
+### Command Boundaries in Feishu
 
-If `ai.enabled` is true in your config, cc-gateway will try to understand which project you want to work on:
-
-**You:** "帮我修一下 gateway 的 bug"
-
-**cc-gateway:** "Detected project: ~/Projects/gateway. Start working here? (yes/no)"
-
-**You:** "yes"
-
-**cc-gateway:** "Working directory changed to: ~/Projects/gateway. Claude session started."
+- `/cd ..` can only navigate up to `feishu.default_dir` — attempting to go above it returns an access denied message
+- `/quit` is only valid when a Claude session is active; otherwise you will receive a message提示
 
 ## Tips
 
-- Use `/cc/clear` to clear Claude's conversation history
-- Use `/cc/compact` to compress long conversations
-- Use `/model sonnet` to switch to Claude Sonnet model
+- Use `/claude --resume <id>` to resume a previous Claude session
 - Keep sensitive credentials in environment variables, not in config.json

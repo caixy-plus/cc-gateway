@@ -1,19 +1,18 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{info, warn};
 
-mod ai;
 mod cli;
 mod claude;
 mod command;
 mod config;
 mod daemon;
 mod platform;
+mod prompt;
+mod skill;
 mod utils;
 
 use cli::interactive::run_interactive;
-use config::loader::ConfigLoader;
 
 #[derive(Parser)]
 #[command(name = "cc-gateway")]
@@ -49,11 +48,24 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "100")]
         lines: usize,
     },
+    /// Show daemon status
+    Status,
+    /// Enable auto-start on boot
+    Enable,
+    /// Disable auto-start on boot
+    Disable,
     /// Edit configuration
     Config {
         /// Print default config to stdout
         #[arg(long)]
         init: bool,
+    },
+    /// Internal: run the daemon engine (do not use directly)
+    #[command(hide = true, name = "_daemon")]
+    Daemon {
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -75,15 +87,27 @@ async fn main() -> Result<()> {
         Some(Commands::Restart { config }) => {
             daemon::restart(config).await?;
         }
+        Some(Commands::Daemon { config }) => {
+            daemon::run(config).await?;
+        }
         Some(Commands::Log { follow, lines }) => {
             daemon::log(follow, lines).await?;
+        }
+        Some(Commands::Status) => {
+            daemon::status().await?;
+        }
+        Some(Commands::Enable) => {
+            daemon::enable().await?;
+        }
+        Some(Commands::Disable) => {
+            daemon::disable().await?;
         }
         Some(Commands::Config { init }) => {
             if init {
                 let default = config::model::GatewayConfig::default();
                 println!("{}", serde_json::to_string_pretty(&default)?);
             } else {
-                config::loader::open_config_editor()?;
+                config::wizard::run_interactive_config()?;
             }
         }
     }
