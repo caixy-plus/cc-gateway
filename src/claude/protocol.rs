@@ -10,6 +10,7 @@ pub enum InputMessage {
         message: UserMessage,
     },
     #[serde(rename = "control_response")]
+    #[allow(dead_code)]
     ControlResponse {
         response: ControlResponseBody,
     },
@@ -53,6 +54,7 @@ pub enum OutputEvent {
     },
     #[serde(rename = "user")]
     User {
+        #[allow(dead_code)]
         message: UserEventMessage,
     },
     #[serde(rename = "result")]
@@ -74,13 +76,16 @@ pub enum OutputEvent {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AssistantMessage {
+    #[allow(dead_code)]
     pub role: String,
     pub content: Vec<ContentBlock>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserEventMessage {
+    #[allow(dead_code)]
     pub role: String,
+    #[allow(dead_code)]
     pub content: Vec<ContentBlock>,
 }
 
@@ -121,6 +126,7 @@ pub struct UsageInfo {
 }
 
 impl OutputEvent {
+    #[allow(dead_code)]
     pub fn extract_text(&self) -> Option<String> {
         match self {
             OutputEvent::Assistant { message } => {
@@ -142,6 +148,7 @@ impl OutputEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn extract_thinking(&self) -> Option<String> {
         match self {
             OutputEvent::Assistant { message } => {
@@ -161,6 +168,7 @@ impl OutputEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn extract_tool_use(&self) -> Option<(String, Value)> {
         match self {
             OutputEvent::Assistant { message } => {
@@ -201,6 +209,7 @@ pub fn build_user_message(text: &str) -> InputMessage {
     }
 }
 
+#[allow(dead_code)]
 pub fn build_permission_allow(request_id: &str) -> InputMessage {
     InputMessage::ControlResponse {
         response: ControlResponseBody {
@@ -215,6 +224,7 @@ pub fn build_permission_allow(request_id: &str) -> InputMessage {
     }
 }
 
+#[allow(dead_code)]
 pub fn build_permission_deny(request_id: &str, message: &str) -> InputMessage {
     InputMessage::ControlResponse {
         response: ControlResponseBody {
@@ -231,6 +241,7 @@ pub fn build_permission_deny(request_id: &str, message: &str) -> InputMessage {
 
 /// Build a user message containing a tool_result content block.
 /// This is used to feed MCP-executed tool results back into the Claude conversation.
+#[allow(dead_code)]
 pub fn build_tool_result_user_message(content: &str, is_error: bool) -> InputMessage {
     let content_blocks = json!([
         {
