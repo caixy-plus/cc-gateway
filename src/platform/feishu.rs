@@ -1009,7 +1009,14 @@ impl FeishuPlatform {
 
     /// Build an interactive directory selection card.
     /// Feishu card schema v2: buttons are placed directly in body.elements.
-    pub fn build_dir_select_card(&self, dirs: &[(String, String)], receive_id_type: &str, receive_id: &str) -> Value {
+    pub fn build_dir_select_card(
+        &self,
+        dirs: &[(String, String)],
+        page: usize,
+        dir: &str,
+        receive_id_type: &str,
+        receive_id: &str,
+    ) -> Value {
         let mut elements: Vec<Value> = Vec::new();
         elements.push(json!({
             "tag": "div",
@@ -1020,7 +1027,11 @@ impl FeishuPlatform {
         }));
 
         const MAX_DIRS: usize = 40;
-        for (name, path) in dirs.iter().take(MAX_DIRS) {
+        let start = page * MAX_DIRS;
+        let end = ((page + 1) * MAX_DIRS).min(dirs.len());
+        let page_dirs = &dirs[start..end];
+
+        for (name, path) in page_dirs {
             elements.push(json!({
                 "tag": "button",
                 "text": {
@@ -1042,14 +1053,63 @@ impl FeishuPlatform {
             }));
         }
 
-        if dirs.len() > MAX_DIRS {
-            let remaining = dirs.len() - MAX_DIRS;
+        // Pagination controls
+        let mut pagination_buttons: Vec<Value> = Vec::new();
+        if page > 0 {
+            pagination_buttons.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.prev_page")
+                },
+                "type": "default",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "ll_page",
+                            "page": page - 1,
+                            "dir": dir,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+        }
+        if end < dirs.len() {
+            pagination_buttons.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.next_page")
+                },
+                "type": "default",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "ll_page",
+                            "page": page + 1,
+                            "dir": dir,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+        }
+        if !pagination_buttons.is_empty() {
             elements.push(json!({
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": t_fmt!("feishu.more_dirs", COUNT = remaining)
+                    "content": t_fmt!("feishu.page_info", PAGE = page + 1, TOTAL = (dirs.len() + MAX_DIRS - 1) / MAX_DIRS)
                 }
+            }));
+            elements.push(json!({
+                "tag": "action",
+                "actions": pagination_buttons
             }));
         }
 
@@ -1750,7 +1810,7 @@ impl FeishuPlatform {
                     self.send_text_message(token, receive_id_type, receive_id, t!("feishu.no_directories")).await?;
                 } else {
                     info!("[Feishu] /ll building dir select card for {}", receive_id);
-                    let card = self.build_dir_select_card(&dirs, receive_id_type, receive_id);
+                    let card = self.build_dir_select_card(&dirs, 0, &dir, receive_id_type, receive_id);
                     debug!("[Feishu] /ll card JSON: {}", card);
                     info!("[Feishu] /ll sending interactive card to receive_id_type={} receive_id={}", receive_id_type, receive_id);
                     self.send_interactive_card(token, receive_id_type, receive_id, &card).await?;
@@ -1838,6 +1898,41 @@ impl FeishuPlatform {
                             .await?;
                             return Ok(());
                         }
+                    }
+                }
+                if cmd == "ll_page" {
+                    let page = user_value
+                        .get("page")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize;
+                    let dir = user_value
+                        .get("dir")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let receive_id = user_value
+                        .get("chat_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    let receive_id_type = user_value
+                        .get("receive_id_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("chat_id");
+                    if !receive_id.is_empty() && !dir.is_empty() {
+                        let dirs = crate::command::builtin::list_directory_paths(dir)
+                            .unwrap_or_default();
+                        if !dirs.is_empty() {
+                            let card = self.build_dir_select_card(
+                                &dirs,
+                                page,
+                                dir,
+                                receive_id_type,
+                                receive_id,
+                            );
+                            self.send_interactive_card(token, receive_id_type, receive_id, &card)
+                                .await?;
+                        }
+                        return Ok(());
                     }
                 }
             }
