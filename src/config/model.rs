@@ -6,6 +6,9 @@ pub struct GatewayConfig {
     pub log: LogConfig,
     pub claude: ClaudeConfig,
     pub feishu: FeishuConfig,
+    /// Default working directory for gateway sessions.
+    /// Used by /ll, /cd_default, and as the Feishu directory boundary.
+    pub default_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +33,6 @@ pub struct FeishuConfig {
     pub app_secret: String,
     pub allow_from: String,
     pub encrypt_key: String,
-    pub default_dir: String,
     /// "websocket" or "webhook"
     pub mode: String,
     /// Bind address for webhook server (e.g. "0.0.0.0:3000")
@@ -43,6 +45,7 @@ impl Default for GatewayConfig {
             log: LogConfig::default(),
             claude: ClaudeConfig::default(),
             feishu: FeishuConfig::default(),
+            default_dir: "~".to_string(),
         }
     }
 }
@@ -73,7 +76,6 @@ impl Default for FeishuConfig {
             app_secret: "${FEISHU_APP_SECRET}".to_string(),
             allow_from: "*".to_string(),
             encrypt_key: "".to_string(),
-            default_dir: "~/Workspace".to_string(),
             mode: "websocket".to_string(),
             webhook_bind: "0.0.0.0:3000".to_string(),
         }
@@ -96,7 +98,7 @@ mod tests {
         assert_eq!(cfg.feishu.app_secret, "${FEISHU_APP_SECRET}");
         assert_eq!(cfg.feishu.allow_from, "*");
         assert_eq!(cfg.feishu.encrypt_key, "");
-        assert_eq!(cfg.feishu.default_dir, "~/Workspace");
+        assert_eq!(cfg.default_dir, "~");
     }
 
     #[test]
@@ -121,7 +123,6 @@ mod tests {
         assert_eq!(cfg.app_secret, "${FEISHU_APP_SECRET}");
         assert_eq!(cfg.allow_from, "*");
         assert_eq!(cfg.encrypt_key, "");
-        assert_eq!(cfg.default_dir, "~/Workspace");
         assert_eq!(cfg.mode, "websocket");
         assert_eq!(cfg.webhook_bind, "0.0.0.0:3000");
     }
@@ -134,7 +135,7 @@ mod tests {
         assert_eq!(original.log.level, deserialized.log.level);
         assert_eq!(original.claude.cli_path, deserialized.claude.cli_path);
         assert_eq!(original.feishu.allow_from, deserialized.feishu.allow_from);
-        assert_eq!(original.feishu.default_dir, deserialized.feishu.default_dir);
+        assert_eq!(original.default_dir, deserialized.default_dir);
     }
 
     #[test]
@@ -165,7 +166,6 @@ mod tests {
         assert_eq!(original.app_secret, deserialized.app_secret);
         assert_eq!(original.allow_from, deserialized.allow_from);
         assert_eq!(original.encrypt_key, deserialized.encrypt_key);
-        assert_eq!(original.default_dir, deserialized.default_dir);
         assert_eq!(original.mode, deserialized.mode);
         assert_eq!(original.webhook_bind, deserialized.webhook_bind);
     }
