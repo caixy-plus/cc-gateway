@@ -8,20 +8,54 @@ use crate::claude::protocol::{build_user_message, OutputEvent};
 use crate::claude::session::ClaudeSession;
 use crate::config::model::ClaudeConfig;
 
-/// Validate that a path is under the user's home directory.
+/// Validate that a path is allowed.
+/// On macOS/Linux: must be under the home directory.
+/// On Windows: home directory is always allowed; non-system drives are also allowed.
 pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
     let expanded = shellexpand::tilde(path).to_string();
     let path_buf = PathBuf::from(&expanded);
     let canonical = path_buf.canonicalize().unwrap_or(path_buf);
     let home = dirs::home_dir().context("Could not determine home directory")?;
-    if !canonical.starts_with(&home) {
-        anyhow::bail!(
-            "Access denied: '{}' is outside home directory '{}'",
-            canonical.display(),
-            home.display()
-        );
+
+    // Home directory is always allowed on all platforms.
+    if canonical.starts_with(&home) {
+        return Ok(canonical.to_string_lossy().to_string());
     }
-    Ok(canonical.to_string_lossy().to_string())
+
+    // On Windows, also allow paths on non-system drives.
+    #[cfg(windows)]
+    {
+        if let Some(system_drive) = get_system_drive() {
+            if !is_on_drive(&canonical, &system_drive) {
+                return Ok(canonical.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "Access denied: '{}' is outside home directory '{}'",
+        canonical.display(),
+        home.display()
+    )
+}
+
+#[cfg(windows)]
+fn get_system_drive() -> Option<String> {
+    std::env::var("SystemRoot")
+        .ok()
+        .and_then(|root| {
+            let lower = root.to_lowercase();
+            // Extract drive letter like "c:" from "C:\Windows"
+            lower.get(..2).map(|s| s.to_string())
+        })
+}
+
+#[cfg(windows)]
+fn is_on_drive(path: &std::path::Path, drive: &str) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    let drive_lower = drive.to_lowercase();
+    path_str.starts_with(&drive_lower)
+        || path_str.starts_with(&format!(r"\\?\{}", drive_lower))
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +167,7 @@ impl ClaudeController {
         wd.clone()
     }
 
+    #[allow(dead_code)]
     pub async fn set_work_dir(&self, dir: String) -> Result<()> {
         let validated = ensure_under_home(&dir)?;
         {
