@@ -434,6 +434,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "No directories found.",
             Language::ZhCN => "未找到目录。",
         },
+        "feishu.more_dirs" => match lang {
+            Language::En => "...and {COUNT} more directories",
+            Language::ZhCN => "...还有 {COUNT} 个目录未显示",
+        },
         "feishu.dir_changed" => match lang {
             Language::En => "Changed directory to: {PATH}",
             Language::ZhCN => "目录已更改为: {PATH}",
