@@ -19,6 +19,7 @@ use crate::claude::event_formatter::EventAccumulator;
 use crate::command::router::CommandRouter;
 use crate::config::model::FeishuConfig;
 use crate::platform::proto::Frame;
+use crate::{t, t_fmt};
 
 // ---------------------------------------------------------------------------
 // Constants for Feishu pbbp2 WebSocket protocol
@@ -916,11 +917,11 @@ impl FeishuPlatform {
             "header": {
                 "title": {
                     "tag": "plain_text",
-                    "content": "Claude Tool Permission Request"
+                    "content": t!("feishu.permission_title")
                 },
                 "subtitle": {
                     "tag": "plain_text",
-                    "content": format!("Tool: {}", tool_name)
+                    "content": t_fmt!("feishu.permission_subtitle", NAME = tool_name)
                 },
                 "template": "indigo"
             },
@@ -930,14 +931,14 @@ impl FeishuPlatform {
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": format!("**Request ID:** `{}`", request_id)
+                            "content": t_fmt!("feishu.request_id_label", ID = request_id)
                         }
                     },
                     {
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": format!("**Tool Input:**\n```json\n{}\n```", input_preview)
+                            "content": t_fmt!("feishu.tool_input_label", INPUT = input_preview)
                         }
                     },
                     {
@@ -951,7 +952,7 @@ impl FeishuPlatform {
                                 "tag": "button",
                                 "text": {
                                     "tag": "plain_text",
-                                    "content": "Approve Once"
+                                    "content": t!("feishu.approve_once")
                                 },
                                 "type": "primary",
                                 "value": {
@@ -964,7 +965,7 @@ impl FeishuPlatform {
                                 "tag": "button",
                                 "text": {
                                     "tag": "plain_text",
-                                    "content": "Approve Session"
+                                    "content": t!("feishu.approve_session")
                                 },
                                 "type": "primary",
                                 "value": {
@@ -977,7 +978,7 @@ impl FeishuPlatform {
                                 "tag": "button",
                                 "text": {
                                     "tag": "plain_text",
-                                    "content": "Approve Always"
+                                    "content": t!("feishu.approve_always")
                                 },
                                 "type": "primary",
                                 "value": {
@@ -990,7 +991,7 @@ impl FeishuPlatform {
                                 "tag": "button",
                                 "text": {
                                     "tag": "plain_text",
-                                    "content": "Deny"
+                                    "content": t!("feishu.deny")
                                 },
                                 "type": "danger",
                                 "value": {
@@ -1014,7 +1015,7 @@ impl FeishuPlatform {
             "tag": "div",
             "text": {
                 "tag": "lark_md",
-                "content": "Choose a working directory:"
+                "content": t!("feishu.choose_dir")
             }
         }));
 
@@ -1045,7 +1046,7 @@ impl FeishuPlatform {
             "header": {
                 "title": {
                     "tag": "plain_text",
-                    "content": "Select Directory"
+                    "content": t!("feishu.select_dir_title")
                 },
                 "template": "indigo"
             },
@@ -1734,7 +1735,7 @@ impl FeishuPlatform {
                 info!("[Feishu] /ll found {} directories under {}", dirs.len(), dir);
                 if dirs.is_empty() {
                     info!("[Feishu] /ll no directories, sending text fallback");
-                    self.send_text_message(token, receive_id_type, receive_id, "No directories found.").await?;
+                    self.send_text_message(token, receive_id_type, receive_id, t!("feishu.no_directories")).await?;
                 } else {
                     info!("[Feishu] /ll building dir select card for {}", receive_id);
                     let card = self.build_dir_select_card(&dirs, receive_id_type, receive_id);
@@ -1820,7 +1821,7 @@ impl FeishuPlatform {
                                 token,
                                 receive_id_type,
                                 receive_id,
-                                &format!("Changed directory to: {}", path),
+                                &t_fmt!("feishu.dir_changed", PATH = path),
                             )
                             .await?;
                             return Ok(());
@@ -1888,7 +1889,7 @@ impl FeishuPlatform {
                         token,
                         &msg.receive_id_type,
                         &msg.receive_id,
-                        "Unknown command. Available commands: /help, /cd, /claude, /ll, /quit, /pwd",
+                        t!("feishu.unknown_command"),
                     )
                     .await?;
                     return Ok(());
