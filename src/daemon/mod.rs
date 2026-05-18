@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::config::loader::ConfigLoader;
+use crate::{t, t_fmt};
 
 const DAEMON_PID_FILE: &str = "daemon.pid";
 #[allow(dead_code)]
@@ -24,7 +25,7 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     if let Ok(pid_str) = fs::read_to_string(&pid_file) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             if is_process_alive(pid) {
-                println!("cc-gateway daemon is already running (PID: {})", pid);
+                println!("{}", t_fmt!("daemon.already_running", PID = pid));
                 return Ok(());
             }
         }
@@ -48,7 +49,7 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     }
 
     let child = cmd.spawn().context("Failed to spawn daemon process")?;
-    println!("cc-gateway daemon started (PID: {})", child.id());
+    println!("{}", t_fmt!("daemon.started", PID = child.id()));
     Ok(())
 }
 
@@ -122,7 +123,7 @@ pub async fn stop() -> Result<()> {
                         .args(["/PID", &pid.to_string(), "/F"])
                         .output()?;
                 }
-                println!("Sent stop signal to daemon (PID: {})", pid);
+                println!("{}", t_fmt!("daemon.stop_signal", PID = pid));
 
                 // Wait for process to exit
                 for _ in 0..30 {
@@ -136,7 +137,7 @@ pub async fn stop() -> Result<()> {
     }
 
     let _ = fs::remove_file(&pid_file);
-    println!("Daemon stopped.");
+    println!("{}", t!("daemon.stopped"));
     Ok(())
 }
 
@@ -147,13 +148,13 @@ pub async fn status() -> Result<()> {
     if let Ok(pid_str) = fs::read_to_string(&pid_file) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             if is_process_alive(pid) {
-                println!("cc-gateway daemon is running (PID: {})", pid);
+                println!("{}", t_fmt!("daemon.running", PID = pid));
                 return Ok(());
             }
         }
     }
 
-    println!("cc-gateway daemon is not running.");
+    println!("{}", t!("daemon.not_running"));
     Ok(())
 }
 
@@ -208,10 +209,10 @@ pub async fn enable() -> Result<()> {
             .args(["load", "-w", plist_path.to_str().unwrap()])
             .status()?;
         if !status.success() {
-            anyhow::bail!("launchctl load failed");
+            anyhow::bail!("{}", t!("daemon.launchctl_load_failed"));
         }
-        println!("Enabled auto-start at login (launchd).");
-        println!("Plist: {}", plist_path.display());
+        println!("{}", t!("daemon.auto_start_enabled_macos"));
+        println!("{}", t_fmt!("daemon.plist_path", PATH = plist_path.display()));
     }
 
     #[cfg(target_os = "linux")]
@@ -247,15 +248,15 @@ WantedBy=default.target
             .args(["--user", "enable", "cc-gateway.service"])
             .status()?;
         if !status.success() {
-            anyhow::bail!("systemctl enable failed");
+            anyhow::bail!("{}", t!("daemon.systemctl_enable_failed"));
         }
-        println!("Enabled auto-start at login (systemd).");
-        println!("Service: {}", service_path.display());
+        println!("{}", t!("daemon.auto_start_enabled_linux"));
+        println!("{}", t_fmt!("daemon.service_path", PATH = service_path.display()));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        anyhow::bail!("Auto-start is only supported on macOS and Linux.");
+        anyhow::bail!("{}", t!("daemon.auto_start_unsupported"));
     }
 
     Ok(())
@@ -274,7 +275,7 @@ pub async fn disable() -> Result<()> {
                 .status()?;
             fs::remove_file(&plist_path)?;
         }
-        println!("Disabled auto-start at login (launchd).");
+        println!("{}", t!("daemon.auto_start_disabled_macos"));
     }
 
     #[cfg(target_os = "linux")]
@@ -292,12 +293,12 @@ pub async fn disable() -> Result<()> {
                 .args(["--user", "daemon-reload"])
                 .status()?;
         }
-        println!("Disabled auto-start at login (systemd).");
+        println!("{}", t!("daemon.auto_start_disabled_linux"));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        anyhow::bail!("Auto-start is only supported on macOS and Linux.");
+        anyhow::bail!("{}", t!("daemon.auto_start_unsupported"));
     }
 
     Ok(())
@@ -308,7 +309,7 @@ pub async fn log(follow: bool, lines: usize) -> Result<()> {
     let log_path = shellexpand::tilde(&config.log.file).to_string();
 
     if !std::path::Path::new(&log_path).exists() {
-        println!("Log file not found: {}", log_path);
+        println!("{}", t_fmt!("daemon.log_not_found", PATH = log_path));
         return Ok(());
     }
 
@@ -322,7 +323,7 @@ pub async fn log(follow: bool, lines: usize) -> Result<()> {
 
     if follow {
         use std::io::{self, BufRead, Seek};
-        println!("\n-- Following log (Ctrl+C to exit) --");
+        println!("{}", t!("daemon.following_log"));
         let mut file = std::fs::File::open(&log_path)?;
         file.seek(io::SeekFrom::End(0))?;
         let mut reader = io::BufReader::new(file);
