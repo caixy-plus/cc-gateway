@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 use crate::claude::controller::{ClaudeController, ControllerEvent};
 use crate::command::router::CommandRouter;
 use crate::config::loader::ConfigLoader;
+use crate::t;
 
 // ANSI color/style codes
 const RESET: &str = "\x1b[0m";
@@ -35,20 +36,20 @@ const GRAY: &str = "\x1b[90m";
 // ---------------------------------------------------------------------------
 
 pub fn format_banner() -> String {
-    "cc-gateway interactive mode  Type '/help' for commands, '/quit' to exit.\n".to_string()
+    t!("cli.banner").to_string()
 }
 
 pub fn format_thinking_collapsed(thinking: &str) -> String {
     let _ = thinking;
     format!(
-        "{}\u{1F4AD} Thinking...{} {}[press t to expand]{}",
-        GRAY, RESET, DIM, RESET
+        "{}\u{1F4AD} {} {} {}{}{}",
+        GRAY, t!("cli.thinking"), RESET, DIM, t!("cli.press_expand"), RESET
     )
 }
 
 pub fn format_tool_use_inline(name: &str, input: &str) -> String {
     let first_line = input.lines().next().unwrap_or("");
-    let mut result = format!("{}\u{1F527} Tool: {}{}{}\n", CYAN, BOLD, name, RESET);
+    let mut result = format!("{}\u{1F527} {} {}{}{}\n", CYAN, t!("cli.tool_label"), BOLD, name, RESET);
     if !first_line.is_empty() {
         result.push_str(&format!("  {}{}{}\n", DIM, first_line, RESET));
     }
@@ -72,12 +73,12 @@ pub fn format_tool_result(content: &str, is_error: bool) -> String {
 
 pub fn format_permission_request(req_id: &str, tool_name: &str) -> String {
     let mut result = format!(
-        "{}\u{26A0}\u{FE0F}  Permission Required{}  Tool: {}{}{}  Request ID: {}{}{}\n",
-        YELLOW, RESET, BOLD, tool_name, RESET, DIM, req_id, RESET
+        "{}\u{26A0}\u{FE0F}  {}{}  {}: {}{}{}  {}: {}{}{}\n",
+        YELLOW, t!("cli.permission_required"), RESET, t!("cli.tool_label"), BOLD, tool_name, RESET, t!("cli.request_id"), DIM, req_id, RESET
     );
     result.push_str(&format!(
-        "   Type {}/allow{} or {}/deny [reason]{} to respond.\n",
-        BOLD, RESET, BOLD, RESET
+        "   {}\n",
+        t!("cli.allow_deny_hint")
     ));
     result
 }
@@ -113,7 +114,7 @@ pub fn format_readline_error(err: &ReadlineError) -> String {
 }
 
 pub fn format_goodbye() -> String {
-    format!("\n{}Goodbye!{}\n", GREEN, RESET)
+    format!("\n{}{}{}\n", GREEN, t!("cli.goodbye"), RESET)
 }
 
 pub fn format_prompt(work_dir: &str, active: bool) -> String {
@@ -162,12 +163,12 @@ impl CommandHelper {
     fn new() -> Self {
         Self {
             commands: vec![
-                ("/help".into(), "Show this help".into()),
-                ("/quit".into(), "Quit session or exit".into()),
-                ("/cd".into(), "Change working directory".into()),
-                ("/claude".into(), "Start or restart Claude session".into()),
-                ("/pwd".into(), "Show current working directory".into()),
-                ("/ll".into(), "List files in current directory".into()),
+                ("/help".into(), t!("cli.help_desc").to_string()),
+                ("/quit".into(), t!("cli.quit_desc").to_string()),
+                ("/cd".into(), t!("cli.cd_desc").to_string()),
+                ("/claude".into(), t!("cli.claude_desc").to_string()),
+                ("/pwd".into(), t!("cli.pwd_desc").to_string()),
+                ("/ll".into(), t!("cli.ll_desc").to_string()),
             ],
         }
     }
@@ -434,7 +435,7 @@ pub async fn run_interactive() -> Result<()> {
                     if session_active {
                         let ctrl = controller.lock().await;
                         let _ = ctrl.stop_session().await;
-                        print!("{}", format_response("Claude session stopped. Back to cc-gateway."));
+                        print!("{}", format_response(t!("cli.session_stopped")));
                         continue;
                     } else {
                         break;
