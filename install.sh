@@ -190,11 +190,16 @@ EOF
 fi
 
 msg "" ""
-msg "Running initial setup..." "正在运行初始设置..."
-if command -v cc-gateway > /dev/null 2>&1; then
-    cc-gateway init
+if [ -t 0 ]; then
+    msg "Running initial setup..." "正在运行初始设置..."
+    if command -v cc-gateway > /dev/null 2>&1; then
+        cc-gateway init
+    else
+        "$INSTALL_DIR/cc-gateway" init
+    fi
 else
-    "$INSTALL_DIR/cc-gateway" init
+    msg "Skipping interactive setup (no terminal detected)." "未检测到终端，跳过交互式设置。"
+    msg "Run 'cc-gateway init' manually to configure." "请手动运行 'cc-gateway init' 进行配置。"
 fi
 
 msg "" ""
