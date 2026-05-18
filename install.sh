@@ -203,9 +203,9 @@ else
 fi
 if [ -t 0 ]; then
     $INIT_CMD
+elif [ -r /dev/tty ]; then
+    $INIT_CMD </dev/tty
 else
-    # Prevent init from accidentally reading remaining shell script
-    # content when install.sh is piped (e.g. curl ... | sh).
     $INIT_CMD < /dev/null
 fi
 
