@@ -159,5 +159,16 @@ EOF
 fi
 
 echo ""
+echo "Running initial setup..."
+if command -v cc-gateway &> /dev/null; then
+    cc-gateway init
+else
+    "$INSTALL_DIR/cc-gateway" init
+fi
+
+echo ""
 echo "cc-gateway installed successfully to $INSTALL_DIR/${BINARY}"
 echo "Run '${BINARY} --help' to get started"
+echo ""
+echo "For Feishu bot setup instructions, see:"
+echo "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"

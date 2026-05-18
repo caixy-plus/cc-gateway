@@ -133,3 +133,76 @@ fn save_config(config: &GatewayConfig) -> Result<()> {
     std::fs::write(&path, content).with_context(|| format!("Failed to write config to {}", path.display()))?;
     Ok(())
 }
+
+pub fn run_init_config() -> Result<()> {
+    let config_path = ConfigLoader::config_path()?;
+
+    println!("=== cc-gateway Initial Setup ===\n");
+    println!("Welcome! This will create your configuration file.");
+    println!("Location: {}", config_path.display());
+    println!("You can re-run this anytime with: cc-gateway init\n");
+
+    let mut config = match ConfigLoader::load() {
+        Ok(c) => {
+            println!("Found existing config. Press Enter to keep current values.\n");
+            c
+        }
+        Err(_) => {
+            println!("No existing config found. Using defaults.\n");
+            GatewayConfig::default()
+        }
+    };
+
+    // Feishu configuration
+    println!("--- Feishu/Lark Bot Configuration ---");
+    println!("(Press Enter to keep the current/default value)");
+    println!("(Enter 'skip' to skip Feishu configuration entirely)\n");
+
+    let app_id = prompt_with_skip("app_id", &config.feishu.app_id)?;
+    let skip_feishu = app_id == "skip";
+
+    if !skip_feishu {
+        config.feishu.app_id = app_id;
+        config.feishu.app_secret = prompt_sensitive("app_secret", &config.feishu.app_secret)?;
+        config.feishu.allow_from = prompt("allow_from", &config.feishu.allow_from)?;
+        config.feishu.encrypt_key = prompt("encrypt_key", &config.feishu.encrypt_key)?;
+        config.feishu.mode = prompt("mode", &config.feishu.mode)?;
+        config.feishu.webhook_bind = prompt("webhook_bind", &config.feishu.webhook_bind)?;
+    }
+
+    // Optional: default_dir
+    println!("\n--- Other Settings ---");
+    let default_dir = prompt("default_dir", &config.default_dir)?;
+    if !default_dir.is_empty() {
+        config.default_dir = default_dir;
+    }
+
+    save_config(&config)?;
+
+    println!("\n=== Setup Complete ===");
+    println!("Config saved to: {}", config_path.display());
+    println!("\nTo modify later:");
+    println!("  - Run: cc-gateway init");
+    println!("  - Or edit: {}", config_path.display());
+
+    if skip_feishu || config.feishu.app_id.is_empty() || config.feishu.app_id.starts_with("${") {
+        println!("\nNote: Feishu bot is not configured.");
+        println!("      Without app_id and app_secret, the Feishu bot will not work.");
+        println!("      You can configure it later by running 'cc-gateway init' again.");
+    }
+
+    Ok(())
+}
+
+fn prompt_with_skip(label: &str, current: &str) -> Result<String> {
+    print!("{} [{}] (type 'skip' to skip): ", label, current);
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        Ok(current.to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}

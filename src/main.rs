@@ -54,6 +54,8 @@ enum Commands {
     Enable,
     /// Disable auto-start on boot
     Disable,
+    /// Initialize configuration interactively
+    Init,
     /// Edit configuration
     Config {
         /// Print default config to stdout
@@ -101,6 +103,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Disable) => {
             daemon::disable().await?;
+        }
+        Some(Commands::Init) => {
+            config::wizard::run_init_config()?;
         }
         Some(Commands::Config { init }) => {
             if init {

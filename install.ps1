@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
-$Repo = "caixinyun/cc-gateway"
+$Repo = "caixy-plus/cc-gateway"
 $Binary = "cc-gateway"
 $InstallDir = "$env:LOCALAPPDATA\cc-gateway"
 
@@ -48,34 +48,24 @@ if (-not (Test-Path "$ConfigDir\config.json")) {
     "level": "info",
     "file": "~/.cc-gateway/logs/gateway.log"
   },
-  "ai": {
-    "enabled": false,
-    "provider": "openai",
-    "api_key": "${OPENAI_API_KEY}",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o-mini"
-  },
   "claude": {
     "cli_path": "claude",
-    "mode": "default",
-    "model": "",
-    "allowed_tools": ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]
+    "default_args": "--dangerously-skip-permissions"
   },
   "feishu": {
     "enabled": true,
     "app_id": "${FEISHU_APP_ID}",
     "app_secret": "${FEISHU_APP_SECRET}",
-    "allow_from": "*"
+    "allow_from": "*",
+    "encrypt_key": "",
+    "mode": "websocket",
+    "webhook_bind": "0.0.0.0:3000"
   },
-  "workspace": {
-    "scan_dirs": ["~/Workspace", "~/Projects"],
-    "default_dir": "~/Workspace"
-  }
+  "default_dir": "~"
 }
 "@
     Set-Content -Path "$ConfigDir\config.json" -Value $Config
     Write-Host "Created default config at $ConfigDir\config.json"
-    Write-Host "Please edit it to add your Feishu app credentials."
 }
 
 # Add to PATH
@@ -89,6 +79,14 @@ if ($UserPath -notlike "*$InstallDir*") {
 Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 Remove-Item -Force $TempFile -ErrorAction SilentlyContinue
 
+# Run init
+Write-Host ""
+Write-Host "Running initial setup..."
+& "$InstallDir\$Binary.exe" init
+
 Write-Host ""
 Write-Host "cc-gateway installed successfully to $InstallDir\$Binary.exe"
 Write-Host "Run '$Binary --help' to get started"
+Write-Host ""
+Write-Host "For Feishu bot setup instructions, see:"
+Write-Host "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"
