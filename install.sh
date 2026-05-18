@@ -82,6 +82,11 @@ mkdir -p "$INSTALL_DIR"
 cp "$TMP_DIR/${BINARY}" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/${BINARY}"
 
+# macOS: remove quarantine attribute so Gatekeeper doesn't kill the binary
+if [ "$OS" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$INSTALL_DIR/${BINARY}" 2>/dev/null || true
+fi
+
 # Create config directory
 CONFIG_DIR="$HOME/.cc-gateway"
 mkdir -p "$CONFIG_DIR/logs"
@@ -192,17 +197,9 @@ fi
 msg "" ""
 msg "Running initial setup..." "正在运行初始设置..."
 if command -v cc-gateway > /dev/null 2>&1; then
-    INIT_CMD="cc-gateway init"
+    cc-gateway init
 else
-    INIT_CMD="$INSTALL_DIR/cc-gateway init"
-fi
-if [ -t 0 ]; then
-    $INIT_CMD
-elif [ -r /dev/tty ]; then
-    $INIT_CMD < /dev/tty
-else
-    msg "Skipping interactive setup (no terminal detected)." "未检测到终端，跳过交互式设置。"
-    msg "Run 'cc-gateway init' manually to configure." "请手动运行 'cc-gateway init' 进行配置。"
+    "$INSTALL_DIR/cc-gateway" init
 fi
 
 msg "" ""
