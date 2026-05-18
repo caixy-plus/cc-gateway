@@ -14,8 +14,8 @@ Gateway for controlling Claude Code via Feishu/Lark and CLI.
 
 ### macOS / Linux
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh | bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh | sh
 ```
 
 ### Windows
@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1 | i
 
 ### From Source
 
-```bash
+```sh
 git clone https://github.com/caixy-plus/cc-gateway.git
 cd cc-gateway
 cargo build --release
@@ -36,7 +36,7 @@ cargo build --release
 
 1. **Configure**
 
-   ```bash
+   ```sh
    cc-gateway config      # Opens config in $EDITOR
    # or
    cc-gateway config --init > ~/.cc-gateway/config.json
@@ -48,13 +48,13 @@ cargo build --release
 
 2. **Start the daemon**
 
-   ```bash
+   ```sh
    cc-gateway start
    ```
 
 3. **Chat from CLI**
 
-   ```bash
+   ```sh
    cc-gateway
    cc-gateway> /claude
    ǔcw Working directory ▶ hello, review this code for me
@@ -62,7 +62,7 @@ cargo build --release
 
 4. **Stop the daemon**
 
-   ```bash
+   ```sh
    cc-gateway stop
    ```
 
