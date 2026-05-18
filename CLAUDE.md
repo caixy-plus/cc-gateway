@@ -8,7 +8,7 @@ cc-gateway is a Rust gateway that exposes local Claude Code sessions to remote u
 
 ## Build & Test
 
-```bash
+```sh
 cargo build --release     # Release build
 cargo build               # Debug build
 cargo test                # Run all tests
