@@ -14,8 +14,8 @@
 
 ### macOS / Linux
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh | bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh | sh
 ```
 
 ### Windows
@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1 | i
 
 ### 从源码编译
 
-```bash
+```sh
 git clone https://github.com/caixy-plus/cc-gateway.git
 cd cc-gateway
 cargo build --release
@@ -36,7 +36,7 @@ cargo build --release
 
 1. **配置**
 
-   ```bash
+   ```sh
    cc-gateway config      # 在 $EDITOR 中打开配置
    # 或
    cc-gateway config --init > ~/.cc-gateway/config.json
@@ -48,13 +48,13 @@ cargo build --release
 
 2. **启动守护进程**
 
-   ```bash
+   ```sh
    cc-gateway start
    ```
 
 3. **从 CLI 聊天**
 
-   ```bash
+   ```sh
    cc-gateway
    cc-gateway> /claude
    💬 ~/Workspace ▶ hello, review this code for me
@@ -62,7 +62,7 @@ cargo build --release
 
 4. **停止守护进程**
 
-   ```bash
+   ```sh
    cc-gateway stop
    ```
 
