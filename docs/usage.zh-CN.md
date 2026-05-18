@@ -4,7 +4,7 @@
 
 不携带任何子命令运行 `cc-gateway` 即可进入交互式聊天模式:
 
-```bash
+```sh
 $ cc-gateway
 cc-gateway 交互模式  输入 '/help' 查看命令，'/quit' 退出。
 
@@ -33,7 +33,7 @@ cc-gateway> /quit
 
 ### 目录导航
 
-```bash
+```sh
 cc-gateway> /cd ~/Projects/my-app
 工作目录已更改为: /Users/you/Projects/my-app
 
@@ -46,7 +46,7 @@ cc-gateway> /ll
 
 ### 启动
 
-```bash
+```sh
 cc-gateway start
 ```
 
@@ -54,19 +54,19 @@ cc-gateway start
 
 ### 停止
 
-```bash
+```sh
 cc-gateway stop
 ```
 
 ### 重启
 
-```bash
+```sh
 cc-gateway restart
 ```
 
 ### 查看日志
 
-```bash
+```sh
 cc-gateway log              # 显示最后 100 行
 cc-gateway log -f           # 追踪日志输出
 cc-gateway log -n 500       # 显示最后 500 行

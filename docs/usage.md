@@ -4,7 +4,7 @@
 
 Run `cc-gateway` without any subcommand to enter interactive chat mode:
 
-```bash
+```sh
 $ cc-gateway
 cc-gateway interactive mode  Type '/help' for commands, '/quit' to exit.
 
@@ -33,7 +33,7 @@ Press `Tab` after typing `/` to see a list of available commands with inline des
 
 ### Directory Navigation
 
-```bash
+```sh
 cc-gateway> /cd ~/Projects/my-app
 Working directory changed to: /Users/you/Projects/my-app
 
@@ -46,7 +46,7 @@ cc-gateway> /ll
 
 ### Start
 
-```bash
+```sh
 cc-gateway start
 ```
 
@@ -54,19 +54,19 @@ Starts cc-gateway as a background daemon. The daemon listens for Feishu messages
 
 ### Stop
 
-```bash
+```sh
 cc-gateway stop
 ```
 
 ### Restart
 
-```bash
+```sh
 cc-gateway restart
 ```
 
 ### View Logs
 
-```bash
+```sh
 cc-gateway log              # Show last 100 lines
 cc-gateway log -f           # Follow log output
 cc-gateway log -n 500       # Show last 500 lines
