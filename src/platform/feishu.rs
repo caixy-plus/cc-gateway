@@ -2031,7 +2031,13 @@ impl FeishuPlatform {
         receive_id_type: &str,
         receive_id: &str,
     ) -> Result<()> {
-        let ctrl = self.controller.lock().await;
+        // Clone event receiver so we don't hold the controller lock during polling.
+        // This allows /quit and other commands to acquire the lock even when
+        // Claude process hangs or the event loop is blocked.
+        let event_rx = {
+            let ctrl = self.controller.lock().await;
+            ctrl.event_rx_clone()
+        };
         let mut accumulator = EventAccumulator::new();
         let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
         let mut interval = tokio::time::interval(TokioDuration::from_secs(5));
@@ -2044,6 +2050,12 @@ impl FeishuPlatform {
                 break;
             }
 
+            let event_fut = async {
+                let mut rx = event_rx.lock().await;
+                rx.recv().await
+            };
+            tokio::pin!(event_fut);
+
             tokio::select! {
                 _ = interval.tick() => {
                     let partial = accumulator.take_output();
@@ -2051,7 +2063,7 @@ impl FeishuPlatform {
                         let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
                     }
                 }
-                event_res = timeout(remaining, ctrl.recv_event()) => {
+                event_res = timeout(remaining, event_fut) => {
                     match event_res {
                         Ok(Some(event)) => {
                             if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
@@ -2086,8 +2098,6 @@ impl FeishuPlatform {
                 }
             }
         }
-
-        drop(ctrl);
 
         let reply = accumulator.take_output();
         if !reply.trim().is_empty() {
