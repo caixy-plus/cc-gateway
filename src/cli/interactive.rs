@@ -28,7 +28,6 @@ const YELLOW: &str = "\x1b[33m";
 const BLUE: &str = "\x1b[34m";
 const CYAN: &str = "\x1b[36m";
 const GRAY: &str = "\x1b[90m";
-const BRIGHT_GREEN: &str = "\x1b[92m";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers – pure functions returning display strings.
@@ -225,8 +224,10 @@ impl Helper for CommandHelper {}
 // ---------------------------------------------------------------------------
 // CliOutput – state machine that mirrors the real event listener.
 // Collects every line that would be printed to the terminal.
+// Only used in unit tests.
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct CliOutput {
     pub lines: Vec<String>,
@@ -234,6 +235,7 @@ pub struct CliOutput {
     pub text_in_progress: bool,
 }
 
+#[cfg(test)]
 impl CliOutput {
     pub fn new() -> Self {
         Self::default()
@@ -331,7 +333,7 @@ pub async fn run_interactive() -> Result<()> {
             .unwrap_or_else(|_| ".".to_string());
         ctrl.init_work_dir(cwd).await;
     }
-    let default_dir = &config.feishu.default_dir;
+    let default_dir = &config.default_dir;
     let router = CommandRouter::new(controller.clone(), default_dir);
 
     // Clone event receiver so the listener doesn't need to lock the controller
