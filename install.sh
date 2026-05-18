@@ -114,7 +114,7 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
   "default_dir": "~"
 }
 EOF
-    msg "Created default config at $ConfigDir/config.json" "已创建默认配置: $ConfigDir/config.json"
+    msg "Created default config at $CONFIG_DIR/config.json" "已创建默认配置: $CONFIG_DIR/config.json"
     msg "Please edit it to add your Feishu app credentials." "请编辑配置文件添加飞书应用凭证。"
 fi
 
@@ -130,12 +130,6 @@ if [ -n "$SHELL_CONFIG" ] && [ -f "$SHELL_CONFIG" ]; then
     if ! grep -q "$INSTALL_DIR" "$SHELL_CONFIG"; then
         echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
         msg "Added $INSTALL_DIR to PATH in $SHELL_CONFIG" "已将 $INSTALL_DIR 添加到 PATH ($SHELL_CONFIG)"
-    fi
-    # Source the config so PATH is effective immediately in the current session
-    if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ]; then
-        # shellcheck source=/dev/null
-        . "$SHELL_CONFIG"
-        msg "Sourced $SHELL_CONFIG" "已加载 $SHELL_CONFIG"
     fi
 fi
 
@@ -207,6 +201,13 @@ elif [ -r /dev/tty ]; then
     $INIT_CMD </dev/tty
 else
     $INIT_CMD < /dev/null
+fi
+
+if [ -n "$SHELL_CONFIG" ]; then
+    msg "" ""
+    msg "To use cc-gateway in this terminal, run:" "请运行以下命令以在当前终端使用 cc-gateway:"
+    msg "  source $SHELL_CONFIG" "  source $SHELL_CONFIG"
+    msg "Or open a new terminal." "或新开一个终端窗口。"
 fi
 
 msg "" ""
