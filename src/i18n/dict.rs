@@ -434,9 +434,17 @@ pub fn t(key: &str) -> &str {
             Language::En => "No directories found.",
             Language::ZhCN => "未找到目录。",
         },
-        "feishu.more_dirs" => match lang {
-            Language::En => "...and {COUNT} more directories",
-            Language::ZhCN => "...还有 {COUNT} 个目录未显示",
+        "feishu.prev_page" => match lang {
+            Language::En => "Previous Page",
+            Language::ZhCN => "上一页",
+        },
+        "feishu.next_page" => match lang {
+            Language::En => "Next Page",
+            Language::ZhCN => "下一页",
+        },
+        "feishu.page_info" => match lang {
+            Language::En => "Page {PAGE} / {TOTAL}",
+            Language::ZhCN => "第 {PAGE} 页 / 共 {TOTAL} 页",
         },
         "feishu.dir_changed" => match lang {
             Language::En => "Changed directory to: {PATH}",
