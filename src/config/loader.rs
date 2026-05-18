@@ -119,9 +119,9 @@ mod tests {
                 "app_id": "",
                 "app_secret": "",
                 "allow_from": "*",
-                "encrypt_key": "",
-                "default_dir": "~/Workspace"
-            }
+                "encrypt_key": ""
+            },
+            "default_dir": "~/TestWorkspace"
         }"#;
         {
             let mut file = fs::File::create(&tmp_path).unwrap();
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(config.log.file, "/tmp/test.log");
         assert_eq!(config.claude.cli_path, "claude");
         assert!(!config.feishu.enabled);
-        assert_eq!(config.feishu.default_dir, "~/Workspace");
+        assert_eq!(config.default_dir, "~/TestWorkspace");
     }
 
     #[test]
@@ -156,9 +156,9 @@ mod tests {
                 "app_id": "${CCG_TEST_KEY}",
                 "app_secret": "${CCG_TEST_KEY}",
                 "allow_from": "*",
-                "encrypt_key": "",
-                "default_dir": "~/Workspace"
-            }
+                "encrypt_key": ""
+            },
+            "default_dir": "~/Workspace"
         }"#;
         {
             let mut file = fs::File::create(&tmp_path).unwrap();
