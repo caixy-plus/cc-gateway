@@ -3,6 +3,7 @@ use std::io::{self, Write};
 
 use crate::config::loader::ConfigLoader;
 use crate::config::model::{ClaudeConfig, FeishuConfig, GatewayConfig, LogConfig};
+use crate::{t, t_fmt};
 
 pub fn run_interactive_config() -> Result<()> {
     let mut config = match ConfigLoader::load() {
@@ -11,20 +12,20 @@ pub fn run_interactive_config() -> Result<()> {
             c
         }
         Err(_) => {
-            println!("No existing config found. Starting with defaults.");
+            println!("{}", t!("wizard.no_config_defaults"));
             GatewayConfig::default()
         }
     };
 
     loop {
-        println!("\n=== cc-gateway Configuration ===\n");
-        println!("  1. log        - Logging settings");
-        println!("  2. claude     - Claude Code settings");
-        println!("  3. feishu     - Feishu/Lark bot settings");
-        println!("  4. default_dir - Default working directory");
-        println!("  5. Save and exit");
-        println!("  6. Exit without saving");
-        print!("\nSelect section [1-6]: ");
+        println!("\n{}\n", t!("wizard.title"));
+        println!("  1. {}", t!("wizard.log_section"));
+        println!("  2. {}", t!("wizard.claude_section"));
+        println!("  3. {}", t!("wizard.feishu_section"));
+        println!("  4. {}", t!("wizard.default_dir_section"));
+        println!("  5. {}", t!("wizard.save_exit"));
+        println!("  6. {}", t!("wizard.exit_no_save"));
+        print!("\n{} ", t!("wizard.select_section"));
         io::stdout().flush()?;
 
         let mut choice = String::new();
@@ -37,11 +38,11 @@ pub fn run_interactive_config() -> Result<()> {
             "4" => configure_default_dir(&mut config.default_dir)?,
             "5" => {
                 save_config(&config)?;
-                println!("Config saved.");
+                println!("{}", t!("wizard.config_saved"));
                 break;
             }
             "6" => {
-                println!("Exiting without saving.");
+                println!("{}", t!("wizard.exiting_no_save"));
                 break;
             }
             _ => println!("Invalid choice, try again."),
@@ -79,21 +80,21 @@ fn prompt_bool(label: &str, current: bool) -> Result<bool> {
 }
 
 fn configure_log(log: &mut LogConfig) -> Result<()> {
-    println!("\n--- Log Configuration ---");
+    println!("\n{}", t!("wizard.log_config"));
     log.level = prompt("level", &log.level)?;
     log.file = prompt("file", &log.file)?;
     Ok(())
 }
 
 fn configure_claude(claude: &mut ClaudeConfig) -> Result<()> {
-    println!("\n--- Claude Configuration ---");
+    println!("\n{}", t!("wizard.claude_config"));
     claude.cli_path = prompt("cli_path", &claude.cli_path)?;
     claude.default_args = prompt("default_args", &claude.default_args)?;
     Ok(())
 }
 
 fn configure_feishu(feishu: &mut FeishuConfig) -> Result<()> {
-    println!("\n--- Feishu Configuration ---");
+    println!("\n{}", t!("wizard.feishu_config"));
     feishu.enabled = prompt_bool("enabled", feishu.enabled)?;
     feishu.app_id = prompt("app_id", &feishu.app_id)?;
     feishu.app_secret = prompt_sensitive("app_secret", &feishu.app_secret)?;
@@ -103,7 +104,7 @@ fn configure_feishu(feishu: &mut FeishuConfig) -> Result<()> {
 }
 
 fn configure_default_dir(default_dir: &mut String) -> Result<()> {
-    println!("\n--- Default Directory Configuration ---");
+    println!("\n{}", t!("wizard.default_dir_config"));
     *default_dir = prompt("default_dir", default_dir)?;
     Ok(())
 }
@@ -137,26 +138,26 @@ fn save_config(config: &GatewayConfig) -> Result<()> {
 pub fn run_init_config() -> Result<()> {
     let config_path = ConfigLoader::config_path()?;
 
-    println!("=== cc-gateway Initial Setup ===\n");
-    println!("Welcome! This will create your configuration file.");
-    println!("Location: {}", config_path.display());
-    println!("You can re-run this anytime with: cc-gateway init\n");
+    println!("{}\n", t!("wizard.init_title"));
+    println!("{}", t!("wizard.welcome"));
+    println!("{}", t_fmt!("wizard.location", PATH = config_path.display()));
+    println!("{}\n", t!("wizard.rerun"));
 
     let mut config = match ConfigLoader::load() {
         Ok(c) => {
-            println!("Found existing config. Press Enter to keep current values.\n");
+            println!("{}\n", t!("wizard.found_existing"));
             c
         }
         Err(_) => {
-            println!("No existing config found. Using defaults.\n");
+            println!("{}\n", t!("wizard.no_config_defaults"));
             GatewayConfig::default()
         }
     };
 
     // Feishu configuration
-    println!("--- Feishu/Lark Bot Configuration ---");
-    println!("(Press Enter to keep the current/default value)");
-    println!("(Enter 'skip' to skip Feishu configuration entirely)\n");
+    println!("{}", t!("wizard.feishu_section_title"));
+    println!("{}", t!("wizard.press_enter_keep"));
+    println!("{}\n", t!("wizard.enter_skip"));
 
     let app_id = prompt_with_skip("app_id", &config.feishu.app_id)?;
     let skip_feishu = app_id == "skip";
@@ -171,7 +172,7 @@ pub fn run_init_config() -> Result<()> {
     }
 
     // Optional: default_dir
-    println!("\n--- Other Settings ---");
+    println!("\n{}", t!("wizard.other_settings"));
     let default_dir = prompt("default_dir", &config.default_dir)?;
     if !default_dir.is_empty() {
         config.default_dir = default_dir;
@@ -179,16 +180,16 @@ pub fn run_init_config() -> Result<()> {
 
     save_config(&config)?;
 
-    println!("\n=== Setup Complete ===");
-    println!("Config saved to: {}", config_path.display());
-    println!("\nTo modify later:");
-    println!("  - Run: cc-gateway init");
-    println!("  - Or edit: {}", config_path.display());
+    println!("\n{}", t!("wizard.setup_complete"));
+    println!("{}", t_fmt!("wizard.config_saved_to", PATH = config_path.display()));
+    println!("\n{}", t!("wizard.modify_later"));
+    println!("{}", t!("wizard.run_init"));
+    println!("{}", t_fmt!("wizard.or_edit", PATH = config_path.display()));
 
     if skip_feishu || config.feishu.app_id.is_empty() || config.feishu.app_id.starts_with("${") {
-        println!("\nNote: Feishu bot is not configured.");
-        println!("      Without app_id and app_secret, the Feishu bot will not work.");
-        println!("      You can configure it later by running 'cc-gateway init' again.");
+        println!("\n{}", t!("wizard.feishu_not_configured"));
+        println!("{}", t!("wizard.without_credentials"));
+        println!("{}", t!("wizard.configure_later"));
     }
 
     Ok(())
