@@ -32,7 +32,7 @@ impl DaemonEngine {
                 });
             ctrl.init_work_dir(cwd).await;
         }
-        let default_dir = &self.config.feishu.default_dir;
+        let default_dir = &self.config.default_dir;
         let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
 
         // Start Feishu platform if enabled
@@ -40,6 +40,7 @@ impl DaemonEngine {
         if self.config.feishu.enabled {
             let platform = FeishuPlatform::new(
                 self.config.feishu.clone(),
+                &self.config.default_dir,
                 router.clone(),
                 controller.clone(),
             );
