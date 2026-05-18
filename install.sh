@@ -95,6 +95,12 @@ if [ -n "$SHELL_CONFIG" ] && [ -f "$SHELL_CONFIG" ]; then
         echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
         echo "Added $INSTALL_DIR to PATH in $SHELL_CONFIG"
     fi
+    # Source the config so PATH is effective immediately in the current session
+    if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ] || [ -n "$BASH_VERSION" ]; then
+        # shellcheck source=/dev/null
+        . "$SHELL_CONFIG"
+        echo "Sourced $SHELL_CONFIG"
+    fi
 fi
 
 # macOS: setup launchd plist
