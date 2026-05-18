@@ -7,6 +7,7 @@ mod claude;
 mod command;
 mod config;
 mod daemon;
+mod i18n;
 mod platform;
 mod prompt;
 mod skill;
@@ -73,6 +74,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    i18n::init();
     let args = Args::parse();
 
     match args.command {
