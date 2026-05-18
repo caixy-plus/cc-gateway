@@ -18,12 +18,13 @@ pub fn run_interactive_config() -> Result<()> {
 
     loop {
         println!("\n=== cc-gateway Configuration ===\n");
-        println!("  1. log       - Logging settings");
-        println!("  2. claude    - Claude Code settings");
-        println!("  3. feishu    - Feishu/Lark bot settings");
-        println!("  4. Save and exit");
-        println!("  5. Exit without saving");
-        print!("\nSelect section [1-5]: ");
+        println!("  1. log        - Logging settings");
+        println!("  2. claude     - Claude Code settings");
+        println!("  3. feishu     - Feishu/Lark bot settings");
+        println!("  4. default_dir - Default working directory");
+        println!("  5. Save and exit");
+        println!("  6. Exit without saving");
+        print!("\nSelect section [1-6]: ");
         io::stdout().flush()?;
 
         let mut choice = String::new();
@@ -33,12 +34,13 @@ pub fn run_interactive_config() -> Result<()> {
             "1" => configure_log(&mut config.log)?,
             "2" => configure_claude(&mut config.claude)?,
             "3" => configure_feishu(&mut config.feishu)?,
-            "4" => {
+            "4" => configure_default_dir(&mut config.default_dir)?,
+            "5" => {
                 save_config(&config)?;
                 println!("Config saved.");
                 break;
             }
-            "5" => {
+            "6" => {
                 println!("Exiting without saving.");
                 break;
             }
@@ -97,7 +99,12 @@ fn configure_feishu(feishu: &mut FeishuConfig) -> Result<()> {
     feishu.app_secret = prompt_sensitive("app_secret", &feishu.app_secret)?;
     feishu.allow_from = prompt("allow_from", &feishu.allow_from)?;
     feishu.encrypt_key = prompt("encrypt_key", &feishu.encrypt_key)?;
-    feishu.default_dir = prompt("default_dir", &feishu.default_dir)?;
+    Ok(())
+}
+
+fn configure_default_dir(default_dir: &mut String) -> Result<()> {
+    println!("\n--- Default Directory Configuration ---");
+    *default_dir = prompt("default_dir", default_dir)?;
     Ok(())
 }
 
