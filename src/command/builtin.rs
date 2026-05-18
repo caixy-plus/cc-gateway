@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::claude::controller::ClaudeController;
+use crate::{t, t_fmt};
 pub struct BuiltinCommands {
     controller: Arc<Mutex<ClaudeController>>,
     default_dir: String,
@@ -33,30 +34,31 @@ impl BuiltinCommands {
     }
 
     fn help(&self) -> String {
-        r#"cc-gateway commands:
-  /help                Show this help
-  /quit                Quit current session or exit cc-gateway
-  /cd <path>           Change working directory and restart Claude
-  /cd_default          Change working directory to the default directory
-  /claude [args...]    Start or restart Claude session (pass args to Claude CLI)
-  /pwd                 Show current working directory
-  /ll                  List files in current directory (ls -l)
-
-Any other text is sent directly to Claude Code."#
-            .to_string()
+        format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
+            t!("builtin.help_title"),
+            t!("builtin.help_help"),
+            t!("builtin.help_quit"),
+            t!("builtin.help_cd"),
+            t!("builtin.help_cd_default"),
+            t!("builtin.help_claude"),
+            t!("builtin.help_pwd"),
+            t!("builtin.help_ll"),
+            t!("builtin.help_any_text")
+        )
     }
 
     async fn quit(&self) -> String {
         let ctrl = self.controller.lock().await;
         match ctrl.stop_session().await {
-            Ok(()) => "Claude session stopped.".to_string(),
-            Err(e) => format!("Failed to stop session: {}", e),
+            Ok(()) => t!("builtin.session_stopped").to_string(),
+            Err(e) => t_fmt!("builtin.failed_stop_session", ERR = e),
         }
     }
 
     async fn cd(&self, path: &str) -> String {
         if path.is_empty() {
-            return "Usage: /cd <path>".to_string();
+            return t!("builtin.cd_usage").to_string();
         }
 
         let ctrl = self.controller.lock().await;
@@ -75,7 +77,7 @@ Any other text is sent directly to Claude Code."#
         let canonical = canonical.canonicalize().unwrap_or(canonical);
 
         if !canonical.is_dir() {
-            return format!("Invalid path: {}", canonical.display());
+            return t_fmt!("builtin.invalid_path", PATH = canonical.display());
         }
 
         let path_str = canonical.to_string_lossy().to_string();
@@ -84,7 +86,7 @@ Any other text is sent directly to Claude Code."#
         }
 
         ctrl.init_work_dir(path_str.clone()).await;
-        format!("Working directory changed to: {}", path_str)
+        t_fmt!("builtin.dir_changed", PATH = path_str)
     }
 
     async fn cd_default(&self) -> String {
@@ -108,11 +110,8 @@ Any other text is sent directly to Claude Code."#
         };
 
         match ctrl.start_session(dir.clone(), extra_args).await {
-            Ok(()) => format!(
-                "Claude session started in: {}\n\n\x1b[2m💡 Type anything and press Enter to chat with Claude.\x1b[0m",
-                dir
-            ),
-            Err(e) => format!("Failed to start Claude: {}", e),
+            Ok(()) => t_fmt!("builtin.session_started", DIR = dir),
+            Err(e) => t_fmt!("builtin.failed_start_claude", ERR = e),
         }
     }
 
@@ -124,7 +123,7 @@ Any other text is sent directly to Claude Code."#
         } else {
             work_dir
         };
-        format!("Current directory: {}", dir)
+        t_fmt!("builtin.current_dir", DIR = dir)
     }
 
     async fn ll(&self) -> String {
@@ -139,19 +138,19 @@ Any other text is sent directly to Claude Code."#
 
         // Ensure the directory is under the user's home directory
         if let Err(e) = crate::claude::controller::ensure_under_home(&dir) {
-            return format!("Access denied: {}", e);
+            return t_fmt!("builtin.access_denied", ERR = e);
         }
 
         let items = match list_directory_items(&dir) {
             Ok(items) => items,
-            Err(e) => return format!("Failed to list directory: {}", e),
+            Err(e) => return t_fmt!("builtin.failed_list_dir", ERR = e),
         };
 
         // Only show directories
         let dirs: Vec<(String, bool)> = items.into_iter().filter(|(_, is_dir)| *is_dir).collect();
 
         if dirs.is_empty() {
-            return "No subdirectories found.".to_string();
+            return t!("builtin.no_subdirs").to_string();
         }
 
         let selected = tokio::task::spawn_blocking(move || interactive_select(&dirs))
@@ -164,9 +163,9 @@ Any other text is sent directly to Claude Code."#
                 let path_str = path.to_string_lossy().to_string();
                 let ctrl = self.controller.lock().await;
                 ctrl.init_work_dir(path_str.clone()).await;
-                format!("Changed directory to: {}", path_str)
+                t_fmt!("builtin.changed_dir", PATH = path_str)
             }
-            None => "Selection cancelled.".to_string(),
+            None => t!("builtin.selection_cancelled").to_string(),
         }
     }
 
@@ -280,7 +279,7 @@ impl SelectBackend for RealBackend {
         let _ = stdout.queue(terminal::Clear(terminal::ClearType::All));
         let _ = stdout.queue(cursor::MoveTo(0, 0));
         // Use \r\n because raw mode disables automatic \n -> \r\n translation
-        let _ = write!(stdout, "Select a directory (↑↓ move, Enter to cd, q quit):\r\n\r\n");
+        let _ = write!(stdout, "{}\r\n\r\n", t!("builtin.select_dir_prompt"));
         for line in lines {
             let _ = write!(stdout, "{}\r\n", line);
         }
