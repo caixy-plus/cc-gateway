@@ -272,6 +272,10 @@ pub struct NormalizedMessage {
     pub chat_type: Option<String>,
     pub mentions: Vec<MentionInfo>,
     pub raw: Value,
+    /// Resolved receive_id_type for Feishu API ("chat_id" or "open_id")
+    pub receive_id_type: String,
+    /// Resolved receive_id for Feishu API
+    pub receive_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -391,6 +395,7 @@ impl AnomalyTracker {
 #[derive(Clone)]
 pub struct FeishuPlatform {
     config: FeishuConfig,
+    default_dir: String,
     router: Arc<CommandRouter>,
     controller: Arc<Mutex<ClaudeController>>,
     http_client: reqwest::Client,
@@ -411,11 +416,13 @@ pub struct FeishuPlatform {
 impl FeishuPlatform {
     pub fn new(
         config: FeishuConfig,
+        default_dir: &str,
         router: Arc<CommandRouter>,
         controller: Arc<Mutex<ClaudeController>>,
     ) -> Self {
         Self {
             config,
+            default_dir: default_dir.to_string(),
             router,
             controller,
             http_client: reqwest::Client::new(),
@@ -666,7 +673,7 @@ impl FeishuPlatform {
 
     /// Send a plain text message to a Feishu chat. Long messages are split into chunks
     /// to avoid triggering Feishu rate limits.
-    pub async fn send_text_message(&self, token: &str, chat_id: &str, text: &str) -> Result<()> {
+    pub async fn send_text_message(&self, token: &str, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -675,20 +682,20 @@ impl FeishuPlatform {
             if i > 0 {
                 sleep(TokioDuration::from_millis(FEISHU_CHUNK_DELAY_MS)).await;
             }
-            self.send_text_message_raw(token, chat_id, chunk).await?;
+            self.send_text_message_raw(token, receive_id_type, receive_id, chunk).await?;
         }
         Ok(())
     }
 
-    async fn send_text_message_raw(&self, token: &str, chat_id: &str, text: &str) -> Result<()> {
+    async fn send_text_message_raw(&self, token: &str, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
         let url = "https://open.feishu.cn/open-apis/im/v1/messages";
         let resp = self
             .http_client
             .post(url)
-            .query(&[("receive_id_type", "chat_id")])
+            .query(&[("receive_id_type", receive_id_type)])
             .header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-                "receive_id": chat_id,
+                "receive_id": receive_id,
                 "content": json!({"text": text}).to_string(),
                 "msg_type": "text",
             }))
@@ -716,17 +723,18 @@ impl FeishuPlatform {
     pub async fn send_post_message(
         &self,
         token: &str,
-        chat_id: &str,
+        receive_id_type: &str,
+        receive_id: &str,
         content: &Value,
     ) -> Result<()> {
         let url = "https://open.feishu.cn/open-apis/im/v1/messages";
         let resp = self
             .http_client
             .post(url)
-            .query(&[("receive_id_type", "chat_id")])
+            .query(&[("receive_id_type", receive_id_type)])
             .header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-                "receive_id": chat_id,
+                "receive_id": receive_id,
                 "content": content.to_string(),
                 "msg_type": "post",
             }))
@@ -747,31 +755,39 @@ impl FeishuPlatform {
     pub async fn send_interactive_card(
         &self,
         token: &str,
-        chat_id: &str,
+        receive_id_type: &str,
+        receive_id: &str,
         card_json: &Value,
     ) -> Result<()> {
+        if receive_id.is_empty() {
+            anyhow::bail!("Cannot send card: receive_id is empty");
+        }
         let url = "https://open.feishu.cn/open-apis/im/v1/messages";
+        let request_body = json!({
+            "receive_id": receive_id,
+            "content": card_json.to_string(),
+            "msg_type": "interactive",
+        });
+        debug!("Sending interactive card to receive_id_type={} receive_id={}, body={}", receive_id_type, receive_id, request_body);
         let resp = self
             .http_client
             .post(url)
-            .query(&[("receive_id_type", "chat_id")])
+            .query(&[("receive_id_type", receive_id_type)])
             .header("Authorization", format!("Bearer {}", token))
-            .json(&json!({
-                "receive_id": chat_id,
-                "content": card_json.to_string(),
-                "msg_type": "interactive",
-            }))
+            .json(&request_body)
             .send()
             .await
             .context("Failed to send Feishu interactive card")?;
 
         let status = resp.status();
-        let body: Value = resp.json().await.context("Failed to parse Feishu send card response")?;
+        let body_text = resp.text().await.unwrap_or_default();
+        let body: Value = serde_json::from_str(&body_text)
+            .unwrap_or_else(|_| serde_json::json!({"code": -1}));
         if !status.is_success() {
             anyhow::bail!(
                 "Feishu send interactive card failed: {} - {}",
                 status,
-                body
+                body_text
             );
         }
         let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
@@ -991,9 +1007,8 @@ impl FeishuPlatform {
     }
 
     /// Build an interactive directory selection card.
-    /// Feishu card schema v2: buttons go directly into body.elements,
-    /// the "action" wrapper tag is no longer supported.
-    pub fn build_dir_select_card(&self, dirs: &[(String, String)], chat_id: &str) -> Value {
+    /// Feishu card schema v2: buttons are placed directly in body.elements.
+    pub fn build_dir_select_card(&self, dirs: &[(String, String)], receive_id_type: &str, receive_id: &str) -> Value {
         let mut elements: Vec<Value> = Vec::new();
         elements.push(json!({
             "tag": "div",
@@ -1002,6 +1017,7 @@ impl FeishuPlatform {
                 "content": "Choose a working directory:"
             }
         }));
+
         for (name, path) in dirs {
             elements.push(json!({
                 "tag": "button",
@@ -1013,7 +1029,8 @@ impl FeishuPlatform {
                 "value": {
                     "cmd": "cd",
                     "path": path,
-                    "chat_id": chat_id
+                    "chat_id": receive_id,
+                    "receive_id_type": receive_id_type
                 }
             }));
         }
@@ -1126,6 +1143,12 @@ impl FeishuPlatform {
             }
         }
 
+        let (receive_id_type, receive_id) = if chat_type.as_deref() == Some("p2p") {
+            ("open_id".to_string(), sender_open_id.clone())
+        } else {
+            ("chat_id".to_string(), chat_id.clone().unwrap_or_default())
+        };
+
         Some(NormalizedMessage {
             message_id,
             message_type,
@@ -1136,6 +1159,8 @@ impl FeishuPlatform {
             chat_type,
             mentions,
             raw: event_json.clone(),
+            receive_id_type,
+            receive_id,
         })
     }
 
@@ -1175,9 +1200,9 @@ impl FeishuPlatform {
 
         // Send response back to the user if there is one
         if let Some(reply) = response {
-            if let Some(ref chat_id) = normalized.chat_id {
+            if !normalized.receive_id.is_empty() {
                 let token = self.get_tenant_access_token().await?;
-                self.send_text_message(&token, chat_id, &reply).await?;
+                self.send_text_message(&token, &normalized.receive_id_type, &normalized.receive_id, &reply).await?;
             }
         }
 
@@ -1193,13 +1218,17 @@ impl FeishuPlatform {
         controller: &ClaudeController,
         normalized: &NormalizedMessage,
     ) -> Result<()> {
-        let chat_id = match normalized.chat_id {
-            Some(ref id) => id.clone(),
-            None => return Ok(()),
-        };
+        if normalized.receive_id.is_empty() {
+            return Ok(());
+        }
+        let receive_id_type = &normalized.receive_id_type;
+        let receive_id = &normalized.receive_id;
 
         let mut accumulator = EventAccumulator::new();
-        let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
+        let mut interval = tokio::time::interval(TokioDuration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut first_text_sent = false;
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1207,35 +1236,62 @@ impl FeishuPlatform {
                 break;
             }
 
-            match timeout(remaining, controller.recv_event()).await {
-                Ok(Some(event)) => {
-                    if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
-                        let token = self.get_tenant_access_token().await?;
-                        let card = self.build_permission_card(req_id, &tool_name, None);
-                        self.send_interactive_card(&token, &chat_id, &card).await?;
-                        let ctx = PendingPermissionContext {
-                            request_id: req_id.clone(),
-                            tool_name: tool_name.clone(),
-                            chat_id: chat_id.clone(),
-                            sender_open_id: normalized.sender_open_id.clone(),
-                            created_at: Instant::now(),
+            tokio::select! {
+                _ = interval.tick() => {
+                    let partial = accumulator.take_output();
+                    if !partial.trim().is_empty() {
+                        let token = match self.get_tenant_access_token().await {
+                            Ok(t) => t,
+                            Err(_) => continue,
                         };
-                        self.store_pending_permission(ctx);
-                        continue;
-                    }
-                    if accumulator.process_event(&event) {
-                        break;
+                        let _ = self.send_text_message(&token, receive_id_type, receive_id, &partial).await;
                     }
                 }
-                Ok(None) => break,
-                Err(_) => break,
+                event_res = timeout(remaining, controller.recv_event()) => {
+                    match event_res {
+                        Ok(Some(event)) => {
+                            if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
+                                let token = self.get_tenant_access_token().await?;
+                                let card = self.build_permission_card(req_id, &tool_name, None);
+                                self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
+                                let ctx = PendingPermissionContext {
+                                    request_id: req_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    chat_id: receive_id.clone(),
+                                    sender_open_id: normalized.sender_open_id.clone(),
+                                    created_at: Instant::now(),
+                                };
+                                self.store_pending_permission(ctx);
+                                continue;
+                            }
+                            let is_text = matches!(event, ControllerEvent::Text(_));
+                            if accumulator.process_event(&event) {
+                                break;
+                            }
+                            // Send first text chunk immediately for low-latency feedback
+                            if is_text && !first_text_sent {
+                                let partial = accumulator.take_output();
+                                if !partial.trim().is_empty() {
+                                    let token = match self.get_tenant_access_token().await {
+                                        Ok(t) => t,
+                                        Err(_) => continue,
+                                    };
+                                    let _ = self.send_text_message(&token, receive_id_type, receive_id, &partial).await;
+                                    first_text_sent = true;
+                                }
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
             }
         }
 
         let reply = accumulator.take_output();
         if !reply.trim().is_empty() {
             let token = self.get_tenant_access_token().await?;
-            self.send_text_message(&token, &chat_id, &reply).await?;
+            self.send_text_message(&token, receive_id_type, receive_id, &reply).await?;
         }
 
         Ok(())
@@ -1331,7 +1387,7 @@ impl FeishuPlatform {
                         // Log hex dump of first 100 bytes for debugging
                         let hex_dump: String = data.iter().take(100).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
                         debug!("WS raw binary hex (first 100 bytes): {}", hex_dump);
-                        if let Some(mut frame) = Frame::decode(&data) {
+                        if let Some(frame) = Frame::decode(&data) {
                             debug!("Decoded frame: seq_id={} log_id={} service={} method={} headers={:?} payload_encoding={:?} payload_type={:?} payload_len={:?} log_id_new={:?}",
                                 frame.seq_id, frame.log_id, frame.service, frame.method,
                                 frame.headers.iter().map(|h| format!("{}={}", h.key, h.value)).collect::<Vec<_>>(),
@@ -1401,14 +1457,20 @@ impl FeishuPlatform {
                 debug!("Received control frame seq_id={}, type={:?}", frame.seq_id, frame.headers.iter().find(|h| h.key == "type").map(|h| &h.value));
             }
             METHOD_DATA => {
+                // Send ACK immediately; business processing is done in the background
+                // so Feishu does not time out and resend while Claude is thinking.
                 if let Some(ref payload) = frame.payload {
-                    // Try IM first, then card
-                    if let Err(e) = self.handle_im_payload(payload, token).await {
-                        debug!("Not an IM event, trying card: {}", e);
-                        if let Err(e2) = self.handle_card_payload(payload, token).await {
-                            debug!("Not a card event either: {}", e2);
+                    let payload = payload.clone();
+                    let platform = self.clone();
+                    let token = token.to_string();
+                    tokio::spawn(async move {
+                        if let Err(e) = platform.handle_im_payload(&payload, &token).await {
+                            debug!("Not an IM event, trying card: {}", e);
+                            if let Err(e2) = platform.handle_card_payload(&payload, &token).await {
+                                debug!("Not a card event either: {}", e2);
+                            }
                         }
-                    }
+                    });
                 }
                 return Ok(Some(build_ack_frame(&frame)));
             }
@@ -1447,8 +1509,8 @@ impl FeishuPlatform {
         };
 
         let chat_id = match message.chat_id {
-            Some(id) => id,
-            None => {
+            Some(ref id) if !id.is_empty() => id.clone(),
+            _ => {
                 anyhow::bail!("IM event missing chat_id, message_id={:?}", message.message_id);
             }
         };
@@ -1617,15 +1679,30 @@ impl FeishuPlatform {
 
         let msg_id = message.message_id.clone().unwrap_or_default();
 
+        // Deduplicate by message_id
+        if !msg_id.is_empty() && self.dedup_cache.contains(&msg_id) {
+            debug!("Duplicate message {} deduplicated", msg_id);
+            return Ok(());
+        }
+        self.dedup_cache.insert(msg_id.clone());
+
+        // Determine correct receive_id and receive_id_type based on chat type
+        let (receive_id_type, receive_id) = if chat_type == "p2p" {
+            ("open_id", sender_open_id.as_str())
+        } else {
+            ("chat_id", chat_id.as_str())
+        };
+
         // Intercept /ll for Feishu interactive directory card
         if trimmed == "/ll" {
-            info!("[Feishu] /ll command received from {}, processing...", sender_open_id);
+            info!("[Feishu] /ll command received from {}, chat_type={}, receive_id_type={}, receive_id={}, processing...",
+                  sender_open_id, chat_type, receive_id_type, receive_id);
             self.on_processing_start(token, &msg_id).await;
             let result = async {
                 let ctrl = self.controller.lock().await;
                 let work_dir = ctrl.get_work_dir().await;
                 let dir = if work_dir.is_empty() {
-                    shellexpand::tilde(&self.config.default_dir).to_string()
+                    shellexpand::tilde(&self.default_dir).to_string()
                 } else {
                     work_dir
                 };
@@ -1635,12 +1712,13 @@ impl FeishuPlatform {
                 info!("[Feishu] /ll found {} directories under {}", dirs.len(), dir);
                 if dirs.is_empty() {
                     info!("[Feishu] /ll no directories, sending text fallback");
-                    self.send_text_message(token, &chat_id, "No directories found.").await?;
+                    self.send_text_message(token, receive_id_type, receive_id, "No directories found.").await?;
                 } else {
-                    info!("[Feishu] /ll building dir select card for chat {}", chat_id);
-                    let card = self.build_dir_select_card(&dirs, &chat_id);
-                    info!("[Feishu] /ll sending interactive card");
-                    self.send_interactive_card(token, &chat_id, &card).await?;
+                    info!("[Feishu] /ll building dir select card for {}", receive_id);
+                    let card = self.build_dir_select_card(&dirs, receive_id_type, receive_id);
+                    debug!("[Feishu] /ll card JSON: {}", card);
+                    info!("[Feishu] /ll sending interactive card to receive_id_type={} receive_id={}", receive_id_type, receive_id);
+                    self.send_interactive_card(token, receive_id_type, receive_id, &card).await?;
                     info!("[Feishu] /ll card sent successfully");
                 }
                 Ok::<(), anyhow::Error>(())
@@ -1663,6 +1741,8 @@ impl FeishuPlatform {
             chat_type: message.chat_type.clone(),
             mentions,
             raw: json!({}),
+            receive_id_type: receive_id_type.to_string(),
+            receive_id: receive_id.to_string(),
         };
 
         self.on_processing_start(token, &msg_id).await;
@@ -1701,18 +1781,23 @@ impl FeishuPlatform {
             if let Some(cmd) = user_value.get("cmd").and_then(|v| v.as_str()) {
                 if cmd == "cd" {
                     if let Some(path) = user_value.get("path").and_then(|v| v.as_str()) {
-                        let chat_id = user_value
+                        let receive_id = user_value
                             .get("chat_id")
                             .and_then(|v| v.as_str())
                             .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
                             .unwrap_or("");
-                        if !chat_id.is_empty() {
+                        let receive_id_type = user_value
+                            .get("receive_id_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("chat_id");
+                        if !receive_id.is_empty() {
                             let ctrl = self.controller.lock().await;
                             ctrl.init_work_dir(path.to_string()).await;
                             drop(ctrl);
                             self.send_text_message(
                                 token,
-                                chat_id,
+                                receive_id_type,
+                                receive_id,
                                 &format!("Changed directory to: {}", path),
                             )
                             .await?;
@@ -1731,18 +1816,24 @@ impl FeishuPlatform {
             .unwrap_or_default();
         let fallback_chat_id = context
             .and_then(|c| c.get("open_chat_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("card");
+            .and_then(|v| v.as_str());
+        let (receive_id_type, receive_id) = if let Some(cid) = fallback_chat_id {
+            ("chat_id", cid)
+        } else {
+            ("open_id", open_id)
+        };
         let normalized = NormalizedMessage {
             message_id: open_message_id.to_string(),
             message_type: "card".to_string(),
             content: text,
             sender_open_id: open_id.to_string(),
             sender_name: None,
-            chat_id: Some(fallback_chat_id.to_string()),
+            chat_id: fallback_chat_id.map(|s| s.to_string()),
             chat_type: None,
             mentions: Vec::new(),
             raw: json!({}),
+            receive_id_type: receive_id_type.to_string(),
+            receive_id: receive_id.to_string(),
         };
 
         self.route_message(normalized, token).await?;
@@ -1765,16 +1856,16 @@ impl FeishuPlatform {
                 ctrl.is_session_active().await
             };
             if !session_active {
-                let known = ["/help", "/cd", "/claude", "/ll", "/quit", "/pwd"];
+                let known = ["/help", "/cd", "/cd_default", "/claude", "/ll", "/quit", "/pwd"];
                 let cmd = trimmed.split_whitespace().next().unwrap_or(trimmed);
                 if !known.contains(&cmd) {
-                    let chat_id = match msg.chat_id {
-                        Some(ref id) => id.clone(),
-                        None => return Ok(()),
-                    };
+                    if msg.receive_id.is_empty() {
+                        return Ok(());
+                    }
                     self.send_text_message(
                         token,
-                        &chat_id,
+                        &msg.receive_id_type,
+                        &msg.receive_id,
                         "Unknown command. Available commands: /help, /cd, /claude, /ll, /quit, /pwd",
                     )
                     .await?;
@@ -1786,30 +1877,36 @@ impl FeishuPlatform {
         // Use the CommandRouter to handle the message.
         let response = self.router.handle(&msg.content).await;
 
-        let chat_id = match msg.chat_id {
-            Some(ref id) => id.clone(),
-            None => return Ok(()),
-        };
+        if msg.receive_id.is_empty() {
+            return Ok(());
+        }
 
         match response {
             Some(text) => {
                 // Immediate synchronous response
-                self.send_text_message(token, &chat_id, &text).await?;
+                self.send_text_message(token, &msg.receive_id_type, &msg.receive_id, &text).await?;
             }
             None => {
                 // Message forwarded to Claude; we need to poll events and reply.
-                self.poll_claude_and_reply(token, &chat_id).await?;
+                self.poll_claude_and_reply(token, &msg.receive_id_type, &msg.receive_id).await?;
             }
         }
 
         Ok(())
     }
 
-    async fn poll_claude_and_reply(&self, token: &str, chat_id: &str) -> Result<()> {
-        // Collect controller events using the same accumulator as CLI for consistent formatting.
+    async fn poll_claude_and_reply(
+        &self,
+        token: &str,
+        receive_id_type: &str,
+        receive_id: &str,
+    ) -> Result<()> {
         let ctrl = self.controller.lock().await;
         let mut accumulator = EventAccumulator::new();
-        let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
+        let mut interval = tokio::time::interval(TokioDuration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut first_text_sent = false;
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1817,41 +1914,55 @@ impl FeishuPlatform {
                 break;
             }
 
-            match timeout(remaining, ctrl.recv_event()).await {
-                Ok(Some(event)) => {
-                    if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
-                        // Send interactive card for permission requests
-                        let card = self.build_permission_card(req_id, tool_name, None);
-                        let _ = self.send_interactive_card(token, chat_id, &card).await;
-                        let ctx = PendingPermissionContext {
-                            request_id: req_id.clone(),
-                            tool_name: tool_name.clone(),
-                            chat_id: chat_id.to_string(),
-                            sender_open_id: String::new(),
-                            created_at: Instant::now(),
-                        };
-                        self.store_pending_permission(ctx);
-                        continue;
-                    }
-                    if accumulator.process_event(&event) {
-                        break;
+            tokio::select! {
+                _ = interval.tick() => {
+                    let partial = accumulator.take_output();
+                    if !partial.trim().is_empty() {
+                        let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
                     }
                 }
-                Ok(None) => break,
-                Err(_) => break,
+                event_res = timeout(remaining, ctrl.recv_event()) => {
+                    match event_res {
+                        Ok(Some(event)) => {
+                            if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
+                                let card = self.build_permission_card(req_id, tool_name, None);
+                                let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
+                                let ctx = PendingPermissionContext {
+                                    request_id: req_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    chat_id: receive_id.to_string(),
+                                    sender_open_id: String::new(),
+                                    created_at: Instant::now(),
+                                };
+                                self.store_pending_permission(ctx);
+                                continue;
+                            }
+                            let is_text = matches!(event, ControllerEvent::Text(_));
+                            if accumulator.process_event(&event) {
+                                break;
+                            }
+                            // Send first text chunk immediately for low-latency feedback
+                            if is_text && !first_text_sent {
+                                let partial = accumulator.take_output();
+                                if !partial.trim().is_empty() {
+                                    let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
+                                    first_text_sent = true;
+                                }
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
             }
         }
 
         drop(ctrl);
 
         let reply = accumulator.take_output();
-        let reply = if reply.trim().is_empty() {
-            "Processing...".to_string()
-        } else {
-            reply.trim().to_string()
-        };
-
-        self.send_text_message(token, chat_id, &reply).await?;
+        if !reply.trim().is_empty() {
+            self.send_text_message(token, receive_id_type, receive_id, &reply.trim()).await?;
+        }
         Ok(())
     }
 
@@ -2268,7 +2379,6 @@ mod tests {
             app_secret: "${FEISHU_APP_SECRET}".to_string(),
             allow_from: "*".to_string(),
             encrypt_key: "".to_string(),
-            default_dir: "~/Workspace".to_string(),
             mode: "websocket".to_string(),
             webhook_bind: "0.0.0.0:3000".to_string(),
         };
@@ -2276,8 +2386,8 @@ mod tests {
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             gateway_config.claude.clone(),
         )));
-        let default_dir = &gateway_config.feishu.default_dir;
-        FeishuPlatform::new(config, Arc::new(CommandRouter::new(controller.clone(), default_dir)), controller)
+        let default_dir = &gateway_config.default_dir;
+        FeishuPlatform::new(config, default_dir, Arc::new(CommandRouter::new(controller.clone(), default_dir)), controller)
     }
 
     #[tokio::test]
@@ -2332,7 +2442,7 @@ mod tests {
 
         // If there are chats, try sending a message to the first one
         if let Some(chat) = chats.first() {
-            let result = platform.send_text_message(&token, &chat.chat_id, "Hello from cc-gateway test!").await;
+            let result = platform.send_text_message(&token, "chat_id", &chat.chat_id, "Hello from cc-gateway test!").await;
             assert!(result.is_ok(), "Failed to send message: {:?}", result.err());
             println!("Sent message to chat: {} ({})", chat.name, chat.chat_id);
         }
