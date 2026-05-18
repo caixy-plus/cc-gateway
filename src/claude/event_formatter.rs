@@ -123,6 +123,7 @@ impl EventAccumulator {
     }
 
     /// Peek at the current accumulated output without clearing.
+    #[allow(dead_code)]
     pub fn peek_output(&self) -> String {
         let mut result = self.accumulated.clone();
         if self.in_progress {
@@ -130,6 +131,7 @@ impl EventAccumulator {
         }
         result
     }
+
 }
 
 impl Default for EventAccumulator {
