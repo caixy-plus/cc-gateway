@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::claude::controller::ClaudeController;
+use crate::t_fmt;
 
 pub struct ForwardCommand {
     controller: Arc<Mutex<ClaudeController>>,
@@ -16,15 +17,12 @@ impl ForwardCommand {
     pub async fn handle_regular(&self, message: &str) -> Option<String> {
         let ctrl = self.controller.lock().await;
         if !ctrl.is_session_active().await {
-            return Some(format!(
-                "No active Claude session. Use /claude to start one, or type a builtin command like /help.\n\nYou said: {}",
-                message
-            ));
+            return Some(t_fmt!("forward.no_session", MSG = message));
         }
 
         match ctrl.send_message(message).await {
             Ok(()) => None, // Response will come through event channel
-            Err(e) => Some(format!("Failed to send message: {}", e)),
+            Err(e) => Some(t_fmt!("forward.failed_send", ERR = e)),
         }
     }
 }
