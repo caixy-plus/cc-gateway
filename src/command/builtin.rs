@@ -201,6 +201,9 @@ pub fn list_directory_paths(dir: &str) -> Result<Vec<(String, String)>, std::io:
         let entry = entry?;
         if entry.file_type()?.is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
             let full = entry.path().to_string_lossy().to_string();
             items.push((name, full));
         }
