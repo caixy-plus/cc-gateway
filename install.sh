@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-REPO="caixinyun/cc-gateway"
+REPO="caixy-plus/cc-gateway"
 BINARY="cc-gateway"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -62,29 +62,20 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
     "level": "info",
     "file": "~/.cc-gateway/logs/gateway.log"
   },
-  "ai": {
-    "enabled": false,
-    "provider": "openai",
-    "api_key": "${OPENAI_API_KEY}",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o-mini"
-  },
   "claude": {
     "cli_path": "claude",
-    "mode": "default",
-    "model": "",
-    "allowed_tools": ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]
+    "default_args": "--dangerously-skip-permissions"
   },
   "feishu": {
     "enabled": true,
     "app_id": "${FEISHU_APP_ID}",
     "app_secret": "${FEISHU_APP_SECRET}",
-    "allow_from": "*"
+    "allow_from": "*",
+    "encrypt_key": "",
+    "mode": "websocket",
+    "webhook_bind": "0.0.0.0:3000"
   },
-  "workspace": {
-    "scan_dirs": ["~/Workspace", "~/Projects"],
-    "default_dir": "~/Workspace"
-  }
+  "default_dir": "~"
 }
 EOF
     echo "Created default config at $CONFIG_DIR/config.json"
