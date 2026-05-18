@@ -7,6 +7,7 @@ use tracing::{debug, info};
 use crate::claude::protocol::{build_user_message, OutputEvent};
 use crate::claude::session::ClaudeSession;
 use crate::config::model::ClaudeConfig;
+use crate::{t, t_fmt};
 
 /// Validate that a path is allowed.
 /// On macOS/Linux: must be under the home directory.
@@ -33,9 +34,12 @@ pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
     }
 
     anyhow::bail!(
-        "Access denied: '{}' is outside home directory '{}'",
-        canonical.display(),
-        home.display()
+        "{}",
+        t_fmt!(
+            "controller.access_denied",
+            PATH = canonical.display(),
+            HOME = home.display()
+        )
     )
 }
 
@@ -153,7 +157,7 @@ impl ClaudeController {
             session.send(msg).await?;
             Ok(())
         } else {
-            anyhow::bail!("No active Claude session. Use /claude to start one.")
+            anyhow::bail!("{}", t!("controller.no_active_session"))
         }
     }
 
