@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 set -e
 
 REPO="caixy-plus/cc-gateway"
@@ -27,8 +27,8 @@ detect_lang() {
 LANG_CODE=$(detect_lang)
 
 msg() {
-    local en="$1"
-    local zh="$2"
+    en="$1"
+    zh="$2"
     if [ "$LANG_CODE" = "zh" ]; then
         echo "$zh"
     else
@@ -65,9 +65,9 @@ trap "rm -rf $TMP_DIR" EXIT
 
 # Download
 msg "Downloading from ${LATEST_URL}..." "正在下载: ${LATEST_URL}..."
-if command -v curl &> /dev/null; then
+if command -v curl > /dev/null 2>&1; then
     curl -fsSL "$LATEST_URL" -o "$TMP_DIR/${BINARY}.tar.gz"
-elif command -v wget &> /dev/null; then
+elif command -v wget > /dev/null 2>&1; then
     wget -q "$LATEST_URL" -O "$TMP_DIR/${BINARY}.tar.gz"
 else
     msg "curl or wget is required" "需要安装 curl 或 wget"
@@ -117,7 +117,7 @@ fi
 SHELL_CONFIG=""
 if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
     SHELL_CONFIG="$HOME/.zshrc"
-elif [ -n "$BASH_VERSION" ] || [ "$SHELL" = "/bin/bash" ]; then
+elif [ "$SHELL" = "/bin/bash" ]; then
     SHELL_CONFIG="$HOME/.bashrc"
 fi
 
@@ -127,7 +127,7 @@ if [ -n "$SHELL_CONFIG" ] && [ -f "$SHELL_CONFIG" ]; then
         msg "Added $INSTALL_DIR to PATH in $SHELL_CONFIG" "已将 $INSTALL_DIR 添加到 PATH ($SHELL_CONFIG)"
     fi
     # Source the config so PATH is effective immediately in the current session
-    if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ] || [ -n "$BASH_VERSION" ]; then
+    if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ]; then
         # shellcheck source=/dev/null
         . "$SHELL_CONFIG"
         msg "Sourced $SHELL_CONFIG" "已加载 $SHELL_CONFIG"
@@ -191,7 +191,7 @@ fi
 
 msg "" ""
 msg "Running initial setup..." "正在运行初始设置..."
-if command -v cc-gateway &> /dev/null; then
+if command -v cc-gateway > /dev/null 2>&1; then
     cc-gateway init
 else
     "$INSTALL_DIR/cc-gateway" init
