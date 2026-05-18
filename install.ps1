@@ -5,26 +5,47 @@ $Repo = "caixy-plus/cc-gateway"
 $Binary = "cc-gateway"
 $InstallDir = "$env:LOCALAPPDATA\cc-gateway"
 
+# Language detection
+function Get-LangCode {
+    if ($env:CC_GATEWAY_LANG -match '^zh') { return 'zh' }
+    if ($env:LANG -match '^zh') { return 'zh' }
+    try {
+        $culture = [System.Globalization.CultureInfo]::CurrentUICulture
+        if ($culture.Name -match '^zh') { return 'zh' }
+    } catch {}
+    return 'en'
+}
+
+$lang = Get-LangCode
+
+function Write-Msg($en, $zh) {
+    if ($lang -eq 'zh') {
+        Write-Host $zh
+    } else {
+        Write-Host $en
+    }
+}
+
 # Detect architecture
 $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64"   { "x86_64" }
     "ARM64"   { "aarch64" }
-    default   { throw "Unsupported architecture: $($env:PROCESSOR_ARCHITECTURE)" }
+    default   { throw (Write-Msg "Unsupported architecture: $($env:PROCESSOR_ARCHITECTURE)" "不支持的架构: $($env:PROCESSOR_ARCHITECTURE)") }
 }
 
 $Target = "$Arch-pc-windows-msvc"
-Write-Host "Installing cc-gateway for $Target..."
+Write-Msg "Installing cc-gateway for $Target..." "正在安装 cc-gateway ($Target)..."
 
 # Download
 $LatestUrl = "https://github.com/$Repo/releases/latest/download/$Binary-$Target.zip"
 $TempFile = "$env:TEMP\$Binary.zip"
 $TempDir = "$env:TEMP\$Binary-install"
 
-Write-Host "Downloading from $LatestUrl..."
+Write-Msg "Downloading from $LatestUrl..." "正在下载: $LatestUrl..."
 try {
     Invoke-WebRequest -Uri $LatestUrl -OutFile $TempFile -UseBasicParsing
 } catch {
-    Write-Error "Failed to download: $_"
+    Write-Msg "Failed to download: $_" "下载失败: $_"
     exit 1
 }
 
@@ -65,14 +86,14 @@ if (-not (Test-Path "$ConfigDir\config.json")) {
 }
 "@
     Set-Content -Path "$ConfigDir\config.json" -Value $Config
-    Write-Host "Created default config at $ConfigDir\config.json"
+    Write-Msg "Created default config at $ConfigDir\config.json" "已创建默认配置: $ConfigDir\config.json"
 }
 
 # Add to PATH
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$InstallDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
-    Write-Host "Added $InstallDir to PATH"
+    Write-Msg "Added $InstallDir to PATH" "已将 $InstallDir 添加到 PATH"
 }
 
 # Cleanup
@@ -80,13 +101,13 @@ Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 Remove-Item -Force $TempFile -ErrorAction SilentlyContinue
 
 # Run init
-Write-Host ""
-Write-Host "Running initial setup..."
+Write-Msg "" ""
+Write-Msg "Running initial setup..." "正在运行初始设置..."
 & "$InstallDir\$Binary.exe" init
 
-Write-Host ""
-Write-Host "cc-gateway installed successfully to $InstallDir\$Binary.exe"
-Write-Host "Run '$Binary --help' to get started"
-Write-Host ""
-Write-Host "For Feishu bot setup instructions, see:"
-Write-Host "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"
+Write-Msg "" ""
+Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
+Write-Msg "Run '$Binary --help' to get started" "运行 '$Binary --help' 开始使用"
+Write-Msg "" ""
+Write-Msg "For Feishu bot setup instructions, see:" "飞书机器人配置说明请参阅:"
+Write-Msg "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup" "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"
