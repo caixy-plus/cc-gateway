@@ -196,10 +196,12 @@ fi
 
 msg "" ""
 msg "Running initial setup..." "正在运行初始设置..."
+# Redirect stdin from /dev/null so init doesn't accidentally read
+# remaining shell script content from the curl pipe.
 if command -v cc-gateway > /dev/null 2>&1; then
-    cc-gateway init
+    cc-gateway init < /dev/null
 else
-    "$INSTALL_DIR/cc-gateway" init
+    "$INSTALL_DIR/cc-gateway" init < /dev/null
 fi
 
 msg "" ""
