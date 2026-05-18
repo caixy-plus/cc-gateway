@@ -1026,11 +1026,14 @@ impl FeishuPlatform {
                     "content": name
                 },
                 "type": "primary",
-                "value": {
-                    "cmd": "cd",
-                    "path": path,
-                    "chat_id": receive_id,
-                    "receive_id_type": receive_id_type
+                "action": {
+                    "tag": "callback",
+                    "value": {
+                        "cmd": "cd",
+                        "path": path,
+                        "chat_id": receive_id,
+                        "receive_id_type": receive_id_type
+                    }
                 }
             }));
         }
