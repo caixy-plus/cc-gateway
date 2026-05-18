@@ -24,6 +24,7 @@ impl BuiltinCommands {
             "/help" => Some(self.help()),
             "/quit" => Some(self.quit().await),
             "/cd" => Some(self.cd(arg).await),
+            "/cd_default" => Some(self.cd_default().await),
             "/claude" => Some(self.claude(arg).await),
             "/pwd" => Some(self.pwd().await),
             "/ll" => Some(self.ll().await),
@@ -36,6 +37,7 @@ impl BuiltinCommands {
   /help                Show this help
   /quit                Quit current session or exit cc-gateway
   /cd <path>           Change working directory and restart Claude
+  /cd_default          Change working directory to the default directory
   /claude [args...]    Start or restart Claude session (pass args to Claude CLI)
   /pwd                 Show current working directory
   /ll                  List files in current directory (ls -l)
@@ -53,6 +55,10 @@ Any other text is sent directly to Claude Code."#
     }
 
     async fn cd(&self, path: &str) -> String {
+        if path.is_empty() {
+            return "Usage: /cd <path>".to_string();
+        }
+
         let ctrl = self.controller.lock().await;
         let current_dir = ctrl.get_work_dir().await;
         let base = if current_dir.is_empty() {
@@ -61,27 +67,29 @@ Any other text is sent directly to Claude Code."#
             current_dir
         };
 
-        let target = if path.is_empty() {
-            base.clone()
-        } else {
-            let expanded = shellexpand::tilde(path).to_string();
-            std::path::Path::new(&base).join(&expanded).to_string_lossy().to_string()
-        };
+        let expanded = shellexpand::tilde(path).to_string();
+        let target = std::path::Path::new(&base).join(&expanded);
+        let target_str = target.to_string_lossy().to_string();
 
-        let canonical = std::path::PathBuf::from(&target);
+        let canonical = std::path::PathBuf::from(&target_str);
         let canonical = canonical.canonicalize().unwrap_or(canonical);
 
         if !canonical.is_dir() {
-            return format!("Not a directory: {}", canonical.display());
+            return format!("Invalid path: {}", canonical.display());
         }
 
         let path_str = canonical.to_string_lossy().to_string();
         if let Err(e) = crate::claude::controller::ensure_under_home(&path_str) {
-            return format!("Access denied: {}", e);
+            return e.to_string();
         }
 
         ctrl.init_work_dir(path_str.clone()).await;
         format!("Working directory changed to: {}", path_str)
+    }
+
+    async fn cd_default(&self) -> String {
+        let dir = shellexpand::tilde(&self.default_dir).to_string();
+        self.cd(&dir).await
     }
 
     async fn claude(&self, args: &str) -> String {
@@ -289,6 +297,7 @@ impl SelectBackend for RealBackend {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct TestBackend {
     term_size: (u16, u16),
@@ -297,6 +306,7 @@ struct TestBackend {
     pub frames: Vec<Vec<String>>,
 }
 
+#[cfg(test)]
 impl TestBackend {
     fn new(term_size: (u16, u16), keys: Vec<crossterm::event::KeyCode>) -> Self {
         Self {
@@ -308,6 +318,7 @@ impl TestBackend {
     }
 }
 
+#[cfg(test)]
 impl SelectBackend for TestBackend {
     fn size(&self) -> (u16, u16) {
         self.term_size
@@ -386,7 +397,7 @@ mod tests {
     fn setup() -> BuiltinCommands {
         let config = ClaudeConfig::default();
         let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
-        BuiltinCommands::new(controller, "~/Workspace")
+        BuiltinCommands::new(controller, "~")
     }
 
     #[tokio::test]
@@ -428,6 +439,40 @@ mod tests {
         let builtin = setup();
         let response = builtin.handle("/cd /nonexistent_path_12345").await.unwrap();
         assert!(response.starts_with("Invalid path:"));
+    }
+
+    #[tokio::test]
+    async fn test_cd_parent_directory() {
+        let builtin = setup();
+        // Use the project's src directory as a known existing subdirectory
+        let current = std::env::current_dir().unwrap();
+        let subdir = current.join("src");
+        let parent = current.to_string_lossy().to_string();
+
+        let response1 = builtin.handle(&format!("/cd {}", subdir.display())).await.unwrap();
+        assert!(response1.starts_with("Working directory changed to:"));
+
+        let response2 = builtin.handle("/cd ..").await.unwrap();
+        assert!(response2.starts_with("Working directory changed to:"));
+        assert!(response2.contains(&parent), "Expected response to contain parent directory {}, got: {}", parent, response2);
+    }
+
+    #[tokio::test]
+    async fn test_cd_outside_home_denied() {
+        let builtin = setup();
+        // Try to cd to a directory outside home
+        let response = builtin.handle("/cd /tmp").await.unwrap();
+        assert!(
+            response.starts_with("Access denied:"),
+            "Expected access denied for /tmp, got: {}",
+            response
+        );
+        // Ensure there is no duplicated "Access denied" prefix
+        assert!(
+            !response.contains("Access denied: Access denied:"),
+            "Duplicated access denied prefix: {}",
+            response
+        );
     }
 
     #[tokio::test]
