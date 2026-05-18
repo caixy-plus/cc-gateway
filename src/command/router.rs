@@ -4,8 +4,6 @@ use tokio::sync::Mutex;
 use crate::claude::controller::ClaudeController;
 use crate::command::builtin::BuiltinCommands;
 use crate::command::forward::ForwardCommand;
-use crate::config::model::GatewayConfig;
-
 pub struct CommandRouter {
     builtin: BuiltinCommands,
     forward: ForwardCommand,
@@ -58,12 +56,12 @@ impl CommandRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{ClaudeConfig, GatewayConfig};
+    use crate::config::model::ClaudeConfig;
 
     fn setup() -> CommandRouter {
         let config = ClaudeConfig::default();
         let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
-        CommandRouter::new(controller, "~/Workspace")
+        CommandRouter::new(controller, "~")
     }
 
     #[tokio::test]
