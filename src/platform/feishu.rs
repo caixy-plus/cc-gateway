@@ -1019,7 +1019,8 @@ impl FeishuPlatform {
             }
         }));
 
-        for (name, path) in dirs {
+        const MAX_DIRS: usize = 40;
+        for (name, path) in dirs.iter().take(MAX_DIRS) {
             elements.push(json!({
                 "tag": "button",
                 "text": {
@@ -1038,6 +1039,17 @@ impl FeishuPlatform {
                         }
                     }
                 ]
+            }));
+        }
+
+        if dirs.len() > MAX_DIRS {
+            let remaining = dirs.len() - MAX_DIRS;
+            elements.push(json!({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": t_fmt!("feishu.more_dirs", COUNT = remaining)
+                }
             }));
         }
 
