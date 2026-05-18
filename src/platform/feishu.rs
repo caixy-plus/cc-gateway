@@ -1380,57 +1380,74 @@ impl FeishuPlatform {
             })
         };
 
-        // Main read loop
+        // Main read loop with timeout to detect silent disconnections
+        let read_timeout_duration = TokioDuration::from_secs(
+            (client_config.ping_interval.max(1) as u64) * 3
+        );
         let result: Result<()> = async {
-            while let Some(msg) = read.next().await {
-                let msg = msg.context("WebSocket read error")?;
-                match msg {
-                    WsMessage::Binary(data) => {
-                        debug!("WS raw binary len={}", data.len());
-                        // Log hex dump of first 100 bytes for debugging
-                        let hex_dump: String = data.iter().take(100).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-                        debug!("WS raw binary hex (first 100 bytes): {}", hex_dump);
-                        if let Some(frame) = Frame::decode(&data) {
-                            debug!("Decoded frame: seq_id={} log_id={} service={} method={} headers={:?} payload_encoding={:?} payload_type={:?} payload_len={:?} log_id_new={:?}",
-                                frame.seq_id, frame.log_id, frame.service, frame.method,
-                                frame.headers.iter().map(|h| format!("{}={}", h.key, h.value)).collect::<Vec<_>>(),
-                                frame.payload_encoding, frame.payload_type,
-                                frame.payload.as_ref().map(|v| v.len()),
-                                frame.log_id_new
-                            );
-                            // Handle pong control frame: update ping interval from server config
-                            if frame.method == METHOD_CONTROL {
-                                if let Some(ref payload) = frame.payload {
-                                    if let Ok(cfg) = serde_json::from_slice::<WsClientConfig>(payload) {
-                                        debug!("Received pong with ClientConfig: ping_interval={}s", cfg.ping_interval);
-                                        ping_interval.store(cfg.ping_interval.max(1) as u64, std::sync::atomic::Ordering::Relaxed);
+            loop {
+                match timeout(read_timeout_duration, read.next()).await {
+                    Ok(Some(Ok(msg))) => {
+                        match msg {
+                            WsMessage::Binary(data) => {
+                                debug!("WS raw binary len={}", data.len());
+                                // Log hex dump of first 100 bytes for debugging
+                                let hex_dump: String = data.iter().take(100).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                                debug!("WS raw binary hex (first 100 bytes): {}", hex_dump);
+                                if let Some(frame) = Frame::decode(&data) {
+                                    debug!("Decoded frame: seq_id={} log_id={} service={} method={} headers={:?} payload_encoding={:?} payload_type={:?} payload_len={:?} log_id_new={:?}",
+                                        frame.seq_id, frame.log_id, frame.service, frame.method,
+                                        frame.headers.iter().map(|h| format!("{}={}", h.key, h.value)).collect::<Vec<_>>(),
+                                        frame.payload_encoding, frame.payload_type,
+                                        frame.payload.as_ref().map(|v| v.len()),
+                                        frame.log_id_new
+                                    );
+                                    // Handle pong control frame: update ping interval from server config
+                                    if frame.method == METHOD_CONTROL {
+                                        if let Some(ref payload) = frame.payload {
+                                            if let Ok(cfg) = serde_json::from_slice::<WsClientConfig>(payload) {
+                                                debug!("Received pong with ClientConfig: ping_interval={}s", cfg.ping_interval);
+                                                ping_interval.store(cfg.ping_interval.max(1) as u64, std::sync::atomic::Ordering::Relaxed);
+                                            }
+                                        }
                                     }
+                                    if let Some(ack) = self.handle_frame(&frame, token).await? {
+                                        let mut buf = BytesMut::new();
+                                        ack.encode(&mut buf);
+                                        let mut w = write.lock().await;
+                                        w.send(WsMessage::Binary(buf.freeze())).await.ok();
+                                        drop(w);
+                                        debug!("Sent ACK for seq_id={}", frame.seq_id);
+                                    }
+                                } else {
+                                    warn!("Received invalid protobuf frame");
                                 }
                             }
-                            if let Some(ack) = self.handle_frame(&frame, token).await? {
-                                let mut buf = BytesMut::new();
-                                ack.encode(&mut buf);
-                                let mut w = write.lock().await;
-                                w.send(WsMessage::Binary(buf.freeze())).await.ok();
-                                drop(w);
-                                debug!("Sent ACK for seq_id={}", frame.seq_id);
+                            WsMessage::Close(_) => {
+                                info!("WebSocket close frame received");
+                                break;
                             }
-                        } else {
-                            warn!("Received invalid protobuf frame");
+                            WsMessage::Ping(data) => {
+                                let mut w = write.lock().await;
+                                w.send(WsMessage::Pong(data)).await.ok();
+                            }
+                            WsMessage::Text(text) => {
+                                debug!("Unexpected text frame: {}", text);
+                            }
+                            _ => {}
                         }
                     }
-                    WsMessage::Close(_) => {
-                        info!("WebSocket close frame received");
+                    Ok(Some(Err(e))) => {
+                        return Err(anyhow::anyhow!("WebSocket read error: {}", e));
+                    }
+                    Ok(None) => {
+                        info!("WebSocket stream ended");
                         break;
                     }
-                    WsMessage::Ping(data) => {
-                        let mut w = write.lock().await;
-                        w.send(WsMessage::Pong(data)).await.ok();
+                    Err(_) => {
+                        warn!("WebSocket read timeout: no data received for {}s", read_timeout_duration.as_secs());
+                        return Err(anyhow::anyhow!("WebSocket read timeout"));
                     }
-                    WsMessage::Text(text) => {
-                        debug!("Unexpected text frame: {}", text);
-                    }
-                    _ => {}
                 }
             }
             Ok(())
