@@ -33,6 +33,10 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Sign (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: codesign -s - -f target/${{ matrix.target }}/release/cc-gateway
+
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
         run: |
