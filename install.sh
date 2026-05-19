@@ -77,8 +77,20 @@ fi
 # Extract
 tar -xzf "$TMP_DIR/${BINARY}.tar.gz" -C "$TMP_DIR"
 
+# macOS: re-sign locally so the ad-hoc signature is bound to this machine.
+# Signing on the GitHub Actions runner sometimes fails after download due
+# to Gatekeeper / signature-validation caches when overwriting an existing
+# signed binary. We sign in the temp dir, remove the old binary, then copy
+# the freshly-signed one — this avoids inode-reuse issues.
+if [ "$OS" = "darwin" ] && command -v codesign > /dev/null 2>&1; then
+    if ! codesign -s - -f "$TMP_DIR/${BINARY}" 2>/dev/null; then
+        msg "Warning: local codesign failed, falling back to GitHub-signed binary" "警告: 本地签名失败，将使用 GitHub 构建的签名版本"
+    fi
+fi
+
 # Install binary
 mkdir -p "$INSTALL_DIR"
+rm -f "$INSTALL_DIR/${BINARY}"
 cp "$TMP_DIR/${BINARY}" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/${BINARY}"
 
