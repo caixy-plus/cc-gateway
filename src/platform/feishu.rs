@@ -581,7 +581,7 @@ impl FeishuPlatform {
             let cached = self.cached_token.read().await;
             let fetched_at = self.token_fetched_at.read().await;
             if let (Some(token), Some(instant)) = (cached.as_ref(), fetched_at.as_ref()) {
-                if instant.elapsed().as_secs() < 5400 {
+                if instant.elapsed().as_secs() < 6600 {
                     return Ok(token.clone());
                 }
             }
@@ -1572,7 +1572,7 @@ impl FeishuPlatform {
     // Frame handling
     // -----------------------------------------------------------------------
 
-    async fn handle_frame(&self, frame: &Frame, token: &str) -> Result<Option<Frame>> {
+    async fn handle_frame(&self, frame: &Frame, _token: &str) -> Result<Option<Frame>> {
         debug!(
             "Frame seq_id={} method={} service={} payload_len={:?}",
             frame.seq_id,
@@ -1592,12 +1592,18 @@ impl FeishuPlatform {
                 if let Some(ref payload) = frame.payload {
                     let payload = payload.clone();
                     let platform = self.clone();
-                    let token = token.to_string();
                     tokio::spawn(async move {
+                        let token = match platform.get_tenant_access_token().await {
+                            Ok(t) => t,
+                            Err(e) => {
+                                warn!("[Feishu] Failed to get tenant access token: {}", e);
+                                return;
+                            }
+                        };
                         if let Err(e) = platform.handle_im_payload(&payload, &token).await {
-                            debug!("Not an IM event, trying card: {}", e);
+                            debug!("[Feishu] Not an IM event, trying card: {}", e);
                             if let Err(e2) = platform.handle_card_payload(&payload, &token).await {
-                                debug!("Not a card event either: {}", e2);
+                                debug!("[Feishu] Not a card event either: {}", e2);
                             }
                         }
                     });
@@ -2362,12 +2368,11 @@ impl FeishuPlatform {
         if let Some((_, reaction_id)) = self.pending_reactions.remove(message_id) {
             if let Err(e) = self.remove_reaction(token, message_id, &reaction_id).await {
                 debug!("Failed to remove typing reaction: {}", e);
-                return;
             }
-            if !success {
-                if let Err(e) = self.add_reaction(token, message_id, REACTION_FAILURE).await {
-                    debug!("Failed to add failure reaction: {}", e);
-                }
+        }
+        if !success {
+            if let Err(e) = self.add_reaction(token, message_id, REACTION_FAILURE).await {
+                debug!("Failed to add failure reaction: {}", e);
             }
         }
     }
