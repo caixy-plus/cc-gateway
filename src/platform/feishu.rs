@@ -636,17 +636,20 @@ impl FeishuPlatform {
 
     async fn get_ws_endpoint(&self) -> Result<(String, WsClientConfig)> {
         let url = "https://open.feishu.cn/callback/ws/endpoint";
-        let resp = self
-            .http_client
-            .post(url)
-            .header("locale", "zh")
-            .json(&serde_json::json!({
-                "AppID": &self.config.app_id,
-                "AppSecret": &self.config.app_secret,
-            }))
-            .send()
-            .await
-            .context("Failed to request WebSocket endpoint")?;
+        let resp = timeout(
+            TokioDuration::from_secs(10),
+            self.http_client
+                .post(url)
+                .header("locale", "zh")
+                .json(&serde_json::json!({
+                    "AppID": &self.config.app_id,
+                    "AppSecret": &self.config.app_secret,
+                }))
+                .send()
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Request WebSocket endpoint timeout (10s)"))?
+        .context("Failed to request WebSocket endpoint")?;
 
         let body_text = resp.text().await.context("Failed to read WebSocket endpoint response body")?;
         debug!("Feishu WS endpoint raw response: {}", body_text);
@@ -1383,6 +1386,7 @@ impl FeishuPlatform {
         let mut current_url = ws_url.to_string();
         let mut current_token = token.to_string();
         let mut current_config = client_config;
+        let mut retry_count: u32 = 0;
 
         loop {
             let service_id = Self::extract_service_id(&current_url).unwrap_or(0);
@@ -1392,8 +1396,14 @@ impl FeishuPlatform {
                     break;
                 }
                 Err(e) => {
-                    warn!("WebSocket error: {}. Reconnecting in {}s...", e, current_config.reconnect_interval);
-                    sleep(TokioDuration::from_secs(current_config.reconnect_interval.max(1) as u64)).await;
+                    retry_count += 1;
+                    // Fixed 3-second retry to guarantee recovery under 50s
+                    warn!(
+                        "WebSocket error: {}. Reconnecting in 3s... (retry #{})",
+                        e, retry_count
+                    );
+                    sleep(TokioDuration::from_secs(3)).await;
+
                     // Refresh endpoint and token before reconnect
                     match self.get_ws_endpoint().await {
                         Ok((u, cfg)) => {
@@ -1424,8 +1434,12 @@ impl FeishuPlatform {
         // Build WebSocket request (no User-Agent, matching Go SDK behavior)
         let req = ws_url.into_client_request()
             .context("Invalid WebSocket URL")?;
-        let (ws_stream, response) = connect_async(req)
+        let (ws_stream, response) = timeout(
+                TokioDuration::from_secs(10),
+                connect_async(req)
+            )
             .await
+            .map_err(|_| anyhow::anyhow!("WebSocket connect timeout (10s)"))?
             .context("WebSocket connect failed")?;
 
         info!("Feishu WebSocket connected, response status={:?}, headers={:?}", response.status(), response.headers());
@@ -1433,6 +1447,21 @@ impl FeishuPlatform {
         let (write, mut read) = ws_stream.split();
         let write = Arc::new(Mutex::new(write));
         let ping_interval = Arc::new(std::sync::atomic::AtomicU64::new(client_config.ping_interval.max(1) as u64));
+
+        // Send initial PING immediately so Feishu server acknowledges the new connection
+        {
+            let ping = build_ping_frame(service_id);
+            let mut buf = BytesMut::new();
+            ping.encode(&mut buf);
+            let mut w = write.lock().await;
+            if w.send(WsMessage::Binary(buf.freeze())).await.is_ok() {
+                info!("Sent initial PING seq_id={} service_id={} immediately after connect", ping.seq_id, service_id);
+            }
+            drop(w);
+        }
+
+        // Small delay (200ms) to stabilize the connection before entering the read loop
+        sleep(TokioDuration::from_millis(200)).await;
 
         // Spawn heartbeat writer
         let write_for_heartbeat = write.clone();
@@ -1788,8 +1817,13 @@ impl FeishuPlatform {
             ("chat_id", chat_id.as_str())
         };
 
-        // Intercept /ll for Feishu interactive directory card
-        if trimmed == "/ll" {
+        // Intercept /ll for Feishu interactive directory card only when no session is active
+        let session_active = {
+            let ctrl = self.controller.lock().await;
+            ctrl.is_session_active().await
+        };
+        info!("[Feishu] handle_im_payload session_active={}, text='{}'", session_active, trimmed);
+        if !session_active && trimmed == "/ll" {
             info!("[Feishu] /ll command received from {}, chat_type={}, receive_id_type={}, receive_id={}, processing...",
                   sender_open_id, chat_type, receive_id_type, receive_id);
             self.on_processing_start(token, &msg_id).await;
@@ -1975,7 +2009,11 @@ impl FeishuPlatform {
     // -----------------------------------------------------------------------
 
     async fn route_message(&self, msg: NormalizedMessage, token: &str) -> Result<()> {
-        info!("Routing message from {}: {}", msg.sender_open_id, msg.content);
+        let session_active = {
+            let ctrl = self.controller.lock().await;
+            ctrl.is_session_active().await
+        };
+        info!("[Feishu] route_message session_active={}, content='{}'", session_active, msg.content);
 
         let trimmed = msg.content.trim();
 
@@ -1986,7 +2024,7 @@ impl FeishuPlatform {
                 ctrl.is_session_active().await
             };
             if !session_active {
-                let known = ["/help", "/cd", "/cd_default", "/claude", "/ll", "/quit", "/pwd"];
+                let known = ["/help", "/cd", "/cd_default", "/claude", "/ll", "/mkdir", "/quit", "/pwd"];
                 let cmd = trimmed.split_whitespace().next().unwrap_or(trimmed);
                 if !known.contains(&cmd) {
                     if msg.receive_id.is_empty() {
