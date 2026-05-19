@@ -1,4 +1,5 @@
 pub mod engine;
+pub mod log_cleaner;
 pub mod server;
 pub mod state;
 
@@ -49,7 +50,10 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     }
 
     let child = cmd.spawn().context("Failed to spawn daemon process")?;
-    println!("{}", t_fmt!("daemon.started", PID = child.id()));
+    let pid = child.id();
+    // Write PID immediately so subsequent start() calls see it
+    let _ = fs::write(&pid_file, pid.to_string());
+    println!("{}", t_fmt!("daemon.started", PID = pid));
     Ok(())
 }
 
@@ -63,6 +67,21 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     } else {
         ConfigLoader::load()?
     };
+
+    // Trim log file before initializing logging to avoid race with the writer.
+    {
+        let log_path = shellexpand::tilde(&config.log.file).to_string();
+        let max_lines = config.log.max_lines;
+        let max_size_mb = config.log.max_size_mb;
+        match tokio::task::spawn_blocking(move || {
+            log_cleaner::trim_log_file(&log_path, max_lines, max_size_mb)
+        }).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => eprintln!("Warning: failed to trim log file: {}", e),
+            Err(e) => eprintln!("Warning: log trim task panicked: {}", e),
+        }
+    }
 
     // Initialize logging before anything else so we can see errors.
     let log_path = shellexpand::tilde(&config.log.file).to_string();
@@ -89,8 +108,18 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
 
     info!("Starting cc-gateway daemon");
 
-    // Write PID file
+    // Write PID file, but refuse if another daemon is already running
     let pid = std::process::id();
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(existing_pid) = pid_str.trim().parse::<u32>() {
+            if existing_pid != pid && is_process_alive(existing_pid) {
+                anyhow::bail!(
+                    "Another cc-gateway daemon is already running (PID: {}). Use 'cc-gateway restart' instead.",
+                    existing_pid
+                );
+            }
+        }
+    }
     fs::write(&pid_file, pid.to_string())?;
 
     // Start the daemon engine
