@@ -73,6 +73,13 @@ pub enum ControllerEvent {
     Done,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum SessionState {
+    Inactive,
+    Starting,
+    Active,
+}
+
 pub struct ClaudeController {
     config: ClaudeConfig,
     session: Arc<RwLock<Option<ClaudeSession>>>,
@@ -80,6 +87,8 @@ pub struct ClaudeController {
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
     work_dir: Arc<RwLock<String>>,
     pending_permission: Arc<RwLock<Option<(String, String)>>>,
+    session_state: Arc<RwLock<SessionState>>,
+    message_buffer: Arc<Mutex<Vec<String>>>,
 }
 
 impl ClaudeController {
@@ -92,6 +101,8 @@ impl ClaudeController {
             event_rx: Arc::new(Mutex::new(event_rx)),
             work_dir: Arc::new(RwLock::new(String::new())),
             pending_permission: Arc::new(RwLock::new(None)),
+            session_state: Arc::new(RwLock::new(SessionState::Inactive)),
+            message_buffer: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -117,12 +128,27 @@ impl ClaudeController {
             let mut wd = self.work_dir.write().await;
             *wd = validated.clone();
         }
+        {
+            let mut state = self.session_state.write().await;
+            *state = SessionState::Starting;
+        }
+        {
+            let mut buf = self.message_buffer.lock().await;
+            buf.clear();
+        }
+        // Drain stale events from the previous session
+        {
+            let mut rx = self.event_rx.lock().await;
+            while rx.try_recv().is_ok() {}
+        }
 
         // Spawn event processor
         let event_tx = self.event_tx.clone();
         let pending_perm = self.pending_permission.clone();
         let work_dir = validated.clone();
         let session_arc = self.session.clone();
+        let session_state = self.session_state.clone();
+        let message_buffer = self.message_buffer.clone();
         tokio::spawn(async move {
             while let Some(event) = claude_rx.recv().await {
                 Self::process_claude_event(
@@ -135,7 +161,46 @@ impl ClaudeController {
                 .await;
             }
             let _ = event_tx.send(ControllerEvent::Done);
+
+            // Auto-cleanup: stdout closed means the child process exited
+            {
+                let mut state = session_state.write().await;
+                info!("SessionState: {:?} -> Inactive (event processor ended)", *state);
+                *state = SessionState::Inactive;
+            }
+            {
+                let mut s = session_arc.write().await;
+                if s.is_some() {
+                    info!("Clearing dead session reference");
+                    *s = None;
+                }
+            }
+            {
+                let mut buf = message_buffer.lock().await;
+                buf.clear();
+            }
         });
+
+        // Mark active immediately: the child process has spawned and stdin/stdout
+        // pipes are open. Waiting for the first stdout event deadlocks because
+        // Claude stream-json mode may not emit anything until it receives input.
+        {
+            let mut state = self.session_state.write().await;
+            info!("SessionState: {:?} -> Active (start_session)", *state);
+            *state = SessionState::Active;
+        }
+        let messages = {
+            let mut buf = self.message_buffer.lock().await;
+            std::mem::take(&mut *buf)
+        };
+        for msg in messages {
+            let mut s = self.session.write().await;
+            if let Some(ref mut session) = *s {
+                let user_msg = build_user_message(&msg);
+                let _ = session.send(user_msg).await;
+            }
+            drop(s);
+        }
 
         info!("Claude session started in {}", validated);
         Ok(())
@@ -147,23 +212,57 @@ impl ClaudeController {
             session.stop().await?;
             info!("Claude session stopped");
         }
+        {
+            let mut state = self.session_state.write().await;
+            info!("SessionState: {:?} -> Inactive (stop_session)", *state);
+            *state = SessionState::Inactive;
+        }
+        {
+            let mut buf = self.message_buffer.lock().await;
+            buf.clear();
+        }
         Ok(())
     }
 
     pub async fn send_message(&self, text: &str) -> Result<()> {
-        let msg = build_user_message(text);
-        let mut s = self.session.write().await;
-        if let Some(ref mut session) = *s {
-            session.send(msg).await?;
-            Ok(())
-        } else {
-            anyhow::bail!("{}", t!("controller.no_active_session"))
+        let state = self.session_state.read().await.clone();
+        match state {
+            SessionState::Inactive => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Starting => {
+                let mut buf = self.message_buffer.lock().await;
+                buf.push(text.to_string());
+                Ok(())
+            }
+            SessionState::Active => {
+                let msg = build_user_message(text);
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.send(msg).await?;
+                    Ok(())
+                } else {
+                    anyhow::bail!("{}", t!("controller.no_active_session"))
+                }
+            }
         }
     }
 
     pub async fn is_session_active(&self) -> bool {
-        let s = self.session.read().await;
-        s.is_some()
+        let state = self.session_state.read().await;
+        let active = *state != SessionState::Inactive;
+        info!("is_session_active called, state={:?}, result={}", *state, active);
+        active
+    }
+
+    #[cfg(test)]
+    pub async fn inject_dummy_session(&self) -> Result<()> {
+        let session = crate::claude::session::ClaudeSession::dummy_for_test().await?;
+        let mut s = self.session.write().await;
+        *s = Some(session);
+        let mut state = self.session_state.write().await;
+        *state = SessionState::Active;
+        Ok(())
     }
 
     pub async fn get_work_dir(&self) -> String {
