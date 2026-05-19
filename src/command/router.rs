@@ -30,11 +30,11 @@ impl CommandRouter {
         };
 
         if session_active {
-            // In Claude mode: /quit exits the session, /claude restarts it.
-            // Everything else (including /help, /cd, raw text, slash commands)
-            // is forwarded directly to Claude.
+            // In Claude mode: only /quit exits the session.
+            // Everything else (including /help, /cd, /ll, /claude, raw text,
+            // slash commands) is forwarded directly to Claude.
             match trimmed {
-                "/quit" | "/claude" => {
+                "/quit" => {
                     return self.builtin.handle(trimmed).await;
                 }
                 _ => {
@@ -110,5 +110,92 @@ mod tests {
         let text = response.unwrap();
         assert!(text.contains("No active Claude session"));
         assert!(text.contains("/unknown_command_xyz"));
+    }
+
+    #[tokio::test]
+    async fn test_quit_handled_locally_when_session_active() {
+        let config = ClaudeConfig::default();
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let router = CommandRouter::new(controller.clone(), "~");
+
+        {
+            let ctrl = controller.lock().await;
+            ctrl.inject_dummy_session().await.unwrap();
+        }
+
+        let response = router.handle("/quit").await;
+        assert!(response.is_some(), "/quit should be handled locally when session is active");
+    }
+
+    #[tokio::test]
+    async fn test_ll_forwarded_when_session_active() {
+        let config = ClaudeConfig::default();
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let router = CommandRouter::new(controller.clone(), "~");
+
+        {
+            let ctrl = controller.lock().await;
+            ctrl.inject_dummy_session().await.unwrap();
+        }
+
+        let response = router.handle("/ll").await;
+        assert!(
+            response.is_none(),
+            "/ll should be forwarded to Claude when session is active, got: {:?}",
+            response
+        );
+
+        {
+            let ctrl = controller.lock().await;
+            let _ = ctrl.stop_session().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_claude_forwarded_when_session_active() {
+        let config = ClaudeConfig::default();
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let router = CommandRouter::new(controller.clone(), "~");
+
+        {
+            let ctrl = controller.lock().await;
+            ctrl.inject_dummy_session().await.unwrap();
+        }
+
+        let response = router.handle("/claude").await;
+        assert!(
+            response.is_none(),
+            "/claude should be forwarded to Claude when session is active, got: {:?}",
+            response
+        );
+
+        {
+            let ctrl = controller.lock().await;
+            let _ = ctrl.stop_session().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_text_forwarded_when_session_active() {
+        let config = ClaudeConfig::default();
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let router = CommandRouter::new(controller.clone(), "~");
+
+        {
+            let ctrl = controller.lock().await;
+            ctrl.inject_dummy_session().await.unwrap();
+        }
+
+        let response = router.handle("hello world").await;
+        assert!(
+            response.is_none(),
+            "regular text should be forwarded to Claude when session is active, got: {:?}",
+            response
+        );
+
+        {
+            let ctrl = controller.lock().await;
+            let _ = ctrl.stop_session().await;
+        }
     }
 }
