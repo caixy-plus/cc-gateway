@@ -34,7 +34,7 @@ mod tests {
 
     fn setup() -> ForwardCommand {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         ForwardCommand::new(controller)
     }
 

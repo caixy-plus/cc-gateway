@@ -1307,7 +1307,7 @@ impl FeishuPlatform {
 
         let mut accumulator = EventAccumulator::new();
         let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
-        let mut interval = tokio::time::interval(TokioDuration::from_secs(5));
+        let mut interval = tokio::time::interval(TokioDuration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut first_text_sent = false;
 
@@ -1346,11 +1346,14 @@ impl FeishuPlatform {
                                 continue;
                             }
                             let is_text = matches!(event, ControllerEvent::Text(_));
-                            if accumulator.process_event(&event) {
-                                break;
-                            }
-                            // Send first text chunk immediately for low-latency feedback
-                            if is_text && !first_text_sent {
+                            let is_done = accumulator.process_event(&event);
+                            // Send first text chunk immediately, then flush every ~300 chars
+                            let should_flush = if !first_text_sent {
+                                is_text
+                            } else {
+                                accumulator.peek_output().len() >= 300
+                            };
+                            if is_text && should_flush {
                                 let partial = accumulator.take_output();
                                 if !partial.trim().is_empty() {
                                     let token = match self.get_tenant_access_token().await {
@@ -1360,6 +1363,9 @@ impl FeishuPlatform {
                                     let _ = self.send_text_message(&token, receive_id_type, receive_id, &partial).await;
                                     first_text_sent = true;
                                 }
+                            }
+                            if is_done {
+                                break;
                             }
                         }
                         Ok(None) => break,
@@ -1751,8 +1757,16 @@ impl FeishuPlatform {
                 };
                 (String::new(), note)
             }
+            Some("post") => {
+                let t = if let Some(ref content_str) = message.content {
+                    extract_post_text(content_str)
+                } else {
+                    String::new()
+                };
+                (t, None)
+            }
             Some(other) => {
-                debug!("Unsupported message type: {}", other);
+                warn!("Unsupported message type: {}", other);
                 return Ok(());
             }
             None => (String::new(), None),
@@ -2024,7 +2038,7 @@ impl FeishuPlatform {
                 ctrl.is_session_active().await
             };
             if !session_active {
-                let known = ["/help", "/cd", "/cd_default", "/claude", "/ll", "/mkdir", "/quit", "/pwd"];
+                let known = ["/help", "/cd", "/cd_default", "/claude", "/ll", "/mkdir", "/quit", "/pwd", "/show-thinking", "/hide-thinking", "/show-thinking-toggle"];
                 let cmd = trimmed.split_whitespace().next().unwrap_or(trimmed);
                 if !known.contains(&cmd) {
                     if msg.receive_id.is_empty() {
@@ -2078,7 +2092,7 @@ impl FeishuPlatform {
         };
         let mut accumulator = EventAccumulator::new();
         let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
-        let mut interval = tokio::time::interval(TokioDuration::from_secs(5));
+        let mut interval = tokio::time::interval(TokioDuration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut first_text_sent = false;
 
@@ -2118,16 +2132,22 @@ impl FeishuPlatform {
                                 continue;
                             }
                             let is_text = matches!(event, ControllerEvent::Text(_));
-                            if accumulator.process_event(&event) {
-                                break;
-                            }
-                            // Send first text chunk immediately for low-latency feedback
-                            if is_text && !first_text_sent {
+                            let is_done = accumulator.process_event(&event);
+                            // Send first text chunk immediately, then flush every ~300 chars
+                            let should_flush = if !first_text_sent {
+                                is_text && !first_text_sent
+                            } else {
+                                accumulator.peek_output().len() >= 300
+                            };
+                            if is_text && should_flush {
                                 let partial = accumulator.take_output();
                                 if !partial.trim().is_empty() {
                                     let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
                                     first_text_sent = true;
                                 }
+                            }
+                            if is_done {
+                                break;
                             }
                         }
                         Ok(None) => break,
@@ -2475,6 +2495,51 @@ fn build_http_response(status: u16, body: &str) -> String {
     )
 }
 
+/// Extract plain text from a Feishu post message content JSON.
+fn extract_post_text(content_str: &str) -> String {
+    let mut texts = Vec::new();
+    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
+        if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
+            if !title.is_empty() {
+                texts.push(title.to_string());
+            }
+        }
+        if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
+            for line in content {
+                if let Some(line_arr) = line.as_array() {
+                    for segment in line_arr {
+                        if let Some(tag) = segment.get("tag").and_then(|t| t.as_str()) {
+                            match tag {
+                                "text" => {
+                                    if let Some(text) = segment.get("text").and_then(|t| t.as_str()) {
+                                        texts.push(text.to_string());
+                                    }
+                                }
+                                "a" => {
+                                    if let Some(text) = segment.get("text").and_then(|t| t.as_str()) {
+                                        texts.push(text.to_string());
+                                    }
+                                }
+                                "at" => {
+                                    if let Some(name) = segment.get("user_name").and_then(|n| n.as_str()) {
+                                        texts.push(format!("@{}", name));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if texts.is_empty() {
+        content_str.to_string()
+    } else {
+        texts.join("\n")
+    }
+}
+
 fn build_ping_frame(service_id: i32) -> Frame {
     use crate::platform::proto::Header;
     Frame {
@@ -2563,6 +2628,7 @@ mod tests {
         let gateway_config = GatewayConfig::default();
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             gateway_config.claude.clone(),
+            gateway_config.show_thinking,
         )));
         let default_dir = &gateway_config.default_dir;
         FeishuPlatform::new(config, default_dir, Arc::new(CommandRouter::new(controller.clone(), default_dir)), controller)

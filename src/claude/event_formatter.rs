@@ -69,8 +69,15 @@ impl EventAccumulator {
             }
             ControllerEvent::Thinking(thinking) => {
                 self.flush_text();
-                self.accumulated.push_str(&format_thinking(thinking));
-                self.accumulated.push('\n');
+                let formatted = if thinking.is_empty() {
+                    "💭 Thinking...\n".to_string()
+                } else {
+                    format_thinking(thinking)
+                };
+                if !self.accumulated.ends_with(&formatted) {
+                    self.accumulated.push_str(&formatted);
+                    self.accumulated.push('\n');
+                }
                 false
             }
             ControllerEvent::ToolUse(name, input) => {

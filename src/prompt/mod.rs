@@ -11,13 +11,12 @@ pub fn load_default_prompt() -> String {
 
 Purpose:
 - cc-gateway bridges external chat platforms (Feishu/Lark) and local CLI to Claude Code sessions.
-- It manages working directories, skills, permissions, and tool execution on behalf of the user.
+- It manages working directories, permissions, and tool execution on behalf of the user.
 
 Available commands:
   /cd <path>     Change the working directory and restart the Claude session
   /pwd           Show the current working directory
   /ll            List files in the current directory (ls -l)
-  /skill [name]  List available skills or load a specific skill into the session
   /allow         Approve a pending tool permission request
   /deny [reason] Deny a pending tool permission request
 
@@ -63,7 +62,6 @@ mod tests {
         assert!(prompt.contains("/cd"));
         assert!(prompt.contains("/pwd"));
         assert!(prompt.contains("/ll"));
-        assert!(prompt.contains("/skill"));
         assert!(prompt.contains("/allow"));
         assert!(prompt.contains("/deny"));
         assert!(prompt.contains("MCP Bash tool"));

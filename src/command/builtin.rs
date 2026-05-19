@@ -30,13 +30,16 @@ impl BuiltinCommands {
             "/pwd" => Some(self.pwd().await),
             "/ll" => Some(self.ll().await),
             "/mkdir" => Some(self.mkdir(arg).await),
+            "/show-thinking-toggle" => Some(self.show_thinking_toggle().await),
+            "/show-thinking" => Some(self.show_thinking().await),
+            "/hide-thinking" => Some(self.hide_thinking().await),
             _ => None,
         }
     }
 
     fn help(&self) -> String {
         format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
             t!("builtin.help_title"),
             t!("builtin.help_help"),
             t!("builtin.help_quit"),
@@ -46,6 +49,9 @@ impl BuiltinCommands {
             t!("builtin.help_pwd"),
             t!("builtin.help_ll"),
             t!("builtin.help_mkdir"),
+            t!("builtin.help_show_thinking_toggle"),
+            t!("builtin.help_show_thinking"),
+            t!("builtin.help_hide_thinking"),
             t!("builtin.help_any_text")
         )
     }
@@ -197,6 +203,29 @@ impl BuiltinCommands {
             Ok(()) => t_fmt!("builtin.dir_created", PATH = target_str),
             Err(e) => t_fmt!("builtin.failed_create_dir", ERR = e),
         }
+    }
+
+    async fn show_thinking_toggle(&self) -> String {
+        let ctrl = self.controller.lock().await;
+        let new_value = !ctrl.get_show_thinking();
+        ctrl.set_show_thinking(new_value);
+        if new_value {
+            t!("builtin.thinking_enabled").to_string()
+        } else {
+            t!("builtin.thinking_disabled").to_string()
+        }
+    }
+
+    async fn show_thinking(&self) -> String {
+        let ctrl = self.controller.lock().await;
+        ctrl.set_show_thinking(true);
+        t!("builtin.thinking_enabled").to_string()
+    }
+
+    async fn hide_thinking(&self) -> String {
+        let ctrl = self.controller.lock().await;
+        ctrl.set_show_thinking(false);
+        t!("builtin.thinking_disabled").to_string()
     }
 
 }
@@ -428,7 +457,7 @@ mod tests {
 
     fn setup() -> BuiltinCommands {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         BuiltinCommands::new(controller, "~")
     }
 

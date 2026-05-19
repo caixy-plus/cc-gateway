@@ -30,11 +30,11 @@ impl CommandRouter {
         };
 
         if session_active {
-            // In Claude mode: only /quit exits the session.
+            // In Claude mode: /quit and /show-thinking-toggle are handled locally.
             // Everything else (including /help, /cd, /ll, /claude, raw text,
             // slash commands) is forwarded directly to Claude.
             match trimmed {
-                "/quit" => {
+                "/quit" | "/show-thinking-toggle" | "/show-thinking" | "/hide-thinking" => {
                     return self.builtin.handle(trimmed).await;
                 }
                 _ => {
@@ -60,7 +60,7 @@ mod tests {
 
     fn setup() -> CommandRouter {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         CommandRouter::new(controller, "~")
     }
 
@@ -115,7 +115,7 @@ mod tests {
     #[tokio::test]
     async fn test_quit_handled_locally_when_session_active() {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         let router = CommandRouter::new(controller.clone(), "~");
 
         {
@@ -130,7 +130,7 @@ mod tests {
     #[tokio::test]
     async fn test_ll_forwarded_when_session_active() {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         let router = CommandRouter::new(controller.clone(), "~");
 
         {
@@ -154,7 +154,7 @@ mod tests {
     #[tokio::test]
     async fn test_claude_forwarded_when_session_active() {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         let router = CommandRouter::new(controller.clone(), "~");
 
         {
@@ -178,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn test_text_forwarded_when_session_active() {
         let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config)));
+        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
         let router = CommandRouter::new(controller.clone(), "~");
 
         {

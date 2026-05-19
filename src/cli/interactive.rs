@@ -253,7 +253,14 @@ impl CliOutput {
             }
             ControllerEvent::Thinking(thinking) => {
                 self.flush_text();
-                self.lines.push(format_thinking_collapsed(thinking));
+                let line = if thinking.is_empty() {
+                    "💭 Thinking...".to_string()
+                } else {
+                    format_thinking_collapsed(thinking)
+                };
+                if self.lines.last() != Some(&line) {
+                    self.lines.push(line);
+                }
                 false
             }
             ControllerEvent::ToolUse(name, input) => {
@@ -326,7 +333,10 @@ pub async fn run_interactive() -> Result<()> {
     let _ = io::stdout().flush();
 
     let config = ConfigLoader::load()?;
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config.claude.clone())));
+    let controller = Arc::new(Mutex::new(ClaudeController::new(
+        config.claude.clone(),
+        config.show_thinking,
+    )));
     {
         let ctrl = controller.lock().await;
         let cwd = std::env::current_dir()
@@ -345,6 +355,7 @@ pub async fn run_interactive() -> Result<()> {
 
     // Track whether we are in the middle of streaming text output
     let mut text_in_progress = false;
+    let mut last_was_thinking = false;
 
     // Spawn event listener task
     let event_handle = tokio::spawn(async move {
@@ -358,6 +369,7 @@ pub async fn run_interactive() -> Result<()> {
                 Some(ControllerEvent::Text(text)) => {
                     print!("{}", text);
                     text_in_progress = true;
+                    last_was_thinking = false;
                     let _ = io::stdout().flush();
                 }
                 Some(ControllerEvent::Thinking(thinking)) => {
@@ -365,7 +377,15 @@ pub async fn run_interactive() -> Result<()> {
                         println!();
                         text_in_progress = false;
                     }
-                    println!("{}", format_thinking_collapsed(&thinking));
+                    let line = if thinking.is_empty() {
+                        "💭 Thinking...".to_string()
+                    } else {
+                        format_thinking_collapsed(&thinking)
+                    };
+                    if !last_was_thinking {
+                        println!("{}", line);
+                    }
+                    last_was_thinking = true;
                 }
                 Some(ControllerEvent::ToolUse(name, input)) => {
                     if text_in_progress {

@@ -285,8 +285,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "  /help                显示此帮助",
         },
         "builtin.help_quit" => match lang {
-            Language::En => "  /quit                Quit current session or exit cc-gateway",
-            Language::ZhCN => "  /quit                退出当前会话或退出 cc-gateway",
+            Language::En => "  /quit                Quit current claude session or exit cc-gateway (no in feishu)",
+            Language::ZhCN => "  /quit                退出当前 Claude会话或退出 cc-gateway (飞书中无效)",
         },
         "builtin.help_cd" => match lang {
             Language::En => "  /cd <path>           Change working directory and restart Claude",
@@ -311,6 +311,18 @@ pub fn t(key: &str) -> &str {
         "builtin.help_mkdir" => match lang {
             Language::En => "  /mkdir <dirname>     Create a new directory",
             Language::ZhCN => "  /mkdir <目录名>       创建新目录",
+        },
+        "builtin.help_show_thinking_toggle" => match lang {
+            Language::En => "  /show-thinking-toggle Toggle Claude Thinking display",
+            Language::ZhCN => "  /show-thinking-toggle 切换 Claude Thinking 显示",
+        },
+        "builtin.help_show_thinking" => match lang {
+            Language::En => "  /show-thinking         Always show Claude Thinking content",
+            Language::ZhCN => "  /show-thinking         始终显示 Claude Thinking 内容",
+        },
+        "builtin.help_hide_thinking" => match lang {
+            Language::En => "  /hide-thinking         Hide Claude Thinking content (show placeholder only)",
+            Language::ZhCN => "  /hide-thinking         隐藏 Claude Thinking 内容（仅显示占位符）",
         },
         "builtin.help_any_text" => match lang {
             Language::En => "Any other text is sent directly to Claude Code.",
@@ -379,6 +391,14 @@ pub fn t(key: &str) -> &str {
         "builtin.failed_create_dir" => match lang {
             Language::En => "Failed to create directory: {ERR}",
             Language::ZhCN => "创建目录失败: {ERR}",
+        },
+        "builtin.thinking_enabled" => match lang {
+            Language::En => "Thinking display enabled.",
+            Language::ZhCN => "已启用 Thinking 显示。",
+        },
+        "builtin.thinking_disabled" => match lang {
+            Language::En => "Thinking display disabled.",
+            Language::ZhCN => "已禁用 Thinking 显示。",
         },
         "builtin.select_dir_prompt" => match lang {
             Language::En => "Select a directory (↑↓ move, Enter to cd, q quit):",
@@ -467,8 +487,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd",
+            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /show-thinking-toggle",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /show-thinking-toggle",
         },
 
         _ => key,

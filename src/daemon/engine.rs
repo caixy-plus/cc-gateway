@@ -27,6 +27,7 @@ impl DaemonEngine {
 
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             self.config.claude.clone(),
+            self.config.show_thinking,
         )));
         {
             let ctrl = controller.lock().await;

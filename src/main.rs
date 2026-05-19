@@ -10,7 +10,6 @@ mod daemon;
 mod i18n;
 mod platform;
 mod prompt;
-mod skill;
 mod utils;
 
 use cli::interactive::run_interactive;

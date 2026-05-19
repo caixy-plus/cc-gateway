@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
@@ -82,6 +83,7 @@ enum SessionState {
 
 pub struct ClaudeController {
     config: ClaudeConfig,
+    show_thinking: Arc<AtomicBool>,
     session: Arc<RwLock<Option<ClaudeSession>>>,
     event_tx: mpsc::UnboundedSender<ControllerEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
@@ -92,10 +94,11 @@ pub struct ClaudeController {
 }
 
 impl ClaudeController {
-    pub fn new(config: ClaudeConfig) -> Self {
+    pub fn new(config: ClaudeConfig, show_thinking: bool) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
             config,
+            show_thinking: Arc::new(AtomicBool::new(show_thinking)),
             session: Arc::new(RwLock::new(None)),
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
@@ -149,6 +152,7 @@ impl ClaudeController {
         let session_arc = self.session.clone();
         let session_state = self.session_state.clone();
         let message_buffer = self.message_buffer.clone();
+        let show_thinking = self.show_thinking.clone();
         tokio::spawn(async move {
             while let Some(event) = claude_rx.recv().await {
                 Self::process_claude_event(
@@ -157,6 +161,7 @@ impl ClaudeController {
                     &work_dir,
                     &session_arc,
                     event,
+                    &show_thinking,
                 )
                 .await;
             }
@@ -288,6 +293,14 @@ impl ClaudeController {
         self.event_rx.clone()
     }
 
+    pub fn get_show_thinking(&self) -> bool {
+        self.show_thinking.load(Ordering::Relaxed)
+    }
+
+    pub fn set_show_thinking(&self, value: bool) {
+        self.show_thinking.store(value, Ordering::Relaxed);
+    }
+
     pub async fn recv_event(&self) -> Option<ControllerEvent> {
         let mut rx = self.event_rx.lock().await;
         rx.recv().await
@@ -299,6 +312,7 @@ impl ClaudeController {
         _work_dir: &str,
         _session_arc: &Arc<RwLock<Option<ClaudeSession>>>,
         event: OutputEvent,
+        show_thinking: &Arc<AtomicBool>,
     ) {
         match &event {
             OutputEvent::System { session_id } => {
@@ -313,7 +327,12 @@ impl ClaudeController {
                             let _ = event_tx.send(ControllerEvent::Text(text.clone()));
                         }
                         crate::claude::protocol::ContentBlock::Thinking { thinking } => {
-                            let _ = event_tx.send(ControllerEvent::Thinking(thinking.clone()));
+                            let content = if show_thinking.load(Ordering::Relaxed) {
+                                thinking.clone()
+                            } else {
+                                String::new()
+                            };
+                            let _ = event_tx.send(ControllerEvent::Thinking(content));
                         }
                         crate::claude::protocol::ContentBlock::ToolUse { name, input } => {
                             let input_str = serde_json::to_string(input).unwrap_or_default();
@@ -326,10 +345,11 @@ impl ClaudeController {
                     }
                 }
             }
-            OutputEvent::Result { result, usage } => {
-                if let Some(text) = result {
-                    let _ = event_tx.send(ControllerEvent::Text(text.clone()));
-                }
+            OutputEvent::Result { result: _result, usage } => {
+                // The result text is the complete assembled response, but we already
+                // streamed it via Assistant::Text blocks. Emitting it again here would
+                // duplicate the content in the accumulator, causing Feishu users to
+                // receive every answer twice.
                 if let Some(u) = usage {
                     debug!(
                         "Usage: input={} output={}",
@@ -369,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn test_init_work_dir_sets_internal_state() {
         let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config);
+        let controller = ClaudeController::new(config, false);
         controller.init_work_dir("/test/path".to_string()).await;
         assert_eq!(controller.get_work_dir().await, "/test/path");
     }
@@ -402,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_session_outside_home_denied() {
         let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config);
+        let controller = ClaudeController::new(config, false);
         let result = controller.start_session("/tmp".to_string(), vec![]).await;
         assert!(result.is_err(), "Should deny starting session outside home");
         let err = result.unwrap_err().to_string();
@@ -413,7 +433,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_work_dir_outside_home_denied() {
         let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config);
+        let controller = ClaudeController::new(config, false);
         let result = controller.set_work_dir("/tmp".to_string()).await;
         assert!(result.is_err(), "Should deny changing work dir outside home");
         let err = result.unwrap_err().to_string();
@@ -424,7 +444,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_work_dir_under_home_allowed() {
         let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config);
+        let controller = ClaudeController::new(config, false);
         let home = dirs::home_dir().unwrap();
         let test_dir = home.join("cc_gateway_test_nonexistent_12345");
         let result = controller.set_work_dir(test_dir.to_string_lossy().to_string()).await;
@@ -463,6 +483,7 @@ mod tests {
             "/tmp",
             &session_arc,
             event,
+            &Arc::new(AtomicBool::new(true)),
         )
         .await;
 
@@ -493,6 +514,7 @@ mod tests {
             "/tmp",
             &session_arc,
             event,
+            &Arc::new(AtomicBool::new(true)),
         )
         .await;
 

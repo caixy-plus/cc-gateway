@@ -9,6 +9,8 @@ pub struct GatewayConfig {
     /// Default working directory for gateway sessions.
     /// Used by /ll, /cd_default, and as the Feishu directory boundary.
     pub default_dir: String,
+    /// Whether to display Claude's Thinking blocks in output.
+    pub show_thinking: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +50,7 @@ impl Default for GatewayConfig {
             claude: ClaudeConfig::default(),
             feishu: FeishuConfig::default(),
             default_dir: "~".to_string(),
+            show_thinking: false,
         }
     }
 }
@@ -142,6 +145,7 @@ mod tests {
         assert_eq!(original.claude.cli_path, deserialized.claude.cli_path);
         assert_eq!(original.feishu.allow_from, deserialized.feishu.allow_from);
         assert_eq!(original.default_dir, deserialized.default_dir);
+        assert_eq!(original.show_thinking, deserialized.show_thinking);
     }
 
     #[test]
