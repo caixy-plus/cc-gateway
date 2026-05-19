@@ -208,6 +208,31 @@ impl ClaudeSession {
 }
 
 #[cfg(test)]
+impl ClaudeSession {
+    /// Create a dummy session for testing that keeps a sleep process alive.
+    pub async fn dummy_for_test() -> Result<Self> {
+        let mut child = Command::new("sleep")
+            .arg("3600")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn dummy sleep process for test")?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .context("Failed to open stdin pipe for dummy session")?;
+
+        Ok(Self {
+            child,
+            stdin,
+            work_dir: ".".to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
