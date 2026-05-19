@@ -16,6 +16,8 @@ pub struct GatewayConfig {
 pub struct LogConfig {
     pub level: String,
     pub file: String,
+    pub max_lines: usize,
+    pub max_size_mb: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +57,8 @@ impl Default for LogConfig {
         Self {
             level: "info".to_string(),
             file: "~/.cc-gateway/logs/gateway.log".to_string(),
+            max_lines: 100_000,
+            max_size_mb: 50,
         }
     }
 }
@@ -106,6 +110,8 @@ mod tests {
         let cfg = LogConfig::default();
         assert_eq!(cfg.level, "info");
         assert_eq!(cfg.file, "~/.cc-gateway/logs/gateway.log");
+        assert_eq!(cfg.max_lines, 100_000);
+        assert_eq!(cfg.max_size_mb, 50);
     }
 
     #[test]
@@ -145,6 +151,8 @@ mod tests {
         let deserialized: LogConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(original.level, deserialized.level);
         assert_eq!(original.file, deserialized.file);
+        assert_eq!(original.max_lines, deserialized.max_lines);
+        assert_eq!(original.max_size_mb, deserialized.max_size_mb);
     }
 
     #[test]
