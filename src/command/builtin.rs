@@ -29,13 +29,14 @@ impl BuiltinCommands {
             "/claude" => Some(self.claude(arg).await),
             "/pwd" => Some(self.pwd().await),
             "/ll" => Some(self.ll().await),
+            "/mkdir" => Some(self.mkdir(arg).await),
             _ => None,
         }
     }
 
     fn help(&self) -> String {
         format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
             t!("builtin.help_title"),
             t!("builtin.help_help"),
             t!("builtin.help_quit"),
@@ -44,6 +45,7 @@ impl BuiltinCommands {
             t!("builtin.help_claude"),
             t!("builtin.help_pwd"),
             t!("builtin.help_ll"),
+            t!("builtin.help_mkdir"),
             t!("builtin.help_any_text")
         )
     }
@@ -166,6 +168,34 @@ impl BuiltinCommands {
                 t_fmt!("builtin.changed_dir", PATH = path_str)
             }
             None => t!("builtin.selection_cancelled").to_string(),
+        }
+    }
+
+    async fn mkdir(&self, dirname: &str) -> String {
+        if dirname.is_empty() {
+            return t!("builtin.mkdir_usage").to_string();
+        }
+
+        let ctrl = self.controller.lock().await;
+        let work_dir = ctrl.get_work_dir().await;
+        let base = if work_dir.is_empty() {
+            shellexpand::tilde(&self.default_dir).to_string()
+        } else {
+            work_dir
+        };
+        drop(ctrl);
+
+        let expanded = shellexpand::tilde(dirname).to_string();
+        let target = std::path::Path::new(&base).join(&expanded);
+        let target_str = target.to_string_lossy().to_string();
+
+        if let Err(e) = crate::claude::controller::ensure_under_home(&target_str) {
+            return e.to_string();
+        }
+
+        match std::fs::create_dir_all(&target) {
+            Ok(()) => t_fmt!("builtin.dir_created", PATH = target_str),
+            Err(e) => t_fmt!("builtin.failed_create_dir", ERR = e),
         }
     }
 
