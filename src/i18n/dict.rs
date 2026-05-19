@@ -308,6 +308,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "  /ll                  List files in current directory (ls -l)",
             Language::ZhCN => "  /ll                  列出当前目录中的文件 (ls -l)",
         },
+        "builtin.help_mkdir" => match lang {
+            Language::En => "  /mkdir <dirname>     Create a new directory",
+            Language::ZhCN => "  /mkdir <目录名>       创建新目录",
+        },
         "builtin.help_any_text" => match lang {
             Language::En => "Any other text is sent directly to Claude Code.",
             Language::ZhCN => "任何其他文本将直接发送给 Claude Code。",
@@ -363,6 +367,18 @@ pub fn t(key: &str) -> &str {
         "builtin.selection_cancelled" => match lang {
             Language::En => "Selection cancelled.",
             Language::ZhCN => "选择已取消。",
+        },
+        "builtin.mkdir_usage" => match lang {
+            Language::En => "Usage: /mkdir <dirname>",
+            Language::ZhCN => "用法: /mkdir <目录名>",
+        },
+        "builtin.dir_created" => match lang {
+            Language::En => "Directory created: {PATH}",
+            Language::ZhCN => "目录已创建: {PATH}",
+        },
+        "builtin.failed_create_dir" => match lang {
+            Language::En => "Failed to create directory: {ERR}",
+            Language::ZhCN => "创建目录失败: {ERR}",
         },
         "builtin.select_dir_prompt" => match lang {
             Language::En => "Select a directory (↑↓ move, Enter to cd, q quit):",
@@ -451,8 +467,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /ll, /quit, /pwd",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /ll, /quit, /pwd",
+            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd",
         },
 
         _ => key,
