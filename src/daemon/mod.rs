@@ -16,19 +16,22 @@ const DAEMON_PID_FILE: &str = "daemon.pid";
 const DAEMON_SOCKET_FILE: &str = "daemon.sock";
 
 /// Start the daemon in background (idempotent).
+/// If a stale PID file exists (process no longer alive), it is removed.
 /// If already running, prints status and returns immediately.
 /// Otherwise spawns a detached child process and exits.
 pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    // Check if already running
+    // Check if already running, and clean up stale PID file if the process is dead.
     if let Ok(pid_str) = fs::read_to_string(&pid_file) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             if is_process_alive(pid) {
                 println!("{}", t_fmt!("daemon.already_running", PID = pid));
                 return Ok(());
             }
+            // Stale PID file — process is gone.
+            let _ = fs::remove_file(&pid_file);
         }
     }
 
