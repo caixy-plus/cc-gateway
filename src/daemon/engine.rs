@@ -19,10 +19,11 @@ impl DaemonEngine {
 
     pub async fn run(self) -> Result<()> {
         let log_path = shellexpand::tilde(&self.config.log.file).to_string();
-        crate::daemon::log_cleaner::start_background_task(
+        crate::daemon::cleaner::start_background_task(
             log_path,
             self.config.log.max_lines,
             self.config.log.max_size_mb,
+            self.config.media_retention_days,
         );
 
         let controller = Arc::new(Mutex::new(ClaudeController::new(
