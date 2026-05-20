@@ -850,9 +850,7 @@ impl FeishuPlatform {
 
         let bytes = resp.bytes().await.context("Failed to read resource bytes")?;
 
-        let cache_dir = dirs::home_dir()
-            .map(|p| p.join(".cc-gateway").join("media"))
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/cc-gateway/media"));
+        let cache_dir = crate::daemon::cleaner::media_dir();
         std::fs::create_dir_all(&cache_dir)
             .with_context(|| format!("Failed to create media cache dir {:?}", cache_dir))?;
 
@@ -1664,27 +1662,72 @@ impl FeishuPlatform {
             return Ok(());
         }
 
-        let (text, media_note) = match message.message_type.as_deref() {
+        info!(
+            "[Feishu] Processing IM payload: msg_type={:?}, msg_id={:?}",
+            message.message_type, message.message_id
+        );
+
+        // Dump raw content for debugging image/file handling
+        if let Some(ref content_str) = message.content {
+            debug!("[Feishu] Raw message content: {}", content_str);
+        }
+        let (text, media_note, file_attachment) = match message.message_type.as_deref() {
             Some("text") => {
+                let mut download_info: Option<(String, String)> = None;
                 let t = if let Some(ref content_str) = message.content {
-                    if let Ok(content) = serde_json::from_str::<TextMessageContent>(content_str) {
-                        content.text.unwrap_or_default()
+                    // Check for embedded image/file keys in text messages.
+                    // Feishu can send text + image in a single message where the
+                    // content includes both "text" and "image_key" fields.
+                    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
+                        if let Some(key) = v.get("image_key").and_then(|k| k.as_str()) {
+                            info!("[Feishu] Text message has embedded image_key={}", key);
+                            let msg_id = message.message_id.as_deref().unwrap_or("");
+                            match self.download_message_resource(token, msg_id, key, "image").await {
+                                Ok(Some((path, ctype))) => {
+                                    info!("[Feishu] Embedded image downloaded: {} ({})", path, ctype);
+                                    download_info = Some((path.clone(), ctype.clone()));
+                                }
+                                Ok(None) => { info!("[Feishu] Embedded image download returned None"); }
+                                Err(e) => warn!("Failed to download embedded image {}: {}", key, e),
+                            }
+                        }
+                        if download_info.is_none() {
+                            if let Some(key) = v.get("file_key").and_then(|k| k.as_str()) {
+                                info!("[Feishu] Text message has embedded file_key={}", key);
+                                let msg_id = message.message_id.as_deref().unwrap_or("");
+                                match self.download_message_resource(token, msg_id, key, "file").await {
+                                    Ok(Some((path, ctype))) => {
+                                        info!("[Feishu] Embedded file downloaded: {} ({})", path, ctype);
+                                        download_info = Some((path.clone(), ctype.clone()));
+                                    }
+                                    Ok(None) => { info!("[Feishu] Embedded file download returned None"); }
+                                    Err(e) => warn!("Failed to download embedded file {}: {}", key, e),
+                                }
+                            }
+                        }
+                        if let Ok(content) = serde_json::from_str::<TextMessageContent>(content_str) {
+                            content.text.unwrap_or_default()
+                        } else {
+                            content_str.clone()
+                        }
                     } else {
                         content_str.clone()
                     }
                 } else {
                     String::new()
                 };
-                (t, None)
+                (t, None, download_info)
             }
             Some("image") => {
+                let mut download_info: Option<(String, String)> = None;
                 let note = if let Some(ref content_str) = message.content {
                     if let Ok(v) = serde_json::from_str::<Value>(content_str) {
                         if let Some(key) = v.get("image_key").and_then(|k| k.as_str()) {
                             let msg_id = message.message_id.as_deref().unwrap_or("");
                             match self.download_message_resource(token, msg_id, key, "image").await {
                                 Ok(Some((path, ctype))) => {
-                                    Some(format!("[Image cached at {} ({})]", path, ctype))
+                                    download_info = Some((path.clone(), ctype.clone()));
+                                    Some(format!("[Image: {} ({})]", path, ctype))
                                 }
                                 Ok(None) => Some("[Image: download failed]".to_string()),
                                 Err(e) => {
@@ -1701,9 +1744,10 @@ impl FeishuPlatform {
                 } else {
                     Some("[Image: empty content]".to_string())
                 };
-                (String::new(), note)
+                (String::new(), note, download_info)
             }
             Some("file") => {
+                let mut download_info: Option<(String, String)> = None;
                 let note = if let Some(ref content_str) = message.content {
                     if let Ok(v) = serde_json::from_str::<Value>(content_str) {
                         let file_key = v.get("file_key").and_then(|k| k.as_str()).unwrap_or("");
@@ -1713,7 +1757,9 @@ impl FeishuPlatform {
                             match self.download_message_resource(token, msg_id, file_key, "file").await {
                                 Ok(Some((path, ctype))) => {
                                     let name = if file_name.is_empty() { &path } else { file_name };
-                                    Some(format!("[File: {} cached at {} ({})]", name, path, ctype))
+                                    download_info = Some((path.clone(), ctype.clone()));
+                                    info!("[Feishu] File downloaded: {} ({})", path, ctype);
+                                    Some(format!("[File: {} ({})]", name, ctype))
                                 }
                                 Ok(None) => Some("[File: download failed]".to_string()),
                                 Err(e) => {
@@ -1730,9 +1776,10 @@ impl FeishuPlatform {
                 } else {
                     Some("[File: empty content]".to_string())
                 };
-                (String::new(), note)
+                (String::new(), note, download_info)
             }
             Some("audio") => {
+                let mut download_info: Option<(String, String)> = None;
                 let note = if let Some(ref content_str) = message.content {
                     if let Ok(v) = serde_json::from_str::<Value>(content_str) {
                         let file_key = v.get("file_key").and_then(|k| k.as_str()).unwrap_or("");
@@ -1741,9 +1788,11 @@ impl FeishuPlatform {
                             let msg_id = message.message_id.as_deref().unwrap_or("");
                             match self.download_message_resource(token, msg_id, file_key, "file").await {
                                 Ok(Some((path, ctype))) => {
+                                    download_info = Some((path.clone(), ctype.clone()));
+                                    info!("[Feishu] Audio downloaded: {} ({})", path, ctype);
                                     Some(format!(
-                                        "[Audio: {}s cached at {} ({})]",
-                                        duration, path, ctype
+                                        "[Audio: {}s ({})]",
+                                        duration, ctype
                                     ))
                                 }
                                 Ok(None) => Some("[Audio: download failed]".to_string()),
@@ -1761,24 +1810,42 @@ impl FeishuPlatform {
                 } else {
                     Some("[Audio: empty content]".to_string())
                 };
-                (String::new(), note)
+                (String::new(), note, download_info)
             }
             Some("post") => {
-                let t = if let Some(ref content_str) = message.content {
-                    extract_post_text(content_str)
+                let (text_content, image_keys) = if let Some(ref content_str) = message.content {
+                    extract_post_content(content_str)
                 } else {
-                    String::new()
+                    (String::new(), Vec::new())
                 };
-                (t, None)
+                // Download the first embedded image (if any) for forwarding to Claude
+                let mut download_info: Option<(String, String)> = None;
+                if let Some(key) = image_keys.first() {
+                    let msg_id = message.message_id.as_deref().unwrap_or("");
+                    info!("[Feishu] Post message has embedded image, image_key={}", key);
+                    match self.download_message_resource(token, msg_id, key, "image").await {
+                        Ok(Some((path, ctype))) => {
+                            info!("[Feishu] Post image downloaded: {} ({})", path, ctype);
+                            download_info = Some((path.clone(), ctype.clone()));
+                        }
+                        Ok(None) => { info!("[Feishu] Post image download returned None"); }
+                        Err(e) => warn!("[Feishu] Failed to download post image {}: {}", key, e),
+                    }
+                }
+                (text_content, None, download_info)
             }
             Some(other) => {
                 warn!("Unsupported message type: {}", other);
                 return Ok(());
             }
-            None => (String::new(), None),
+            None => (String::new(), None, None),
         };
 
-        let text = if let Some(note) = media_note {
+        let text = if file_attachment.is_some() {
+            // When a file will be forwarded to Claude separately, skip the media
+            // note to avoid redundant path info in the message.
+            text
+        } else if let Some(note) = media_note {
             if text.is_empty() {
                 note
             } else {
@@ -1789,7 +1856,7 @@ impl FeishuPlatform {
         };
 
         let trimmed = text.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() && file_attachment.is_none() {
             warn!("IM event has empty text content, message_id={:?}, message_type={:?}", message.message_id, message.message_type);
             return Ok(());
         }
@@ -1878,6 +1945,30 @@ impl FeishuPlatform {
             }
             self.on_processing_complete(token, &msg_id, result.is_ok()).await;
             return result;
+        }
+
+        // When a file (image/document/audio) was downloaded and a Claude session
+        // is active, send the actual file data directly as a base64 content block.
+        if let Some((ref path, ref ctype)) = file_attachment {
+            if session_active {
+                info!(
+                    "[Feishu] Sending file to Claude: path={}, type={}, user_text='{}'",
+                    path, ctype, text,
+                );
+                self.on_processing_start(token, &msg_id).await;
+                let result = self
+                    .send_file_to_claude_and_reply(
+                        token, &text, path, ctype, &receive_id_type, receive_id,
+                    )
+                    .await;
+                self.on_processing_complete(token, &msg_id, result.is_ok()).await;
+                return result;
+            } else {
+                info!(
+                    "[Feishu] File downloaded but session inactive, falling through to text routing: path={}",
+                    path
+                );
+            }
         }
 
         let normalized = NormalizedMessage {
@@ -2081,6 +2172,41 @@ impl FeishuPlatform {
         }
 
         Ok(())
+    }
+
+    /// Send a downloaded file path + user text to Claude, let Claude handle it.
+    async fn send_file_to_claude_and_reply(
+        &self,
+        token: &str,
+        user_text: &str,
+        path: &str,
+        content_type: &str,
+        receive_id_type: &str,
+        receive_id: &str,
+    ) -> Result<()> {
+        let message = if user_text.is_empty() {
+            format!("{}: {} ({})", t!("feishu.file_from_user"), path, content_type)
+        } else {
+            format!("{}\n{}: {} ({})", user_text, t!("feishu.file_from_user"), path, content_type)
+        };
+
+        {
+            let ctrl = self.controller.lock().await;
+            ctrl.send_message(&message).await?;
+        }
+
+        // Acknowledge to the Feishu user
+        self.send_text_message(
+            token,
+            receive_id_type,
+            receive_id,
+            &t_fmt!("feishu.file_received"),
+        )
+        .await?;
+
+        // Poll Claude events and reply with the response
+        self.poll_claude_and_reply(token, receive_id_type, receive_id)
+            .await
     }
 
     async fn poll_claude_and_reply(
@@ -2500,9 +2626,11 @@ fn build_http_response(status: u16, body: &str) -> String {
     )
 }
 
-/// Extract plain text from a Feishu post message content JSON.
-fn extract_post_text(content_str: &str) -> String {
+/// Extract text and image keys from a Feishu post message content JSON.
+/// Returns (text, list_of_image_keys).
+fn extract_post_content(content_str: &str) -> (String, Vec<String>) {
     let mut texts = Vec::new();
+    let mut image_keys = Vec::new();
     if let Ok(v) = serde_json::from_str::<Value>(content_str) {
         if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
             if !title.is_empty() {
@@ -2530,6 +2658,11 @@ fn extract_post_text(content_str: &str) -> String {
                                         texts.push(format!("@{}", name));
                                     }
                                 }
+                                "img" => {
+                                    if let Some(key) = segment.get("image_key").and_then(|k| k.as_str()) {
+                                        image_keys.push(key.to_string());
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -2538,11 +2671,12 @@ fn extract_post_text(content_str: &str) -> String {
             }
         }
     }
-    if texts.is_empty() {
+    let text = if texts.is_empty() {
         content_str.to_string()
     } else {
         texts.join("\n")
-    }
+    };
+    (text, image_keys)
 }
 
 fn build_ping_frame(service_id: i32) -> Frame {
