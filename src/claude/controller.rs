@@ -13,14 +13,34 @@ use crate::{t, t_fmt};
 /// Validate that a path is allowed.
 /// On macOS/Linux: must be under the home directory.
 /// On Windows: home directory is always allowed; non-system drives are also allowed.
+/// Strip the Windows verbatim path prefix (`\\?\`) so that canonicalized
+/// paths can be compared with normal paths.
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: &std::path::Path) -> std::path::PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: &std::path::Path) -> std::path::PathBuf {
+    path.to_path_buf()
+}
+
 pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
     let expanded = shellexpand::tilde(path).to_string();
     let path_buf = PathBuf::from(&expanded);
     let canonical = path_buf.canonicalize().unwrap_or(path_buf);
     let home = dirs::home_dir().context("Could not determine home directory")?;
 
+    let canonical_clean = strip_verbatim_prefix(&canonical);
+    let home_clean = strip_verbatim_prefix(&home);
+
     // Home directory is always allowed on all platforms.
-    if canonical.starts_with(&home) {
+    if canonical_clean.starts_with(&home_clean) {
         return Ok(canonical.to_string_lossy().to_string());
     }
 
