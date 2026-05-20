@@ -491,6 +491,15 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /show-thinking-toggle",
         },
 
+        "feishu.file_from_user" => match lang {
+            Language::En => "User sent a file",
+            Language::ZhCN => "用户发送了一个文件",
+        },
+        "feishu.file_received" => match lang {
+            Language::En => "File received, Claude is processing...",
+            Language::ZhCN => "已收到文件，Claude 正在处理...",
+        },
+
         _ => key,
     }
 }
