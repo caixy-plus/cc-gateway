@@ -4,18 +4,15 @@ use rustyline::highlight::Highlighter;
 use rustyline::validate::Validator;
 use rustyline::{
     completion::{Completer, Pair},
-    config::Configurer,
     hint::Hinter,
-    CompletionType, Context, Editor, Helper,
+    Context, Helper,
 };
 #[cfg(test)]
 use rustyline::history::MemHistory;
-use std::io::{self, Write};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::claude::controller::{ClaudeController, ControllerEvent};
-use crate::command::router::CommandRouter;
 use crate::config::loader::ConfigLoader;
 use crate::t;
 
@@ -45,6 +42,14 @@ pub fn format_thinking_collapsed(thinking: &str) -> String {
         "{}\u{1F4AD} {} {} {}{}{}",
         GRAY, t!("cli.thinking"), RESET, DIM, t!("cli.press_expand"), RESET
     )
+}
+
+pub fn format_user_echo(text: &str) -> String {
+    let mut result = String::new();
+    for line in text.lines() {
+        result.push_str(&format!("{}  {}>{} {}{}\n", GRAY, DIM, RESET, line, RESET));
+    }
+    result
 }
 
 pub fn format_tool_use_inline(name: &str, input: &str) -> String {
@@ -329,9 +334,6 @@ impl CliOutput {
 // ---------------------------------------------------------------------------
 
 pub async fn run_interactive() -> Result<()> {
-    print!("{}", format_banner());
-    let _ = io::stdout().flush();
-
     let config = ConfigLoader::load()?;
     let controller = Arc::new(Mutex::new(ClaudeController::new(
         config.claude.clone(),
@@ -345,158 +347,14 @@ pub async fn run_interactive() -> Result<()> {
         ctrl.init_work_dir(cwd).await;
     }
     let default_dir = &config.default_dir;
-    let router = CommandRouter::new(controller.clone(), default_dir);
+    let router = crate::command::router::CommandRouter::new(controller.clone(), default_dir);
 
-    // Clone event receiver so the listener doesn't need to lock the controller
     let event_rx = {
         let ctrl = controller.lock().await;
         ctrl.event_rx_clone()
     };
 
-    // Track whether we are in the middle of streaming text output
-    let mut text_in_progress = false;
-    let mut last_was_thinking = false;
-
-    // Spawn event listener task
-    let event_handle = tokio::spawn(async move {
-        loop {
-            let event = {
-                let mut rx = event_rx.lock().await;
-                rx.recv().await
-            };
-
-            match event {
-                Some(ControllerEvent::Text(text)) => {
-                    print!("{}", text);
-                    text_in_progress = true;
-                    last_was_thinking = false;
-                    let _ = io::stdout().flush();
-                }
-                Some(ControllerEvent::Thinking(thinking)) => {
-                    if text_in_progress {
-                        println!();
-                        text_in_progress = false;
-                    }
-                    let line = if thinking.is_empty() {
-                        "💭 Thinking...".to_string()
-                    } else {
-                        format_thinking_collapsed(&thinking)
-                    };
-                    if !last_was_thinking {
-                        println!("{}", line);
-                    }
-                    last_was_thinking = true;
-                }
-                Some(ControllerEvent::ToolUse(name, input)) => {
-                    if text_in_progress {
-                        println!();
-                        text_in_progress = false;
-                    }
-                    print!("{}", format_tool_use_inline(&name, &input));
-                }
-                Some(ControllerEvent::ToolResult(content, is_error)) => {
-                    if text_in_progress {
-                        println!();
-                        text_in_progress = false;
-                    }
-                    let formatted = format_tool_result(&content, is_error);
-                    if !formatted.is_empty() {
-                        print!("{}", formatted);
-                    }
-                }
-                Some(ControllerEvent::PermissionRequest(req_id, tool_name)) => {
-                    if text_in_progress {
-                        println!();
-                        text_in_progress = false;
-                    }
-                    print!("{}", format_permission_request(&req_id, &tool_name));
-                }
-                Some(ControllerEvent::Error(err)) => {
-                    if text_in_progress {
-                        println!();
-                        text_in_progress = false;
-                    }
-                    print!("{}", format_error(&err));
-                }
-                Some(ControllerEvent::Done) => {
-                    if text_in_progress {
-                        println!();
-                        text_in_progress = false;
-                    }
-                }
-                None => break,
-            }
-        }
-    });
-
-    let mut rl: Editor<CommandHelper, _> = Editor::new()?;
-    rl.set_helper(Some(CommandHelper::new()));
-    let _ = rl.set_completion_type(CompletionType::List);
-
-    loop {
-        let prompt = build_prompt(&controller).await;
-        let readline = rl.readline(&prompt);
-        match readline {
-            Ok(line) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                let _ = rl.add_history_entry(line);
-
-                // /quit behaviour depends on session state:
-                // - active session: stop Claude and return to gateway prompt
-                // - inactive: exit the whole program
-                if line == "/quit" {
-                    let session_active = {
-                        let ctrl = controller.lock().await;
-                        ctrl.is_session_active().await
-                    };
-                    if session_active {
-                        let ctrl = controller.lock().await;
-                        let _ = ctrl.stop_session().await;
-                        print!("{}", format_response(t!("cli.session_stopped")));
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-
-                if let Some(response) = router.handle(line).await {
-                    print!("{}", format_response(&response));
-                }
-            }
-            Err(ReadlineError::Interrupted) => {
-                print!("{}", format_interrupt());
-                continue;
-            }
-            Err(ReadlineError::Eof) => {
-                print!("{}", format_eof());
-                break;
-            }
-            Err(err) => {
-                eprint!("{}", format_readline_error(&err));
-                break;
-            }
-        }
-    }
-
-    // Stop session and event listener
-    {
-        let ctrl = controller.lock().await;
-        let _ = ctrl.stop_session().await;
-    }
-    event_handle.abort();
-
-    print!("{}", format_goodbye());
-    Ok(())
-}
-
-async fn build_prompt(controller: &Arc<Mutex<ClaudeController>>) -> String {
-    let ctrl = controller.lock().await;
-    let work_dir = ctrl.get_work_dir().await;
-    let active = ctrl.is_session_active().await;
-    format_prompt(&work_dir, active)
+    crate::cli::tui::run_tui(controller, router, event_rx).await
 }
 
 #[cfg(test)]
