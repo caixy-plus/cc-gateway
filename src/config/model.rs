@@ -11,6 +11,9 @@ pub struct GatewayConfig {
     pub default_dir: String,
     /// Whether to display Claude's Thinking blocks in output.
     pub show_thinking: bool,
+    /// Number of days to retain downloaded media files (images/files/audio).
+    /// Files older than this will be cleaned up every 8 hours. Default: 30.
+    pub media_retention_days: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +54,7 @@ impl Default for GatewayConfig {
             feishu: FeishuConfig::default(),
             default_dir: "~".to_string(),
             show_thinking: false,
+            media_retention_days: 30,
         }
     }
 }
