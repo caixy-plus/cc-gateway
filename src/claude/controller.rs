@@ -139,9 +139,11 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        // Drain stale events from the previous session
-        {
-            let mut rx = self.event_rx.lock().await;
+        // Drain stale events from the previous session.
+        // Use try_lock to avoid deadlocking with the TUI event listener,
+        // which holds this lock while waiting on recv() from a non-existent
+        // session. If the lock is contended, skip the drain — it's best-effort.
+        if let Ok(mut rx) = self.event_rx.try_lock() {
             while rx.try_recv().is_ok() {}
         }
 
@@ -341,6 +343,13 @@ impl ClaudeController {
                         crate::claude::protocol::ContentBlock::ToolResult { content, is_error } => {
                             let text = content.clone().unwrap_or_default();
                             let _ = event_tx.send(ControllerEvent::ToolResult(text, *is_error));
+                        }
+                        crate::claude::protocol::ContentBlock::Image { source } => {
+                            let text = format!(
+                                "[Image: {} {} ({} bytes)]",
+                                source.source_type, source.media_type, source.data.len()
+                            );
+                            let _ = event_tx.send(ControllerEvent::Text(text));
                         }
                     }
                 }
