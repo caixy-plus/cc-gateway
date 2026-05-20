@@ -1,8 +1,14 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::claude::controller::ClaudeController;
 use crate::{t, t_fmt};
+
+/// Paused flag so the TUI background event reader yields while
+/// `interactive_select` is running, preventing key-stealing races.
+pub static TUI_EVENT_READER_PAUSED: AtomicBool = AtomicBool::new(false);
+
 pub struct BuiltinCommands {
     controller: Arc<Mutex<ClaudeController>>,
     default_dir: String,
@@ -154,8 +160,11 @@ impl BuiltinCommands {
             Err(e) => return t_fmt!("builtin.failed_list_dir", ERR = e),
         };
 
-        // Only show directories
-        let dirs: Vec<(String, bool)> = items.into_iter().filter(|(_, is_dir)| *is_dir).collect();
+        // Only show directories, skip hidden
+        let dirs: Vec<(String, bool)> = items
+            .into_iter()
+            .filter(|(name, is_dir)| *is_dir && !name.starts_with('.'))
+            .collect();
 
         if dirs.is_empty() {
             return t!("builtin.no_subdirs").to_string();
@@ -443,10 +452,16 @@ fn interactive_select(items: &[(String, bool)]) -> Option<(String, bool)> {
         return None;
     }
 
+    TUI_EVENT_READER_PAUSED.store(true, Ordering::Relaxed);
+    // Give the TUI background event reader time to see the flag and stop polling.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+
     let _ = crossterm::terminal::enable_raw_mode();
     let mut backend = RealBackend;
     let result = interactive_select_with_backend(items, &mut backend);
     let _ = crossterm::terminal::disable_raw_mode();
+
+    TUI_EVENT_READER_PAUSED.store(false, Ordering::Relaxed);
     result
 }
 
