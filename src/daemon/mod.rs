@@ -1,10 +1,12 @@
 pub mod engine;
-pub mod log_cleaner;
+pub mod cleaner;
 pub mod server;
 pub mod state;
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -16,24 +18,34 @@ const DAEMON_PID_FILE: &str = "daemon.pid";
 const DAEMON_SOCKET_FILE: &str = "daemon.sock";
 
 /// Start the daemon in background (idempotent).
-/// If a stale PID file exists (process no longer alive), it is removed.
-/// If already running, prints status and returns immediately.
-/// Otherwise spawns a detached child process and exits.
+/// Uses file locking to prevent multiple instances — the lock is held by the
+/// daemon process for its entire lifetime and automatically released on exit.
 pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    // Check if already running, and clean up stale PID file if the process is dead.
-    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            if is_process_alive(pid) {
-                println!("{}", t_fmt!("daemon.already_running", PID = pid));
-                return Ok(());
+    // Check if a daemon already holds the lock.
+    if let Ok(file) = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pid_file)
+    {
+        if file.try_lock_exclusive().is_err() {
+            // Lock is held — daemon is running.
+            if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+                println!(
+                    "{}",
+                    t_fmt!("daemon.already_running", PID = pid_str.trim())
+                );
+            } else {
+                println!("Daemon is already running.");
             }
-            // Stale PID file — process is gone.
-            let _ = fs::remove_file(&pid_file);
+            return Ok(());
         }
+        // We acquired the lock — no daemon running. Drop the file to release.
     }
+    // If the file didn't exist, remove any stale state and proceed.
+    let _ = fs::remove_file(&pid_file);
 
     // Spawn detached child process that runs the actual daemon
     let exe = std::env::current_exe().context("Failed to get current executable path")?;
@@ -54,16 +66,37 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
 
     let child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
-    // Write PID immediately so subsequent start() calls see it
-    let _ = fs::write(&pid_file, pid.to_string());
     println!("{}", t_fmt!("daemon.started", PID = pid));
     Ok(())
 }
 
 /// Run the actual daemon engine (called by the _daemon hidden command).
+/// Acquires an exclusive file lock on the PID file to prevent multiple
+/// daemon instances. The lock is held for the entire process lifetime
+/// and automatically released by the OS when the process exits.
 pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
+
+    // Open PID file and acquire exclusive lock.  Non-blocking: if another
+    // daemon already holds the lock we bail immediately.
+    let mut pid_lock = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&pid_file)
+        .context("Failed to open PID lock file")?;
+
+    pid_lock
+        .try_lock_exclusive()
+        .context("Another cc-gateway daemon is already running")?;
+
+    // Write our PID into the locked file.
+    let pid = std::process::id();
+    pid_lock.set_len(0)?;
+    writeln!(&pid_lock, "{}", pid)?;
+    pid_lock.flush()?;
 
     let config = if let Some(path) = config_path {
         ConfigLoader::load_from(&path)?
@@ -77,8 +110,10 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
         let max_lines = config.log.max_lines;
         let max_size_mb = config.log.max_size_mb;
         match tokio::task::spawn_blocking(move || {
-            log_cleaner::trim_log_file(&log_path, max_lines, max_size_mb)
-        }).await {
+            cleaner::trim_log_file(&log_path, max_lines, max_size_mb)
+        })
+        .await
+        {
             Ok(Ok(true)) => {}
             Ok(Ok(false)) => {}
             Ok(Err(e)) => eprintln!("Warning: failed to trim log file: {}", e),
@@ -109,28 +144,15 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
         .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339())
         .init();
 
-    info!("Starting cc-gateway daemon");
-
-    // Write PID file, but refuse if another daemon is already running
-    let pid = std::process::id();
-    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-        if let Ok(existing_pid) = pid_str.trim().parse::<u32>() {
-            if existing_pid != pid && is_process_alive(existing_pid) {
-                anyhow::bail!(
-                    "Another cc-gateway daemon is already running (PID: {}). Use 'cc-gateway restart' instead.",
-                    existing_pid
-                );
-            }
-        }
-    }
-    fs::write(&pid_file, pid.to_string())?;
+    info!("Starting cc-gateway daemon (PID: {})", pid);
 
     // Start the daemon engine
     let engine = engine::DaemonEngine::new(config);
     engine.run().await?;
 
-    // Cleanup
+    // Cleanup: lock is released when pid_lock drops.
     let _ = fs::remove_file(&pid_file);
+    info!("cc-gateway daemon stopped (PID: {})", pid);
     Ok(())
 }
 
@@ -138,32 +160,83 @@ pub async fn stop() -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            if is_process_alive(pid) {
-                #[cfg(unix)]
-                {
-                    use nix::sys::signal::{self, Signal};
-                    use nix::unistd::Pid;
-                    signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM)
-                        .context("Failed to send SIGTERM to daemon")?;
-                }
-                #[cfg(windows)]
-                {
-                    use std::process::Command;
-                    Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/F"])
-                        .output()?;
-                }
-                println!("{}", t_fmt!("daemon.stop_signal", PID = pid));
+    let pid_str = match fs::read_to_string(&pid_file) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("{}", t!("daemon.not_running"));
+            return Ok(());
+        }
+    };
+    let pid: u32 = match pid_str.trim().parse() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = fs::remove_file(&pid_file);
+            println!("{}", t!("daemon.stopped"));
+            return Ok(());
+        }
+    };
 
-                // Wait for process to exit
-                for _ in 0..30 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    if !is_process_alive(pid) {
-                        break;
-                    }
+    if !is_process_alive(pid) {
+        let _ = fs::remove_file(&pid_file);
+        println!("{}", t!("daemon.stopped"));
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{self, Signal};
+        use nix::unistd::Pid;
+        use std::time::Duration;
+
+        // Graceful shutdown — SIGTERM
+        signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM)
+            .context("Failed to send SIGTERM to daemon")?;
+        println!("{}", t_fmt!("daemon.stop_signal", PID = pid));
+
+        // Wait up to 5 seconds for graceful exit
+        let mut died = false;
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if !is_process_alive(pid) {
+                died = true;
+                break;
+            }
+        }
+
+        // Force kill if still alive
+        if !died {
+            eprintln!(
+                "Daemon (PID: {}) did not exit after SIGTERM, sending SIGKILL...",
+                pid
+            );
+            let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if !is_process_alive(pid) {
+                    died = true;
+                    break;
                 }
+            }
+            if !died {
+                anyhow::bail!(
+                    "Failed to kill daemon process (PID: {}). Please kill it manually.",
+                    pid
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output()
+            .context("Failed to kill daemon process")?;
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if !is_process_alive(pid) {
+                break;
             }
         }
     }
