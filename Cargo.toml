@@ -1,6 +1,6 @@
 [package]
 name = "cc-gateway"
-version = "0.1.7"
+version = "0.8.0"
 edition = "2021"
 authors = ["caixinyun"]
 description = "Gateway for controlling Claude Code via Feishu/Lark and CLI"
@@ -48,14 +48,22 @@ dirs = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.11"
 once_cell = "1.20"
+base64 = "0.22"
 dashmap = "6.1"
 
 # Interactive CLI (for cc-gateway without args)
 rustyline = "14.0"
 crossterm = "0.28"
+ratatui = "0.29"
 
 # Path expansion
 shellexpand = "3.1"
+
+# Unicode width for terminal cursor positioning
+unicode-width = "0.2"
+
+# File locking for daemon PID file (prevents multiple instances)
+fs2 = "0.4"
 
 # Unix signals
 [target.'cfg(unix)'.dependencies]
