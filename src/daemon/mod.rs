@@ -24,14 +24,26 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    // Check if a daemon already holds the lock.
+    // --- Singleton guard 1: temporary lock prevents concurrent start() races ---
+    let starting_lock_file = config_dir.join(".daemon-starting.lock");
+    let starting_lock = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&starting_lock_file)
+        .context("Failed to open daemon starting lock file")?;
+    if starting_lock.try_lock_exclusive().is_err() {
+        println!("Another start operation is in progress. Please wait.");
+        return Ok(());
+    }
+
+    // Singleton guard 2: check PID file flock to see if a daemon is already running.
     if let Ok(file) = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(&pid_file)
     {
         if file.try_lock_exclusive().is_err() {
-            // Lock is held — daemon is running.
             if let Ok(pid_str) = fs::read_to_string(&pid_file) {
                 println!(
                     "{}",
@@ -42,9 +54,9 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
             }
             return Ok(());
         }
-        // We acquired the lock — no daemon running. Drop the file to release.
     }
-    // If the file didn't exist, remove any stale state and proceed.
+
+    // Clear stale PID file before spawning.
     let _ = fs::remove_file(&pid_file);
 
     // Spawn detached child process that runs the actual daemon
@@ -66,8 +78,32 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
 
     let child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
-    println!("{}", t_fmt!("daemon.started", PID = pid));
+
+    // Wait for the child to enter run() and write its PID into the locked file.
+    let mut confirmed = false;
+    for _ in 0..10 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+            if let Ok(found_pid) = pid_str.trim().parse::<u32>() {
+                if found_pid == pid && is_process_alive(pid) {
+                    confirmed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if confirmed {
+        println!("{}", t_fmt!("daemon.started", PID = pid));
+    } else {
+        anyhow::bail!(
+            "Daemon process spawned but failed to confirm startup (PID: {}). Check logs.",
+            pid
+        );
+    }
+
     Ok(())
+    // starting_lock drops here, releasing the concurrent-start guard.
 }
 
 /// Run the actual daemon engine (called by the _daemon hidden command).
@@ -75,11 +111,21 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
 /// daemon instances. The lock is held for the entire process lifetime
 /// and automatically released by the OS when the process exits.
 pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
+    let config = if let Some(path) = &config_path {
+        ConfigLoader::load_from(path)?
+    } else {
+        ConfigLoader::load()?
+    };
+
+    // --- Singleton guard 1: bind to a fixed local port ---
+    let bind_addr = format!("127.0.0.1:{}", config.port);
+    let _singleton_socket = std::net::TcpListener::bind(&bind_addr)
+        .with_context(|| format!("Another cc-gateway daemon is already running (port {} in use)", config.port))?;
+
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    // Open PID file and acquire exclusive lock.  Non-blocking: if another
-    // daemon already holds the lock we bail immediately.
+    // Singleton guard 2: exclusive flock on PID file.
     let mut pid_lock = fs::OpenOptions::new()
         .create(true)
         .read(true)
@@ -97,12 +143,6 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     pid_lock.set_len(0)?;
     writeln!(&pid_lock, "{}", pid)?;
     pid_lock.flush()?;
-
-    let config = if let Some(path) = config_path {
-        ConfigLoader::load_from(&path)?
-    } else {
-        ConfigLoader::load()?
-    };
 
     // Trim log file before initializing logging to avoid race with the writer.
     {

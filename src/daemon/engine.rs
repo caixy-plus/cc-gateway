@@ -1,12 +1,10 @@
 use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{error, info};
 
-use crate::claude::controller::ClaudeController;
-use crate::command::router::CommandRouter;
 use crate::config::model::GatewayConfig;
+use crate::platform::Platform;
 use crate::platform::feishu::FeishuPlatform;
+use crate::platform::telegram::TelegramPlatform;
 
 pub struct DaemonEngine {
     config: GatewayConfig,
@@ -26,61 +24,57 @@ impl DaemonEngine {
             self.config.media_retention_days,
         );
 
-        let controller = Arc::new(Mutex::new(ClaudeController::new(
-            self.config.claude.clone(),
-            self.config.show_thinking,
-        )));
-        {
-            let ctrl = controller.lock().await;
-            let cwd = std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| {
-                    dirs::home_dir()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "/".to_string())
-                });
-            ctrl.init_work_dir(cwd).await;
-        }
-        let default_dir = &self.config.default_dir;
-        let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
+        // Start all enabled platforms concurrently
+        let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();
 
-        // Start Feishu platform if enabled
-        let mut feishu_handle = None;
         if self.config.feishu.enabled {
             let platform = FeishuPlatform::new(
                 self.config.feishu.clone(),
                 &self.config.default_dir,
-                router.clone(),
-                controller.clone(),
+                self.config.claude.clone(),
+                self.config.show_thinking,
             );
-            if self.config.feishu.mode == "webhook" {
-                feishu_handle = Some(tokio::spawn(async move {
-                    if let Err(e) = platform.run_webhook().await {
-                        error!("Feishu webhook server error: {}", e);
-                    }
-                }));
-            } else {
-                feishu_handle = Some(tokio::spawn(async move {
-                    if let Err(e) = platform.run().await {
-                        error!("Feishu platform error: {}", e);
-                    }
-                }));
-            }
+            let platform_for_spawn = platform.clone();
+            let handle = tokio::spawn(async move {
+                if let Err(e) = platform_for_spawn.run().await {
+                    error!("Feishu platform error: {}", e);
+                }
+            });
+            platforms.push((Box::new(platform), handle));
         }
 
-        info!("cc-gateway daemon is running");
+        if self.config.telegram.enabled {
+            let platform = TelegramPlatform::new(
+                self.config.telegram.clone(),
+                &self.config.default_dir,
+                self.config.claude.clone(),
+                self.config.show_thinking,
+            );
+            let platform_for_spawn = platform.clone();
+            let handle = tokio::spawn(async move {
+                if let Err(e) = platform_for_spawn.run().await {
+                    error!("Telegram platform error: {}", e);
+                }
+            });
+            platforms.push((Box::new(platform), handle));
+        }
+
+        if platforms.is_empty() {
+            info!("No platform enabled. Daemon is idle.");
+        } else {
+            info!("cc-gateway daemon is running ({} platform(s))", platforms.len());
+        }
 
         // Wait for shutdown signal
         self.wait_shutdown_signal().await?;
 
-        // Cleanup
-        {
-            let ctrl = controller.lock().await;
-            let _ = ctrl.stop_session().await;
-        }
-
-        if let Some(handle) = feishu_handle {
-            handle.abort();
+        // Graceful shutdown: notify all platforms and their chat sessions
+        if !platforms.is_empty() {
+            info!("Shutting down all chat sessions...");
+            for (platform, handle) in platforms {
+                platform.shutdown().await;
+                handle.abort();
+            }
         }
 
         info!("cc-gateway daemon stopped");
