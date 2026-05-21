@@ -22,8 +22,17 @@ All string values support `${VAR_NAME}` environment variable substitution.
     "app_secret": "${FEISHU_APP_SECRET}",
     "allow_from": "*",
     "encrypt_key": "",
-    "default_dir": "~/Workspace"
-  }
+    "mode": "websocket",
+    "webhook_bind": "0.0.0.0:3000"
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "${TELEGRAM_BOT_TOKEN}",
+    "allow_from": "*",
+    "webhook_url": ""
+  },
+  "default_dir": "~/Workspace",
+  "port": 17534
 }
 ```
 
@@ -36,6 +45,17 @@ All string values support `${VAR_NAME}` environment variable substitution.
 | `level` | string | `"info"` | Log level: trace, debug, info, warn, error |
 | `file` | string | `"~/.cc-gateway/logs/gateway.log"` | Log file path |
 
+### Top-level fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `port` | u16 | `17534` | Local port bound by the daemon to enforce a single instance |
+| `default_dir` | string | `"~"` | Default working directory for gateway sessions |
+| `show_thinking` | bool | `false` | Display Claude's Thinking blocks in output |
+| `media_retention_days` | u64 | `30` | Days to retain downloaded media files |
+
+> **Note:** The daemon starts **all platforms whose `enabled` flag is `true`** simultaneously. You can run Feishu and Telegram at the same time by enabling both.
+
 ### `claude`
 
 | Field | Type | Default | Description |
@@ -44,6 +64,15 @@ All string values support `${VAR_NAME}` environment variable substitution.
 | `default_args` | string | `"--dangerously-skip-permissions"` | Default arguments passed to Claude CLI on every session start |
 
 You can override or append arguments per session via `/claude <args>`.
+
+### `telegram`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Telegram bot |
+| `bot_token` | string | `"${TELEGRAM_BOT_TOKEN}"` | Telegram Bot API token |
+| `allow_from` | string | `"*"` | Allowed user IDs or usernames, comma-separated; `"*"` = all |
+| `webhook_url` | string | `""` | Webhook URL for Telegram Bot API (empty = long-polling) |
 
 ### `feishu`
 
@@ -54,11 +83,19 @@ You can override or append arguments per session via `/claude <args>`.
 | `app_secret` | string | `"${FEISHU_APP_SECRET}"` | Feishu app secret |
 | `allow_from` | string | `"*"` | Allowed user open_ids, comma-separated; `"*"` = all |
 | `encrypt_key` | string | `""` | Event encrypt key (optional) |
-| `default_dir` | string | `"~/Workspace"` | Default directory for Feishu `/ll` and `/cd` boundary |
+| `mode` | string | `"websocket"` | Connection mode: `"websocket"` or `"webhook"` |
+| `webhook_bind` | string | `"0.0.0.0:3000"` | Bind address for webhook server |
 
 `default_dir` determines:
 - Which directory `/ll` lists in Feishu interactive cards
 - The upper boundary for `/cd ..` in Feishu mode (cannot navigate above this directory)
+
+## Telegram Setup
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram and create a new bot
+2. Copy the bot token to `telegram.bot_token` in your config
+3. Set `platform` to `"telegram"` and `telegram.enabled` to `true`
+4. Optionally set `telegram.allow_from` to restrict which users can interact with the bot
 
 ## Feishu Setup
 

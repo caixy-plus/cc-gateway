@@ -44,19 +44,23 @@ cc-gateway> /ll
 
 ## Daemon Mode
 
+The daemon enforces a single instance by binding to a local port (`port` in config, default `17534`). If another daemon is already running, `start` will report the existing PID instead of spawning a second process.
+
 ### Start
 
 ```sh
 cc-gateway start
 ```
 
-Starts cc-gateway as a background daemon. The daemon listens for Feishu messages (if configured).
+Starts cc-gateway as a background daemon. The daemon listens for messages from all enabled platforms (Feishu and Telegram can run simultaneously).
 
 ### Stop
 
 ```sh
 cc-gateway stop
 ```
+
+Gracefully shuts down the daemon. All active chat sessions receive a shutdown notice and each Claude subprocess is given 500 ms to exit before being forcefully terminated.
 
 ### Restart
 
@@ -80,16 +84,29 @@ Once the daemon is running with Feishu configured, you can:
 2. Send messages directly — they are forwarded to Claude Code when a session is active
 3. Use gateway commands just like in CLI mode: `/cd`, `/claude`, `/pwd`, `/ll`, `/help`, `/quit`
 
+Each chat (group or private) gets its own isolated Claude subprocess, so messages from different chats never mix.
+
 ### Directory Selection Card
 
 Send `/ll` in Feishu to receive an interactive card listing folders from `default_dir`. Tap a folder button to change the working directory.
 
 ### Command Boundaries in Feishu
 
-- `/cd ..` can only navigate up to `feishu.default_dir` — attempting to go above it returns an access denied message
+- `/cd ..` can only navigate up to `default_dir` — attempting to go above it returns an access denied message
 - `/quit` is only valid when a Claude session is active; otherwise you will receive a message提示
+
+## Telegram Bot
+
+Once the daemon is running with Telegram configured:
+
+1. Open Telegram and find your bot
+2. Send messages directly — they are forwarded to Claude Code
+3. Use the same gateway commands as in CLI mode
+
+Each chat gets its own isolated Claude subprocess. The Telegram platform uses long-polling (`getUpdates`) by default; set `webhook_url` to switch to webhook mode.
 
 ## Tips
 
 - Use `/claude --resume <id>` to resume a previous Claude session
 - Keep sensitive credentials in environment variables, not in config.json
+- If the default port is occupied by another program, change `port` in `config.json` or let the install script auto-detect a free port

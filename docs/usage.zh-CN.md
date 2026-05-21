@@ -44,19 +44,23 @@ cc-gateway> /ll
 
 ## 守护进程模式
 
+守护进程通过绑定本地端口 (`port` 配置项，默认 `17534`) 来保证单实例运行。如果已有守护进程在运行，`start` 会报告现有 PID 而不会启动第二个进程。
+
 ### 启动
 
 ```sh
 cc-gateway start
 ```
 
-将 cc-gateway 作为后台守护进程启动。守护进程会监听飞书消息 (如果已配置)。
+将 cc-gateway 作为后台守护进程启动。守护进程会同时监听所有已启用平台的消息（飞书和 Telegram 可以同时运行）。
 
 ### 停止
 
 ```sh
 cc-gateway stop
 ```
+
+优雅地关闭守护进程。所有活跃的聊天会话都会收到关闭通知，每个 Claude 子进程有 500 毫秒的时间退出，超时将被强制终止。
 
 ### 重启
 
@@ -80,16 +84,29 @@ cc-gateway log -n 500       # 显示最后 500 行
 2. 直接发送消息 — 当会话激活时它们会被转发给 Claude Code
 3. 使用与 CLI 模式相同的网关命令: `/cd`, `/claude`, `/pwd`, `/ll`, `/help`, `/quit`
 
+每个聊天 (群聊或私聊) 都有独立的 Claude 子进程，不同聊天的消息不会相互混淆。
+
 ### 目录选择卡片
 
 在飞书中发送 `/ll` 可收到一个交互式卡片，列出 `default_dir` 中的文件夹。点击文件夹按钮即可更改工作目录。
 
 ### 飞书中的命令边界
 
-- `/cd ..` 只能导航到 `feishu.default_dir` — 尝试超出会返回访问被拒绝消息
+- `/cd ..` 只能导航到 `default_dir` — 尝试超出会返回访问被拒绝消息
 - `/quit` 仅在 Claude 会话激活时有效；否则会收到提示消息
+
+## Telegram 机器人
+
+守护进程运行且 Telegram 已配置后:
+
+1. 打开 Telegram 并找到你的机器人
+2. 直接发送消息 — 它们会被转发给 Claude Code
+3. 使用与 CLI 模式相同的网关命令
+
+每个聊天都有独立的 Claude 子进程。Telegram 平台默认使用长轮询 (`getUpdates`)；设置 `webhook_url` 可切换为 Webhook 模式。
 
 ## 小贴士
 
 - 使用 `/claude --resume <id>` 恢复之前的 Claude 会话
 - 将敏感凭证保存在环境变量中，而非 config.json
+- 如果默认端口被其他程序占用，可修改 `config.json` 中的 `port`，或让安装脚本自动检测空闲端口
