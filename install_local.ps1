@@ -28,20 +28,24 @@ function Write-Msg($en, $zh) {
 Write-Msg "1. Building release version..." "1. 构建 release 版本..."
 cargo build --release
 
-Write-Msg "2. Installing to $InstallDir..." "2. 安装到 $InstallDir..."
+Write-Msg "2. Stopping running daemon (if any)..." "2. 停止运行中的 daemon（如有）..."
+& "$InstallDir\$Binary.exe" stop 2>$null | Out-Null
+
+Write-Msg "3. Installing to $InstallDir..." "3. 安装到 $InstallDir..."
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item -Path "target\release\$Binary.exe" -Destination "$InstallDir\$Binary.exe" -Force
 
 # Add to PATH
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$InstallDir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+    $sep = if ($UserPath) { ";" } else { "" }
+    [Environment]::SetEnvironmentVariable("Path", "$UserPath$sep$InstallDir", "User")
     Write-Msg "Added $InstallDir to PATH" "已将 $InstallDir 添加到 PATH"
 }
 
-Write-Msg "3. Restarting cc-gateway..." "3. 重启 cc-gateway..."
-& "$InstallDir\$Binary.exe" restart
+Write-Msg "4. Starting cc-gateway..." "4. 启动 cc-gateway..."
+& "$InstallDir\$Binary.exe" start
 
 Write-Msg "" ""
 Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
-Write-Msg "Run '$Binary --help' to get started" "运行 '$Binary --help' 开始使用"
+Write-Msg "Run '$InstallDir\$Binary.exe --help' to get started" "运行 '$InstallDir\$Binary.exe --help' 开始使用"
