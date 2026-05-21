@@ -82,11 +82,64 @@ if (-not (Test-Path "$ConfigDir\config.json")) {
     "mode": "websocket",
     "webhook_bind": "0.0.0.0:3000"
   },
-  "default_dir": "~"
+  "default_dir": "~",
+  "port": 17534,
+  "telegram": {
+    "enabled": false,
+    "bot_token": "${TELEGRAM_BOT_TOKEN}",
+    "allow_from": "*",
+    "webhook_url": ""
+  }
 }
 "@
     Set-Content -Path "$ConfigDir\config.json" -Value $Config
     Write-Msg "Created default config at $ConfigDir\config.json" "已创建默认配置: $ConfigDir\config.json"
+}
+
+# Check default port conflict
+function Test-PortInUse($port) {
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $client.Connect("127.0.0.1", $port)
+        $client.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+$defaultPort = 17534
+$configFile = "$ConfigDir\config.json"
+$pidFile = "$ConfigDir\daemon.pid"
+
+if (Test-PortInUse $defaultPort) {
+    $cgPid = $null
+    if (Test-Path $pidFile) {
+        $cgPid = (Get-Content $pidFile).Trim()
+    }
+    $isCgRunning = $false
+    if ($cgPid) {
+        try {
+            Get-Process -Id $cgPid -ErrorAction Stop | Out-Null
+            $isCgRunning = $true
+        } catch {}
+    }
+    if ($isCgRunning) {
+        Write-Msg "Default port $defaultPort is used by cc-gateway (PID: $cgPid), continuing..." "默认端口 $defaultPort 已被 cc-gateway 占用 (PID: $cgPid)，继续..."
+    } else {
+        Write-Msg "Default port $defaultPort is occupied by another process" "默认端口 $defaultPort 被其他进程占用"
+        $newPort = $defaultPort
+        while (Test-PortInUse $newPort) {
+            $newPort++
+        }
+        Write-Msg "Auto-assigned new port: $newPort" "自动分配新端口: $newPort"
+        if (Test-Path $configFile) {
+            $config = Get-Content $configFile | ConvertFrom-Json
+            $config | Add-Member -NotePropertyName "port" -NotePropertyValue $newPort -Force
+            $config | ConvertTo-Json -Depth 10 | Set-Content $configFile
+            Write-Msg "Updated config: $configFile (port = $newPort)" "已更新配置文件: $configFile (port = $newPort)"
+        }
+    }
 }
 
 # Add to PATH

@@ -4,6 +4,7 @@ set -e
 REPO="caixy-plus/cc-gateway"
 BINARY="cc-gateway"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+DEFAULT_PORT=17534
 
 # Language detection
 detect_lang() {
@@ -123,11 +124,54 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
     "mode": "websocket",
     "webhook_bind": "0.0.0.0:3000"
   },
-  "default_dir": "~"
+  "default_dir": "~",
+  "port": 17534,
+  "telegram": {
+    "enabled": false,
+    "bot_token": "${TELEGRAM_BOT_TOKEN}",
+    "allow_from": "*",
+    "webhook_url": ""
+  }
 }
 EOF
     msg "Created default config at $CONFIG_DIR/config.json" "已创建默认配置: $CONFIG_DIR/config.json"
     msg "Please edit it to add your Feishu app credentials." "请编辑配置文件添加飞书应用凭证。"
+fi
+
+# Check default port conflict
+is_port_in_use() {
+    python3 -c "import socket; s=socket.socket(); s.settimeout(0.5); s.connect(('127.0.0.1', $1)); s.close()" 2>/dev/null
+}
+is_process_alive() {
+    kill -0 "$1" 2>/dev/null
+}
+if is_port_in_use "$DEFAULT_PORT"; then
+    CG_PID=""
+    if [ -f "$CONFIG_DIR/daemon.pid" ]; then
+        CG_PID=$(cat "$CONFIG_DIR/daemon.pid" | tr -d ' \n')
+    fi
+    if [ -n "$CG_PID" ] && is_process_alive "$CG_PID"; then
+        msg "Default port $DEFAULT_PORT is used by cc-gateway (PID: $CG_PID), continuing..." "默认端口 $DEFAULT_PORT 已被 cc-gateway 占用 (PID: $CG_PID)，继续..."
+    else
+        msg "Default port $DEFAULT_PORT is occupied by another process" "默认端口 $DEFAULT_PORT 被其他进程占用"
+        NEW_PORT=$DEFAULT_PORT
+        while is_port_in_use "$NEW_PORT"; do
+            NEW_PORT=$((NEW_PORT + 1))
+        done
+        msg "Auto-assigned new port: $NEW_PORT" "自动分配新端口: $NEW_PORT"
+        if [ -f "$CONFIG_DIR/config.json" ]; then
+            python3 -c "
+import json
+with open('$CONFIG_DIR/config.json', 'r') as f:
+    config = json.load(f)
+config['port'] = $NEW_PORT
+with open('$CONFIG_DIR/config.json', 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+"
+            msg "Updated config: $CONFIG_DIR/config.json (port = $NEW_PORT)" "已更新配置文件: $CONFIG_DIR/config.json (port = $NEW_PORT)"
+        fi
+    fi
 fi
 
 # Setup PATH
