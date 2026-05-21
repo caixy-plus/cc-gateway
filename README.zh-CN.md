@@ -1,14 +1,15 @@
 # cc-gateway
 
-通过飞书 (Lark) 机器人和 CLI 控制本地 Claude Code 的网关。
+通过飞书 (Lark)、Telegram 机器人和 CLI 控制本地 Claude Code 的网关。
 
 ## 功能特性
 
-- **远程控制**: 通过手机上的飞书 (Lark) 机器人控制本地 Claude Code
+- **远程控制**: 通过手机上的飞书 (Lark) 或 Telegram 机器人控制本地 Claude Code
+- **聊天隔离**: 每个聊天都有独立的 Claude 子进程 — 不同群聊或用户的消息不会相互混淆
 - **本地 CLI 聊天**: 交互式命令行聊天，支持 Tab 补全和行内提示
 - **会话切换**: `/claude` 进入 Claude 会话模式；除 `/quit` 外所有内容直接转发给 Claude
 - **目录选择器**: `/ll` 打开交互式目录选择器 (CLI 中为 TUI，飞书中为卡片)
-- **守护进程模式**: 使用 `start/stop/restart/log` 命令作为后台服务运行
+- **守护进程模式**: 使用 `start/stop/restart/log` 命令作为后台服务运行，通过端口绑定保证单实例
 
 ## 安装
 
@@ -43,8 +44,10 @@ cargo build --release
    ```
 
    编辑 `~/.cc-gateway/config.json`:
-   - 设置 `feishu.app_id` 和 `feishu.app_secret` (从 [飞书开放平台](https://open.feishu.cn) 获取)
-   - 设置 `feishu.default_dir` 为飞书用户应该浏览的目录 (例如 `~/Workspace`)
+   - 飞书: 将 `feishu.enabled` 设为 `true`，并设置 `feishu.app_id` 和 `feishu.app_secret` (从 [飞书开放平台](https://open.feishu.cn) 获取)
+   - Telegram: 将 `telegram.enabled` 设为 `true`，并设置 `telegram.bot_token` (从 [@BotFather](https://t.me/BotFather) 获取)
+   - 设置 `default_dir` 为远程用户应该浏览的目录 (例如 `~/Workspace`)
+   - 两个平台可以同时启用
 
 2. **启动守护进程**
 
@@ -103,8 +106,9 @@ cargo build --release
 ## 架构
 
 ```
-用户 (飞书/Lark)  <--->  cc-gateway 守护进程  <--->  Claude Code (本地)
-用户 (CLI)          <--->  cc-gateway 守护进程  <--->  Claude Code (本地)
+用户 (飞书/Lark)  <-->  cc-gateway 守护进程  <-->  Claude Code (本地)
+用户 (Telegram)   <-->  cc-gateway 守护进程  <-->  Claude Code (本地)
+用户 (CLI)        <-->  cc-gateway 守护进程  <-->  Claude Code (本地)
 ```
 
 cc-gateway 通过 stdin/stdout 使用 `stream-json` 协议与 Claude Code 通信 (`--input-format stream-json --output-format stream-json`)。

@@ -1,14 +1,15 @@
 # cc-gateway
 
-Gateway for controlling Claude Code via Feishu/Lark and CLI.
+Gateway for controlling Claude Code via Feishu/Lark, Telegram, and CLI.
 
 ## Features
 
-- **Remote Control**: Control your local Claude Code from your phone via Feishu (Lark) bot
+- **Remote Control**: Control your local Claude Code from your phone via Feishu (Lark) or Telegram bot
+- **Per-Chat Isolation**: Each chat gets its own Claude subprocess — messages from different groups or users never mix
 - **Local CLI Chat**: Interactive command-line chat with tab completion and inline hints
 - **Session Switching**: `/claude` enters Claude session mode; everything except `/quit` is forwarded directly to Claude
 - **Directory Picker**: `/ll` opens an interactive directory picker (TUI in CLI, card in Feishu)
-- **Daemon Mode**: Run as a background service with `start/stop/restart/log` commands
+- **Daemon Mode**: Run as a background service with `start/stop/restart/log` commands. Single-instance enforced via port binding.
 
 ## Installation
 
@@ -43,8 +44,10 @@ cargo build --release
    ```
 
    Edit `~/.cc-gateway/config.json`:
-   - Set `feishu.app_id` and `feishu.app_secret` (from [Feishu Open Platform](https://open.feishu.cn))
-   - Set `feishu.default_dir` to the directory Feishu users should browse (e.g. `~/Workspace`)
+   - For Feishu: set `feishu.enabled` to `true`, and set `feishu.app_id` and `feishu.app_secret` (from [Feishu Open Platform](https://open.feishu.cn))
+   - For Telegram: set `telegram.enabled` to `true`, and set `telegram.bot_token` (from [@BotFather](https://t.me/BotFather))
+   - Set `default_dir` to the directory remote users should browse (e.g. `~/Workspace`)
+   - Both platforms can be enabled at the same time
 
 2. **Start the daemon**
 
@@ -104,6 +107,7 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 ```
 User (Feishu/Lark)  <--->  cc-gateway daemon  <--->  Claude Code (local)
+User (Telegram)     <--->  cc-gateway daemon  <--->  Claude Code (local)
 User (CLI)          <--->  cc-gateway daemon  <--->  Claude Code (local)
 ```
 

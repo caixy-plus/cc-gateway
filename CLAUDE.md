@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cc-gateway is a Rust gateway that exposes local Claude Code sessions to remote users via a Feishu (Lark) bot and an interactive local CLI. It spawns Claude Code as a subprocess, communicates over stdin/stdout using the `stream-json` protocol, and bridges messages between Claude and external interfaces.
+cc-gateway is a Rust gateway that exposes local Claude Code sessions to remote users via chat bot platforms (Feishu/Lark, Telegram) and an interactive local CLI. It spawns Claude Code as a subprocess, communicates over stdin/stdout using the `stream-json` protocol, and bridges messages between Claude and external interfaces.
 
 ## Build & Test
 
@@ -26,8 +26,8 @@ cargo run -- start        # Start daemon (spawns background process)
 
 ### Daemon Lifecycle (`src/daemon/`)
 
-- **`daemon/mod.rs`**: PID-file-based daemon management. `start()` spawns a detached child running `cc-gateway _daemon`. `stop()` sends SIGTERM (Unix) or `taskkill` (Windows). `run()` loads config, writes PID file, and starts `DaemonEngine`.
-- **`daemon/engine.rs`**: Core async engine. Creates `ClaudeController` + `CommandRouter`, optionally starts `FeishuPlatform`, then waits for shutdown signal (SIGTERM/SIGINT).
+- **`daemon/mod.rs`**: PID-file-based daemon management with triple singleton lock: port binding (configurable via `port`), `.daemon-starting.lock` for `start()` atomicity, and PID file `flock` held for daemon lifetime. `start()` spawns a detached child running `cc-gateway _daemon`. `stop()` sends SIGTERM (Unix) or `taskkill` (Windows). `run()` loads config, writes PID file, and starts `DaemonEngine`.
+- **`daemon/engine.rs`**: Core async engine. Starts the configured `Platform` (Feishu or Telegram) based on `config.platform`, then waits for shutdown signal (SIGTERM/SIGINT). On shutdown, calls `platform.shutdown()` to gracefully terminate all active chat sessions.
 
 ### Claude Session (`src/claude/`)
 
@@ -41,20 +41,22 @@ cargo run -- start        # Start daemon (spawns background process)
 - **`command/builtin.rs`**: Implements gateway commands: `/help`, `/cd`, `/claude`, `/pwd`, `/ll`, `/quit`. `/cd` canonicalizes paths and restarts the session. `/ll` uses `crossterm` for an interactive TUI directory picker (directory-only, `/` suffix, Enter changes directory without starting a session).
 - **`command/forward.rs`**: Forwards regular text as user messages to Claude. Returns an error prompt if no session is active.
 
-### Feishu Platform (`src/platform/`)
+### Platform Layer (`src/platform/`)
 
-- **`platform/feishu.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Gets tenant access token, connects to WS endpoint, handles heartbeats, deduplicates messages, normalizes events into `NormalizedMessage`, routes through `CommandRouter`, and polls `ClaudeController` events to reply back.
-  - `/ll` in Feishu is intercepted before routing: sends an interactive card listing folders from `feishu.default_dir`. Card buttons carry `value: { "cmd": "cd", "path": "...", "chat_id": "..." }`.
-  - `/cd` in Feishu is intercepted before routing: resolves and canonicalizes the path, enforces that the result stays within `feishu.default_dir`, then calls `set_work_dir`.
+- **`platform/mod.rs`**: Defines the `Platform` trait (`run()` and `shutdown()`). All platform integrations implement this trait so `DaemonEngine` is platform-agnostic.
+- **`platform/feishu/mod.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Gets tenant access token, connects to WS endpoint, handles heartbeats, deduplicates messages, normalizes events into `NormalizedMessage`, routes through `CommandRouter`, and polls `ClaudeController` events to reply back. Each chat gets its own `ChatSession` (isolated Claude subprocess).
+  - `/ll` in Feishu is intercepted before routing: sends an interactive card listing folders from `default_dir`. Card buttons carry `value: { "cmd": "cd", "path": "...", "chat_id": "..." }`.
+  - `/cd` in Feishu is intercepted before routing: resolves and canonicalizes the path, enforces that the result stays within `default_dir`, then calls `set_work_dir`.
   - Card callbacks with `cmd == "cd"` are handled directly: call `controller.init_work_dir(path)` and reply with confirmation text.
   - Unknown slash commands when no session is active receive "Unknown command. Available commands: /help, /cd, /claude, /ll, /quit".
+- **`platform/telegram/mod.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Each chat gets its own `TgChatSession` (isolated Claude subprocess). Routes messages through `CommandRouter` and streams Claude responses back via `sendMessage`.
 - **`platform/proto/mod.rs`**: Protobuf frame codec for Feishu pbbp2 (METHOD_CONTROL / METHOD_DATA, SERVICE_IM / SERVICE_CARD).
 
 ### Configuration (`src/config/`)
 
 - **`config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.
-- **`config/model.rs`**: `GatewayConfig` with `log`, `claude`, `feishu` sections. `ClaudeConfig` has `cli_path` and `default_args`. `FeishuConfig` has `default_dir`. Defaults are defined here.
-- **`config/wizard.rs`**: Interactive config editor invoked by `cc-gateway config`. Prompts for log, claude, and feishu settings.
+- **`config/model.rs`**: `GatewayConfig` with `log`, `claude`, `feishu`, `telegram` sections, plus top-level fields: `platform`, `port`, `default_dir`, `show_thinking`, `media_retention_days`.
+- **`config/wizard.rs`**: Interactive config editor invoked by `cc-gateway config`. Prompts for log, claude, and platform settings.
 
 ### Skills (`src/skill/`)
 
@@ -77,6 +79,6 @@ This pattern lets unit tests verify layout math, scroll behavior, selection stat
 
 - **Session switching**: `/claude` starts a session and changes the prompt to `💬 ~/Workspace ▶`. Everything except `/quit` is forwarded to Claude. `/quit` stops the session in gateway; exits the program when no session is active.
 - **Stream-json protocol**: All Claude communication is newline-delimited JSON. Each line is one event. Claude must be launched with `--input-format stream-json --output-format stream-json`.
-- **Event channels**: `ClaudeController` uses an `mpsc::unbounded_channel` to decouple the stdout reader from the consumer (CLI or Feishu). Consumers poll `recv_event()`.
+- **Event channels**: `ClaudeController` uses an `mpsc::unbounded_channel` to decouple the stdout reader from the consumer (CLI or platform). Consumers poll `recv_event()`.
 - **Detached daemon**: The daemon is a separate OS process. `start()` spawns `cc-gateway _daemon` with stdin/stdout/stderr nulled and a new process group (Unix).
 - **Config dir**: `~/.cc-gateway/` holds `config.json`, `daemon.pid`, `logs/`, and `skills/`.
