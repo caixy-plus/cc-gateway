@@ -469,11 +469,44 @@ impl FeishuPlatform {
             receive_id_type.to_string(),
         );
         self.sessions.insert(chat_id.to_string(), session.clone());
+        crate::session::manager::GLOBAL_SESSIONS.insert(crate::session::model::Session::new_platform(
+            "feishu",
+            chat_id,
+            &self.default_dir,
+        ));
         session
+    }
+
+    fn spawn_deliver_listener(&self) {
+        let platform = self.clone();
+        tokio::spawn(async move {
+            let mut rx = crate::web::state::DELIVER_BUS.subscribe();
+            loop {
+                match rx.recv().await {
+                    Ok(req) => {
+                        if let Some(session) = crate::session::manager::GLOBAL_SESSIONS.get(&req.session_id) {
+                            if session.platform != "feishu" {
+                                continue;
+                            }
+                            let text = if let Some(msg) = &req.message {
+                                format!("{}\n📎 {}", msg, req.path)
+                            } else {
+                                format!("📎 {}", req.path)
+                            };
+                            if let Ok(token) = platform.get_tenant_access_token().await {
+                                let _ = platform.send_text_message(&token, "open_id", &session.chat_id, &text).await;
+                            }
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+        });
     }
 
     pub async fn run(&self) -> Result<()> {
         info!("Starting Feishu platform...");
+        self.spawn_deliver_listener();
 
         let (ws_url, client_config) = self.get_ws_endpoint().await?;
         info!("Feishu WebSocket endpoint: {}", ws_url);
@@ -2285,6 +2318,7 @@ impl FeishuPlatform {
                     let partial = accumulator.take_output();
                     if !partial.trim().is_empty() {
                         let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
+                        crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "assistant", &partial);
                     }
                 }
                 event_res = timeout(remaining, event_fut) => {
@@ -2301,6 +2335,8 @@ impl FeishuPlatform {
                                     created_at: Instant::now(),
                                 };
                                 self.store_pending_permission(ctx);
+                                let notice = format!("Permission request: `{}`  ID: `{}`", tool_name, req_id);
+                                crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "system", &notice);
                                 continue;
                             }
                             let is_text = matches!(event, ControllerEvent::Text(_));
@@ -2316,6 +2352,7 @@ impl FeishuPlatform {
                                 if !partial.trim().is_empty() {
                                     let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
                                     first_text_sent = true;
+                                    crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "assistant", &partial);
                                 }
                             }
                             if is_done {
@@ -2332,6 +2369,7 @@ impl FeishuPlatform {
         let reply = accumulator.take_output();
         if !reply.trim().is_empty() {
             self.send_text_message(token, receive_id_type, receive_id, &reply.trim()).await?;
+            crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "assistant", reply.trim());
         }
         Ok(())
     }

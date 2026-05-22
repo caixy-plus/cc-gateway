@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -168,6 +168,7 @@ impl TelegramPlatform {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut first_text_sent = false;
+        let chat_id_str = chat_id.to_string();
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -186,6 +187,7 @@ impl TelegramPlatform {
                     let partial = accumulator.take_output();
                     if !partial.trim().is_empty() {
                         let _ = self.send_message(chat_id, &partial).await;
+                        crate::web::state::broadcast_event(&chat_id_str, "telegram", &chat_id_str, "assistant", &partial);
                     }
                 }
                 event_res = tokio::time::timeout(remaining, event_fut) => {
@@ -194,6 +196,7 @@ impl TelegramPlatform {
                             if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
                                 let card = format!("Permission request: `{}`\nID: `{}`", tool_name, req_id);
                                 let _ = self.send_message(chat_id, &card).await;
+                                crate::web::state::broadcast_event(&chat_id_str, "telegram", &chat_id_str, "system", &card);
                                 continue;
                             }
                             let is_text = matches!(event, ControllerEvent::Text(_));
@@ -208,6 +211,7 @@ impl TelegramPlatform {
                                 if !partial.trim().is_empty() {
                                     let _ = self.send_message(chat_id, &partial).await;
                                     first_text_sent = true;
+                                    crate::web::state::broadcast_event(&chat_id_str, "telegram", &chat_id_str, "assistant", &partial);
                                 }
                             }
                             if is_done {
@@ -224,6 +228,7 @@ impl TelegramPlatform {
         let reply = accumulator.take_output();
         if !reply.trim().is_empty() {
             self.send_message(chat_id, reply.trim()).await?;
+            crate::web::state::broadcast_event(&chat_id_str, "telegram", &chat_id_str, "assistant", reply.trim());
         }
         Ok(())
     }
@@ -238,6 +243,12 @@ impl TelegramPlatform {
             &self.default_dir,
         );
         self.sessions.insert(chat_id.to_string(), session.clone());
+        let sm = crate::session::manager::GLOBAL_SESSIONS.clone();
+        sm.insert(crate::session::model::Session::new_platform(
+            "telegram",
+            chat_id,
+            &self.default_dir,
+        ));
         session
     }
 
@@ -275,12 +286,40 @@ impl TelegramPlatform {
             }
         }
     }
+
+    fn spawn_deliver_listener(&self) {
+        let platform = self.clone();
+        tokio::spawn(async move {
+            let mut rx = crate::web::state::DELIVER_BUS.subscribe();
+            loop {
+                match rx.recv().await {
+                    Ok(req) => {
+                        if let Some(session) = crate::session::manager::GLOBAL_SESSIONS.get(&req.session_id) {
+                            if session.platform != "telegram" {
+                                continue;
+                            }
+                            if let Ok(chat_id) = session.chat_id.parse::<i64>() {
+                                let text = if let Some(msg) = &req.message {
+                                    format!("{}\n📎 {}", msg, req.path)
+                                } else {
+                                    format!("📎 {}", req.path)
+                                };
+                                let _ = platform.send_message(chat_id, &text).await;
+                            }
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+        });
+    }
 }
 
 #[async_trait::async_trait]
 impl Platform for TelegramPlatform {
     async fn run(&self) -> Result<()> {
         info!("Starting Telegram platform...");
+        self.spawn_deliver_listener();
         loop {
             match self.get_updates().await {
                 Ok(updates) => {
