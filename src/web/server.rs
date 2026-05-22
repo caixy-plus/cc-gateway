@@ -34,6 +34,8 @@ pub fn create_app(config: &GatewayConfig) -> Router {
         .route("/api/config", get(handlers::config::handle_get_config))
         .route("/api/config", post(handlers::config::handle_save_config))
         .route("/api/platforms", get(handlers::config::handle_get_platforms))
+        .route("/api/version", get(handlers::system::handle_version))
+        .route("/api/restart", post(handlers::system::handle_restart))
         // WebUI static files
         .route("/", get(handlers::ui::serve_index))
         .route("/{*path}", get(handlers::ui::serve_static))

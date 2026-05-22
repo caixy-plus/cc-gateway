@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use serde_json;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -8,6 +9,12 @@ use tracing::{debug, info, warn};
 
 use crate::claude::protocol::{InputMessage, OutputEvent};
 use crate::config::model::ClaudeConfig;
+
+#[derive(Debug, Deserialize)]
+struct ClaudeSessionFile {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
 
 pub struct ClaudeSession {
     child: Child,
@@ -91,7 +98,8 @@ impl ClaudeSession {
         extra_args: Vec<String>,
         config: &ClaudeConfig,
         event_tx: mpsc::UnboundedSender<OutputEvent>,
-    ) -> Result<Self> {
+        resume_session_id: Option<String>,
+    ) -> Result<(Self, Option<String>)> {
         let cli_path = resolve_cli_path(&config.cli_path);
 
         let mut args = vec![
@@ -109,6 +117,12 @@ impl ClaudeSession {
             for arg in config.default_args.split_whitespace() {
                 args.push(arg.to_string());
             }
+        }
+
+        // Append resume session id if provided
+        if let Some(ref sid) = resume_session_id {
+            args.push("--resume".to_string());
+            args.push(sid.clone());
         }
 
         // Append any extra args passed via /claude <cmd>
@@ -144,6 +158,8 @@ impl ClaudeSession {
             )
         })?;
 
+        let pid = child.id();
+
         let stdin = child
             .stdin
             .take()
@@ -161,11 +177,51 @@ impl ClaudeSession {
         let tx = event_tx.clone();
         tokio::spawn(Self::stdout_reader(stdout, tx));
 
-        Ok(Self {
-            child,
-            stdin,
-            work_dir,
-        })
+        // Try to extract Claude session id from the sessions file
+        let claude_session_id = if let Some(pid) = pid {
+            Self::extract_session_id_with_retry(pid).await
+        } else {
+            None
+        };
+
+        Ok((
+            Self {
+                child,
+                stdin,
+                work_dir,
+            },
+            claude_session_id,
+        ))
+    }
+
+    async fn extract_session_id_with_retry(pid: u32) -> Option<String> {
+        let session_path = dirs::home_dir()
+            .map(|h| h.join(".claude").join("sessions").join(format!("{}.json", pid)))?;
+
+        // Initial delay before first attempt — Claude needs time to create the session file
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+        for attempt in 0..15 {
+            if session_path.exists() {
+                match tokio::fs::read_to_string(&session_path).await {
+                    Ok(content) => {
+                        if let Ok(session_file) = serde_json::from_str::<ClaudeSessionFile>(&content) {
+                            info!("Extracted Claude session id: {} from pid {}", session_file.session_id, pid);
+                            return Some(session_file.session_id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to read Claude session file {:?}: {}", session_path, e);
+                    }
+                }
+            }
+            if attempt < 14 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        }
+
+        warn!("Could not extract Claude session id for pid {} after retries", pid);
+        None
     }
 
     pub async fn send(&mut self, msg: InputMessage) -> Result<()> {
@@ -178,23 +234,13 @@ impl ClaudeSession {
     }
 
     pub async fn stop(mut self) -> Result<()> {
-        // Close stdin to signal EOF
-        drop(self.stdin);
-
-        // Wait for graceful shutdown
-        let timeout = tokio::time::Duration::from_secs(30);
-        match tokio::time::timeout(timeout, self.child.wait()).await {
-            Ok(Ok(status)) => {
-                info!("Claude session exited with status: {}", status);
-            }
-            Ok(Err(e)) => {
-                warn!("Claude session wait error: {}", e);
-            }
-            Err(_) => {
-                warn!("Claude session graceful shutdown timed out, killing");
-                let _ = self.child.kill().await;
-            }
-        }
+        let _ = self.child.kill().await;
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            self.child.wait(),
+        )
+        .await;
+        info!("Claude session stopped");
         Ok(())
     }
 

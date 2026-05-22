@@ -12,6 +12,8 @@ pub struct Session {
     pub work_dir: String,
     pub active: bool,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -32,6 +34,7 @@ impl Session {
             work_dir: work_dir.into(),
             active: true,
             created_at: Utc::now(),
+            claude_session_id: None,
         }
     }
 
@@ -50,6 +53,7 @@ impl Session {
             work_dir: work_dir.into(),
             active: true,
             created_at: Utc::now(),
+            claude_session_id: None,
         }
     }
 }

@@ -88,14 +88,23 @@ pub struct SendMessageRequest {
 }
 
 pub async fn handle_send_message(
+    State(state): State<AppState>,
     Path(session_id): Path<String>,
     Json(req): Json<SendMessageRequest>,
 ) -> (StatusCode, String) {
     let runtime = match GLOBAL_SESSIONS.get_webui_runtime(&session_id) {
         Some(r) => r,
         None => {
-            let body = json!({ "error": "Session not found" });
-            return (StatusCode::NOT_FOUND, body.to_string());
+            match GLOBAL_SESSIONS
+                .get_or_create_webui_runtime(&session_id, state.claude_config, state.show_thinking)
+                .await
+            {
+                Some(r) => r,
+                None => {
+                    let body = json!({ "error": "Session not found" });
+                    return (StatusCode::NOT_FOUND, body.to_string());
+                }
+            }
         }
     };
 
@@ -105,36 +114,39 @@ pub async fn handle_send_message(
         return (StatusCode::BAD_REQUEST, body.to_string());
     }
 
-    // Auto-resume if inactive
-    let is_active = {
-        let ctrl = runtime.controller.lock().await;
-        ctrl.is_session_active().await
-    };
-    if !is_active {
-        let work_dir = runtime.session.work_dir.clone();
-        let mut ctrl = runtime.controller.lock().await;
-        if let Err(e) = ctrl.start_session(work_dir, vec![]).await {
-            let body = json!({ "error": format!("Failed to resume session: {}", e) });
-            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
-        }
-        drop(ctrl);
-        GLOBAL_SESSIONS.update_active(&session_id, true);
-    }
-
-    // Broadcast user message immediately
-    broadcast_event(&session_id, "webui", &session_id, "user", &message);
-
     let response = runtime.router.handle(&message).await;
 
     match response {
         Some(text) => {
             // Immediate response from builtin command
+            // Sync session state for /claude and /cd commands
+            if message == "/claude" || message.starts_with("/claude ") {
+                GLOBAL_SESSIONS.update_active(&session_id, true);
+                let ctrl = runtime.controller.lock().await;
+                let wd = ctrl.get_work_dir().await;
+                let csid = ctrl.get_claude_session_id().await;
+                drop(ctrl);
+                if !wd.is_empty() {
+                    GLOBAL_SESSIONS.update_work_dir(&session_id, &wd);
+                }
+                if let Some(id) = csid {
+                    GLOBAL_SESSIONS.update_claude_session_id(&session_id, Some(&id));
+                }
+            } else if message.starts_with("/cd ") || message == "/cd_default" {
+                let ctrl = runtime.controller.lock().await;
+                let wd = ctrl.get_work_dir().await;
+                drop(ctrl);
+                if !wd.is_empty() {
+                    GLOBAL_SESSIONS.update_work_dir(&session_id, &wd);
+                }
+            }
             broadcast_event(&session_id, "webui", &session_id, "system", &text);
             let body = json!({ "response": text });
             (StatusCode::OK, body.to_string())
         }
         None => {
-            // Message forwarded to Claude; spawn background poller
+            // Message forwarded to Claude; record user message first, then spawn poller
+            broadcast_event(&session_id, "webui", &session_id, "user", &message);
             tokio::spawn(poll_claude_and_broadcast(
                 session_id.clone(),
                 runtime.controller.clone(),
@@ -171,7 +183,6 @@ pub async fn handle_stop_session(Path(session_id): Path<String>) -> (StatusCode,
 
 pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, String) {
     use std::fs;
-    use std::path::PathBuf;
 
     let history_dir = match dirs::home_dir() {
         Some(h) => h.join(".cc-gateway").join("history"),
@@ -273,8 +284,8 @@ async fn poll_claude_and_broadcast(
             event_res = tokio::time::timeout(remaining, event_fut) => {
                 match event_res {
                     Ok(Some(event)) => {
-                        if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
-                            let card = format!("Permission request: `{}`\nID: `{}`", tool_name, req_id);
+                        if let ControllerEvent::PermissionRequest { request_id, tool_name, .. } = &event {
+                            let card = format!("Permission request: `{}`\nID: `{}`", tool_name, request_id);
                             broadcast_event(&session_id, "webui", &session_id, "system", &card);
                             continue;
                         }
@@ -286,9 +297,9 @@ async fn poll_claude_and_broadcast(
                             accumulator.peek_output().len() >= 300
                         };
                         if is_text && should_flush {
+                            first_text_sent = true;
                             let partial = accumulator.take_output();
                             if !partial.trim().is_empty() {
-                                first_text_sent = true;
                                 broadcast_event(&session_id, "webui", &session_id, "assistant", &partial);
                             }
                         }

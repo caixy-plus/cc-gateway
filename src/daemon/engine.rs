@@ -27,6 +27,12 @@ impl DaemonEngine {
         // Start history recorder for WebUI sessions
         crate::history::recorder::start_recorder();
 
+        // Initialize SQLite database and restore persisted sessions
+        if let Err(e) = crate::db::init_schema() {
+            error!("Failed to initialize session database: {}", e);
+        }
+        crate::session::manager::GLOBAL_SESSIONS.load_sessions();
+
         // Start all enabled platforms concurrently
         let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();
 

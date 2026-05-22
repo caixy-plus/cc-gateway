@@ -6,6 +6,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cc-gateway is a Rust gateway that exposes local Claude Code sessions to remote users via chat bot platforms (Feishu/Lark, Telegram) and an interactive local CLI. It spawns Claude Code as a subprocess, communicates over stdin/stdout using the `stream-json` protocol, and bridges messages between Claude and external interfaces.
 
+## Project Structure
+
+This is a **frontend/backend split** project:
+
+- **Backend** (this repo): Rust gateway with Axum HTTP server. Embeds the WebUI static files via `rust-embed` (`src/web/handlers/ui.rs` → `webui/dist/`).
+- **Frontend** (separate repo): React 18 + Vite + TypeScript. Lives at `../cc-gateway-webui` (or clone from `https://github.com/caixy-plus/cc-gateway-webui.git`).
+
+Workflow: edit frontend → `npm run build` in `cc-gateway-webui` → copy `dist/` into this repo's `webui/dist/` → rebuild Rust binary.
+
+## Local Development Install
+
+Platform-specific scripts that build from source (including the frontend) and install locally:
+
+- **macOS / Linux**: `./install_local.sh`
+  - Builds frontend (`npm ci && npm run build` in `../cc-gateway-webui`)
+  - `cargo build --release`
+  - Copies binary to `~/.local/bin/cc-gateway`
+  - macOS: re-signs with `codesign -s - -f`
+  - Restarts the daemon (`cc-gateway restart`)
+- **Windows**: `powershell -ExecutionPolicy Bypass -File .\install_local.ps1`
+  - Builds frontend (`npm ci && npm run build` in `..\cc-gateway-webui`)
+  - `cargo build --release`
+  - Installs to `$env:LOCALAPPDATA\cc-gateway\cc-gateway.exe`
+  - Adds install dir to user PATH
+  - Starts the daemon (`cc-gateway start`)
+
+Production install scripts (download pre-built binaries from GitHub Releases):
+- **macOS / Linux**: `./install.sh`
+- **Windows**: `.\install.ps1`
+
 ## Build & Test
 
 ```sh
@@ -61,6 +91,40 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Skills (`src/skill/`)
 
 - **`skill/mod.rs`**: Scans `~/.cc-gateway/skills/` and `.claude/skills/` for `.md` files with optional YAML frontmatter. Loaded skills can be injected as the system prompt via `/skill <name>`.
+
+### Web Server (`src/web/`)
+
+- **`web/server.rs`**: Axum HTTP server bound to `config.port` (replaces the old throwaway TCP singleton listener). Serves the embedded WebUI static files and exposes REST APIs.
+- **`web/handlers/ui.rs`**: Static file handler using `rust-embed` to serve the compiled frontend from `webui/dist/` at the root path.
+- **`web/handlers/session.rs`**: Session APIs — `GET /api/sessions`, `POST /api/sessions`, `DELETE /api/sessions/:id`, `POST /api/sessions/:id/messages`, `GET /api/sessions/:id/history`, `GET /api/sessions/:id/events` (SSE stream for real-time messages).
+- **`web/handlers/cmd.rs`**: Gateway command APIs — `POST /api/cmd/ll`, `/api/cmd/pwd`, `/api/cmd/cd`, `/api/cmd/cd_default`.
+- **`web/handlers/system.rs`**: System APIs — `GET /api/config`, `POST /api/config`, `GET /api/platforms`, `GET /api/version`, `POST /api/restart`.
+- **CORS**: Configured to allow `127.0.0.1` and `localhost` origins; no auth required (local-only access).
+
+### Session Management (`src/session/`)
+
+- **`session/manager.rs`**: `SessionManager` holds all sessions in a `DashMap<String, Session>`. WebUI sessions also have a `WebUISessionRuntime` (controller + router) stored separately. `GLOBAL_SESSIONS` is the process-wide singleton.
+- **`session/model.rs`**: `Session` struct with `id`, `source` (`WebUI` / `Feishu` / `Telegram`), `platform`, `chat_id`, `title`, `work_dir`, `active`, `claude_session_id`, `created_at`.
+- **Persistence**: All sessions are persisted to SQLite (`src/db/`). On daemon restart, previously active sessions are marked inactive because their Claude subprocesses are gone.
+
+### History Recording
+
+- Events are written to `~/.cc-gateway/history/{session_id}.jsonl`.
+- A broadcast channel (`EVENT_BUS`) fans out `ControllerEvent` to both the SSE stream and the history recorder.
+- Each line: `{"timestamp": "...", "role": "user|assistant|system", "content": "...", "event_type": "..."}`.
+
+### Database (`src/db/`)
+
+- SQLite backend storing sessions, config overrides, and runtime state. Auto-creates tables on first access.
+
+### Update / Version Check (`src/update/`)
+
+- Checks GitHub Releases (`caixy-plus/cc-gateway`) for newer versions. Used by the WebUI version badge and can be triggered from the sidebar.
+
+### Claude Session ID & Resume (`src/claude/session.rs`)
+
+- After spawning the `claude` subprocess, the code reads `~/.claude/sessions/{pid}.json` with retries to extract Claude's internal session ID.
+- This ID is stored in `Session.claude_session_id` and passed back via `--resume` on the next `/claude` invocation so Claude Code resumes the same conversation.
 
 ## Testing Patterns
 

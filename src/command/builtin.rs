@@ -33,31 +33,35 @@ impl BuiltinCommands {
             "/cd" => Some(self.cd(arg).await),
             "/cd_default" => Some(self.cd_default().await),
             "/claude" => Some(self.claude(arg).await),
+            "/claude-resume" => Some(self.claude_resume(arg).await),
             "/pwd" => Some(self.pwd().await),
             "/ll" => Some(self.ll().await),
             "/mkdir" => Some(self.mkdir(arg).await),
             "/show-thinking-toggle" => Some(self.show_thinking_toggle().await),
             "/show-thinking" => Some(self.show_thinking().await),
             "/hide-thinking" => Some(self.hide_thinking().await),
+            "/claude-history" => Some(self.claude_history(arg).await),
             _ => None,
         }
     }
 
     fn help(&self) -> String {
         format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
             t!("builtin.help_title"),
             t!("builtin.help_help"),
             t!("builtin.help_quit"),
             t!("builtin.help_cd"),
             t!("builtin.help_cd_default"),
             t!("builtin.help_claude"),
+            t!("builtin.help_claude_resume"),
             t!("builtin.help_pwd"),
             t!("builtin.help_ll"),
             t!("builtin.help_mkdir"),
             t!("builtin.help_show_thinking_toggle"),
             t!("builtin.help_show_thinking"),
             t!("builtin.help_hide_thinking"),
+            t!("builtin.help_claude_history"),
             t!("builtin.help_any_text")
         )
     }
@@ -117,14 +121,26 @@ impl BuiltinCommands {
             work_dir
         };
 
-        let extra_args: Vec<String> = if args.is_empty() {
+        let force_new = args.trim() == "--new";
+        let extra_args: Vec<String> = if args.is_empty() || force_new {
             vec![]
         } else {
             args.split_whitespace().map(|s| s.to_string()).collect()
         };
 
+        if force_new {
+            ctrl.set_claude_session_id(None).await;
+            ctrl.set_pending_resume_session_id(None).await;
+        }
+
         match ctrl.start_session(dir.clone(), extra_args).await {
-            Ok(()) => t_fmt!("builtin.session_started", DIR = dir),
+            Ok(()) => {
+                if force_new {
+                    t_fmt!("builtin.new_session_started", DIR = dir)
+                } else {
+                    t_fmt!("builtin.session_started", DIR = dir)
+                }
+            }
             Err(e) => t_fmt!("builtin.failed_start_claude", ERR = e),
         }
     }
@@ -235,6 +251,97 @@ impl BuiltinCommands {
         let ctrl = self.controller.lock().await;
         ctrl.set_show_thinking(false);
         t!("builtin.thinking_disabled").to_string()
+    }
+
+    async fn claude_history(&self, arg: &str) -> String {
+        let history_path = match dirs::home_dir() {
+            Some(h) => h.join(".claude").join("history.jsonl"),
+            None => return t!("builtin.failed_read_history").to_string(),
+        };
+
+        if !history_path.exists() {
+            return t!("builtin.no_history_file").to_string();
+        }
+
+        let content = match tokio::fs::read_to_string(&history_path).await {
+            Ok(c) => c,
+            Err(e) => return t_fmt!("builtin.failed_read_history", ERR = e),
+        };
+
+        #[derive(serde::Deserialize)]
+        struct HistoryEntry {
+            #[serde(default)]
+            timestamp: i64,
+            #[serde(default)]
+            project: String,
+            #[serde(rename = "sessionId")]
+            session_id: String,
+        }
+
+        use std::collections::HashMap;
+        let mut sessions: HashMap<String, (String, i64, usize)> = HashMap::new();
+
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(entry) = serde_json::from_str::<HistoryEntry>(line) {
+                let e = sessions.entry(entry.session_id).or_insert_with(|| (entry.project.clone(), entry.timestamp, 0));
+                e.0 = entry.project;
+                if entry.timestamp > e.1 {
+                    e.1 = entry.timestamp;
+                }
+                e.2 += 1;
+            }
+        }
+
+        if sessions.is_empty() {
+            return t!("builtin.no_sessions").to_string();
+        }
+
+        let mut sorted: Vec<(String, String, i64, usize)> = sessions
+            .into_iter()
+            .map(|(sid, (project, last_ts, count))| (sid, project, last_ts, count))
+            .collect();
+        sorted.sort_by(|a, b| b.2.cmp(&a.2));
+
+        if let Ok(idx) = arg.parse::<usize>() {
+            if idx == 0 || idx > sorted.len() {
+                return t!("builtin.invalid_history_index").to_string();
+            }
+            let target_sid = sorted[idx - 1].0.clone();
+            let ctrl = self.controller.lock().await;
+            ctrl.set_pending_resume_session_id(Some(target_sid.clone())).await;
+            return t_fmt!("builtin.resume_session_set", SID = &target_sid[..target_sid.len().min(8)]);
+        }
+
+        let mut lines = vec![t!("builtin.recent_claude_sessions").to_string()];
+        for (i, (sid, project, last_ts, count)) in sorted.iter().enumerate() {
+            let short_sid = &sid[..sid.len().min(8)];
+            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(*last_ts, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            lines.push(format!(
+                "{}. {}... (project: {}, {} messages, last: {})",
+                i + 1,
+                short_sid,
+                project,
+                count,
+                dt
+            ));
+        }
+        lines.push(format!("\n{}", t!("builtin.resume_hint")));
+        lines.join("\n")
+    }
+
+    async fn claude_resume(&self, arg: &str) -> String {
+        if arg.is_empty() {
+            return t!("builtin.claude_resume_usage").to_string();
+        }
+
+        let ctrl = self.controller.lock().await;
+        ctrl.set_pending_resume_session_id(Some(arg.to_string())).await;
+        t_fmt!("builtin.resume_session_set", SID = &arg[..arg.len().min(8)])
     }
 
 }

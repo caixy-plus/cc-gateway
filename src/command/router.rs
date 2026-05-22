@@ -34,7 +34,8 @@ impl CommandRouter {
             // Everything else (including /help, /cd, /ll, /claude, raw text,
             // slash commands) is forwarded directly to Claude.
             match trimmed {
-                "/quit" | "/show-thinking-toggle" | "/show-thinking" | "/hide-thinking" => {
+                "/quit" | "/show-thinking-toggle" | "/show-thinking" | "/hide-thinking"
+                | "/claude-history" | "/claude-resume" => {
                     return self.builtin.handle(trimmed).await;
                 }
                 _ => {

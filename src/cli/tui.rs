@@ -533,11 +533,38 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
             }
             false
         }
-        ControllerEvent::PermissionRequest(req_id, tool_name) => {
+        ControllerEvent::PermissionRequest { request_id, tool_name, .. } => {
             let text = format!(
                 "Permission Required: {} (id: {})\n  /allow or /deny",
-                tool_name, req_id
+                tool_name, request_id
             );
+            app.add_message(MsgRole::System, &text);
+            false
+        }
+        ControllerEvent::ConfirmRequest { request_id, prompt, options } => {
+            let text = format!(
+                "Confirm (id: {}): {}\nOptions: {:?}",
+                request_id, prompt, options
+            );
+            app.add_message(MsgRole::System, &text);
+            false
+        }
+        ControllerEvent::SelectRequest { request_id, prompt, options } => {
+            let text = format!(
+                "Select (id: {}): {}\nOptions: {:?}",
+                request_id, prompt, options
+            );
+            app.add_message(MsgRole::System, &text);
+            false
+        }
+        ControllerEvent::QuestionRequest { request_id, questions } => {
+            let mut text = format!("Questions (id: {}):\n", request_id);
+            for q in questions {
+                text.push_str(&format!("  {}: {}\n", q.header, q.question));
+                for opt in &q.options {
+                    text.push_str(&format!("    - {}: {}\n", opt.label, opt.description));
+                }
+            }
             app.add_message(MsgRole::System, &text);
             false
         }

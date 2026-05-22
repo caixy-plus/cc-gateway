@@ -7,11 +7,13 @@ mod claude;
 mod command;
 mod config;
 mod daemon;
+mod db;
 mod history;
 mod i18n;
 mod platform;
 mod prompt;
 mod session;
+mod update;
 mod utils;
 mod web;
 
@@ -64,6 +66,15 @@ enum Commands {
         /// Print default config to stdout
         #[arg(long)]
         init: bool,
+    },
+    /// Check for updates and optionally install the latest release
+    Update {
+        /// Only check, do not download or install
+        #[arg(long)]
+        check: bool,
+        /// Force update even if already on the latest version
+        #[arg(short, long)]
+        force: bool,
     },
     /// Internal: run the daemon engine (do not use directly)
     #[command(hide = true, name = "_daemon")]
@@ -118,6 +129,9 @@ async fn main() -> Result<()> {
             } else {
                 config::wizard::run_interactive_config()?;
             }
+        }
+        Some(Commands::Update { check, force }) => {
+            update::run(check, force).await?;
         }
     }
 

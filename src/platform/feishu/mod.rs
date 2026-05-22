@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+mod interaction;
 use anyhow::{Context, Result};
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -28,13 +29,16 @@ struct ChatSession {
     controller: Arc<Mutex<ClaudeController>>,
     router: Arc<CommandRouter>,
     receive_id_type: String,
+    /// Ensures only one poll_claude_and_reply runs per chat at a time,
+    /// preventing event-rx contention between concurrent messages.
+    poll_lock: Arc<Mutex<()>>,
 }
 
 impl ChatSession {
     fn new(claude_config: ClaudeConfig, show_thinking: bool, default_dir: &str, receive_id_type: String) -> Self {
         let controller = Arc::new(Mutex::new(ClaudeController::new(claude_config, show_thinking)));
         let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
-        Self { controller, router, receive_id_type }
+        Self { controller, router, receive_id_type, poll_lock: Arc::new(Mutex::new(())) }
     }
 }
 
@@ -419,6 +423,7 @@ pub struct FeishuPlatform {
     http_client: reqwest::Client,
     dedup_cache: Arc<DedupCache>,
     pending_permissions: Arc<DashMap<String, PendingPermissionContext>>,
+    interaction_store: Arc<interaction::InteractionStore>,
     cached_token: Arc<RwLock<Option<String>>>,
     token_fetched_at: Arc<RwLock<Option<Instant>>>,
     /// message_id -> reaction_id for in-progress reactions.
@@ -448,6 +453,7 @@ impl FeishuPlatform {
             http_client: reqwest::Client::new(),
             dedup_cache: Arc::new(DedupCache::new(300)),
             pending_permissions: Arc::new(DashMap::new()),
+            interaction_store: Arc::new(interaction::InteractionStore::new()),
             cached_token: Arc::new(RwLock::new(None)),
             token_fetched_at: Arc::new(RwLock::new(None)),
             pending_reactions: Arc::new(DashMap::new()),
@@ -1075,6 +1081,430 @@ impl FeishuPlatform {
         })
     }
 
+    /// Build an interactive single-select card.
+    /// If options.len() > 5, uses select_static; otherwise uses primary buttons.
+    pub fn build_single_select_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        let elements = if options.len() > 5 {
+            let select_options: Vec<Value> = options
+                .iter()
+                .map(|opt| {
+                    json!({
+                        "text": {
+                            "tag": "plain_text",
+                            "content": opt
+                        },
+                        "value": opt
+                    })
+                })
+                .collect();
+            vec![
+                json!({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": title
+                    }
+                }),
+                json!({
+                    "tag": "action",
+                    "layout": "default",
+                    "actions": [
+                        {
+                            "tag": "select_static",
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "请选择..."
+                            },
+                            "options": select_options,
+                            "value": {
+                                "action": "select",
+                                "request_id": request_id
+                            }
+                        }
+                    ]
+                }),
+            ]
+        } else {
+            let buttons: Vec<Value> = options
+                .iter()
+                .map(|opt| {
+                    json!({
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": opt
+                        },
+                        "type": "primary",
+                        "value": {
+                            "action": "select",
+                            "request_id": request_id,
+                            "answer": opt
+                        }
+                    })
+                })
+                .collect();
+            vec![
+                json!({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": title
+                    }
+                }),
+                json!({
+                    "tag": "action",
+                    "layout": "default",
+                    "actions": buttons
+                }),
+            ]
+        };
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "请选择"
+                },
+                "template": "blue"
+            },
+            "body": {
+                "elements": elements
+            }
+        })
+    }
+
+    /// Build a multi-select card using buttons for each option.
+    /// Each click updates the selection state (stored in interaction_store externally).
+    pub fn build_multi_select_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+        selected: &[String],
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        let buttons: Vec<Value> = options
+            .iter()
+            .map(|opt| {
+                let is_selected = selected.contains(opt);
+                let label = if is_selected {
+                    format!("✅ {}", opt)
+                } else {
+                    opt.clone()
+                };
+                let btn_type = if is_selected { "default" } else { "primary" };
+                let mut new_selected = selected.to_vec();
+                if is_selected {
+                    new_selected.retain(|s| s != opt);
+                } else {
+                    new_selected.push(opt.clone());
+                }
+                json!({
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": label
+                    },
+                    "type": btn_type,
+                    "value": {
+                        "action": "toggle_select",
+                        "request_id": request_id,
+                        "toggle": opt,
+                        "selected": new_selected
+                    }
+                })
+            })
+            .collect();
+
+        let actions = vec![
+            json!({
+                "tag": "action",
+                "layout": "default",
+                "actions": buttons
+            }),
+            json!({
+                "tag": "action",
+                "layout": "default",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "提交"
+                        },
+                        "type": "primary",
+                        "value": {
+                            "action": "submit_multi",
+                            "request_id": request_id
+                        }
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "取消"
+                        },
+                        "type": "danger",
+                        "value": {
+                            "action": "cancel_multi",
+                            "request_id": request_id
+                        }
+                    }
+                ]
+            }),
+        ];
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                },
+                "template": "blue"
+            },
+            "body": {
+                "elements": actions
+            }
+        })
+    }
+
+    /// Build a text-input hint card prompting the user to reply with a text message.
+    pub fn build_text_input_hint_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                },
+                "template": "wathet"
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": "请直接回复本条消息，输入你的回答。"
+                        }
+                    },
+                    {
+                        "tag": "action",
+                        "layout": "default",
+                        "actions": [
+                            {
+                                "tag": "button",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "取消"
+                                },
+                                "type": "danger",
+                                "value": {
+                                    "action": "cancel_text_input",
+                                    "request_id": request_id
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        })
+    }
+
+    /// Build a confirm/deny card with two buttons.
+    pub fn build_confirm_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                },
+                "template": "orange"
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "action",
+                        "layout": "default",
+                        "actions": [
+                            {
+                                "tag": "button",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "确认"
+                                },
+                                "type": "primary",
+                                "value": {
+                                    "action": "confirm",
+                                    "request_id": request_id,
+                                    "answer": true
+                                }
+                            },
+                            {
+                                "tag": "button",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "取消"
+                                },
+                                "type": "danger",
+                                "value": {
+                                    "action": "confirm",
+                                    "request_id": request_id,
+                                    "answer": false
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        })
+    }
+
+    /// Build an interactive session history card.
+    /// Feishu card schema v2.
+    pub fn build_session_history_card(
+        &self,
+        sessions: &[crate::session::model::Session],
+        receive_id_type: &str,
+        receive_id: &str,
+    ) -> Value {
+        let mut elements: Vec<Value> = Vec::new();
+        elements.push(json!({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": t!("feishu.session_history_subtitle")
+            }
+        }));
+
+        for session in sessions {
+            let status_dot = if session.active { "🟢" } else { "⚪" };
+            let time = session.created_at.format("%Y-%m-%d %H:%M").to_string();
+            let mut info_parts = vec![
+                format!("**{}** {}", status_dot, session.title),
+                format!("📁 {}", session.work_dir),
+                format!("🕒 {}", time),
+            ];
+            if let Some(ref csid) = session.claude_session_id {
+                info_parts.push(format!("🔑 `{}`", csid));
+            }
+            let info_text = info_parts.join("\n");
+
+            elements.push(json!({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": info_text
+                }
+            }));
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.resume")
+                },
+                "type": "primary",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "resume",
+                            "session_id": session.id,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+            elements.push(json!({ "tag": "hr" }));
+        }
+
+        // Remove trailing hr if present
+        if elements.last().and_then(|e| e.get("tag")).and_then(|v| v.as_str()) == Some("hr") {
+            elements.pop();
+        }
+
+        // Add "Start New Session" button at the bottom
+        elements.push(json!({
+            "tag": "action",
+            "layout": "default",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": t!("feishu.start_new_session")
+                    },
+                    "type": "default",
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {
+                                "cmd": "resume",
+                                "session_id": "",
+                                "chat_id": receive_id,
+                                "receive_id_type": receive_id_type
+                            }
+                        }
+                    ]
+                }
+            ]
+        }));
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.session_history_title")
+                },
+                "template": "indigo"
+            },
+            "body": {
+                "elements": elements
+            }
+        })
+    }
+
     /// Build an interactive directory selection card.
     /// Feishu card schema v2: buttons are placed directly in body.elements.
     pub fn build_dir_select_card(
@@ -1396,18 +1826,91 @@ impl FeishuPlatform {
                 event_res = timeout(remaining, controller.recv_event()) => {
                     match event_res {
                         Ok(Some(event)) => {
-                            if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
+                            if let ControllerEvent::PermissionRequest { request_id, tool_name, input } = &event {
                                 let token = self.get_tenant_access_token().await?;
-                                let card = self.build_permission_card(req_id, &tool_name, None);
+                                let card = self.build_permission_card(request_id, tool_name, input.as_ref());
                                 self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
                                 let ctx = PendingPermissionContext {
-                                    request_id: req_id.clone(),
+                                    request_id: request_id.clone(),
                                     tool_name: tool_name.clone(),
                                     chat_id: receive_id.clone(),
                                     sender_open_id: normalized.sender_open_id.clone(),
                                     created_at: Instant::now(),
                                 };
                                 self.store_pending_permission(ctx);
+                                continue;
+                            }
+                            if let ControllerEvent::ConfirmRequest { request_id, prompt, .. } = &event {
+                                let token = self.get_tenant_access_token().await?;
+                                let card = self.build_confirm_card(request_id, prompt);
+                                self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
+                                let interaction = interaction::PendingInteraction {
+                                    request_id: request_id.clone(),
+                                    interaction_type: interaction::InteractionType::Confirm { prompt: prompt.clone() },
+                                    state: interaction::InteractionState::Waiting,
+                                    chat_id: receive_id.clone(),
+                                    sender_open_id: normalized.sender_open_id.clone(),
+                                    message_id: String::new(),
+                                    created_at: Instant::now(),
+                                };
+                                self.interaction_store.insert(interaction);
+                                continue;
+                            }
+                            if let ControllerEvent::SelectRequest { request_id, prompt, options } = &event {
+                                let token = self.get_tenant_access_token().await?;
+                                let card = self.build_single_select_card(request_id, prompt, options);
+                                self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
+                                let interaction = interaction::PendingInteraction {
+                                    request_id: request_id.clone(),
+                                    interaction_type: interaction::InteractionType::SingleSelect {
+                                        prompt: prompt.clone(),
+                                        options: options.clone(),
+                                    },
+                                    state: interaction::InteractionState::Waiting,
+                                    chat_id: receive_id.clone(),
+                                    sender_open_id: normalized.sender_open_id.clone(),
+                                    message_id: String::new(),
+                                    created_at: Instant::now(),
+                                };
+                                self.interaction_store.insert(interaction);
+                                continue;
+                            }
+                            if let ControllerEvent::QuestionRequest { request_id, questions } = &event {
+                                let token = self.get_tenant_access_token().await?;
+                                let first = &questions[0];
+                                let opts: Vec<String> = first.options.iter().map(|o| o.label.clone()).collect();
+                                if !opts.is_empty() && !first.multi_select {
+                                    let card = self.build_single_select_card(request_id, &first.question, &opts);
+                                    self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
+                                    let interaction = interaction::PendingInteraction {
+                                        request_id: request_id.clone(),
+                                        interaction_type: interaction::InteractionType::SingleSelect {
+                                            prompt: first.question.clone(),
+                                            options: opts,
+                                        },
+                                        state: interaction::InteractionState::Waiting,
+                                        chat_id: receive_id.clone(),
+                                        sender_open_id: normalized.sender_open_id.clone(),
+                                        message_id: String::new(),
+                                        created_at: Instant::now(),
+                                    };
+                                    self.interaction_store.insert(interaction);
+                                } else {
+                                    let card = self.build_text_input_hint_card(request_id, &first.question);
+                                    self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
+                                    let interaction = interaction::PendingInteraction {
+                                        request_id: request_id.clone(),
+                                        interaction_type: interaction::InteractionType::TextInput {
+                                            prompt: first.question.clone(),
+                                        },
+                                        state: interaction::InteractionState::Waiting,
+                                        chat_id: receive_id.clone(),
+                                        sender_open_id: normalized.sender_open_id.clone(),
+                                        message_id: String::new(),
+                                        created_at: Instant::now(),
+                                    };
+                                    self.interaction_store.insert(interaction);
+                                }
                                 continue;
                             }
                             let is_text = matches!(event, ControllerEvent::Text(_));
@@ -1981,6 +2484,29 @@ impl FeishuPlatform {
             ctrl.is_session_active().await
         };
         info!("[Feishu] handle_im_payload session_active={}, text='{}'", session_active, trimmed);
+
+        if !session_active && trimmed == "/claude-history" {
+            info!("[Feishu] /claude-history command received from {}, chat_type={}, receive_id_type={}, receive_id={}",
+                  sender_open_id, chat_type, receive_id_type, receive_id);
+            self.on_processing_start(token, &msg_id).await;
+            let result = async {
+                let sessions = crate::db::load_sessions_by_chat_id(receive_id);
+                info!("[Feishu] /claude-history found {} sessions for chat_id={}", sessions.len(), receive_id);
+                if sessions.is_empty() {
+                    self.send_text_message(token, receive_id_type, receive_id, t!("feishu.no_sessions")).await?;
+                } else {
+                    let card = self.build_session_history_card(&sessions, receive_id_type, receive_id);
+                    self.send_interactive_card(token, receive_id_type, receive_id, &card).await?;
+                }
+                Ok::<(), anyhow::Error>(())
+            }.await;
+            if let Err(ref e) = result {
+                warn!("[Feishu] /claude-history command failed: {}", e);
+            }
+            self.on_processing_complete(token, &msg_id, result.is_ok()).await;
+            return result;
+        }
+
         if !session_active && trimmed == "/ll" {
             info!("[Feishu] /ll command received from {}, chat_type={}, receive_id_type={}, receive_id={}, processing...",
                   sender_open_id, chat_type, receive_id_type, receive_id);
@@ -2027,6 +2553,7 @@ impl FeishuPlatform {
                     path, ctype, text,
                 );
                 self.on_processing_start(token, &msg_id).await;
+                let _guard = session.poll_lock.lock().await;
                 let result = self
                     .send_file_to_claude_and_reply(
                         token, &text, path, ctype, &receive_id_type, receive_id, session.controller.clone(),
@@ -2039,6 +2566,30 @@ impl FeishuPlatform {
                     "[Feishu] File downloaded but session inactive, falling through to text routing: path={}",
                     path
                 );
+            }
+        }
+
+        // Check for pending text-input interaction and intercept the message as answer.
+        if let Some(pending) = self.interaction_store.find_waiting_by_chat_id(receive_id) {
+            if matches!(pending.interaction_type, interaction::InteractionType::TextInput { .. }) {
+                let answer = text.trim();
+                if !answer.is_empty() {
+                    self.interaction_store.take(&pending.request_id);
+                    let session = self.get_session(receive_id, receive_id_type).await;
+                    let ctrl = session.controller.lock().await;
+                    let answer_val = serde_json::json!(answer);
+                    let msg = interaction::build_select_response(&pending.request_id, answer_val);
+                    let _ = ctrl.send_input(msg).await;
+                    drop(ctrl);
+                    let _ = self.send_text_message(
+                        token,
+                        receive_id_type,
+                        receive_id,
+                        &format!("已收到: {}", answer),
+                    )
+                    .await;
+                    return Ok(());
+                }
             }
         }
 
@@ -2090,6 +2641,67 @@ impl FeishuPlatform {
             // User-defined values are nested under action.value
             let user_value = action_value.get("value").unwrap_or(action_value);
             if let Some(cmd) = user_value.get("cmd").and_then(|v| v.as_str()) {
+                if cmd == "resume" {
+                    let session_id = user_value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let receive_id = user_value
+                        .get("chat_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    let receive_id_type = user_value
+                        .get("receive_id_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("chat_id");
+                    if !receive_id.is_empty() {
+                        let session = self.get_session(receive_id, receive_id_type).await;
+                        if session_id.is_empty() {
+                            // Start new session
+                            match session.router.handle("/claude").await {
+                                Some(text) => {
+                                    self.send_text_message(token, receive_id_type, receive_id, &text).await?;
+                                }
+                                None => {
+                                    let _guard = session.poll_lock.lock().await;
+                                    self.poll_claude_and_reply(token, receive_id_type, receive_id, session.controller.clone()).await?;
+                                }
+                            }
+                        } else {
+                            // Resume existing session
+                            let db_session = crate::session::manager::GLOBAL_SESSIONS.get(session_id);
+                            let extra_args = if let Some(ref s) = db_session {
+                                if let Some(ref csid) = s.claude_session_id {
+                                    vec![format!("--resume {}", csid)]
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                vec![]
+                            };
+                            if let Some(ref s) = db_session {
+                                let ctrl = session.controller.lock().await;
+                                ctrl.init_work_dir(s.work_dir.clone()).await;
+                                drop(ctrl);
+                            }
+                            let title = db_session.as_ref().map(|s| s.title.clone()).unwrap_or_default();
+                            match session.router.handle(&format!("/claude {}", extra_args.join(" "))).await {
+                                Some(text) => {
+                                    self.send_text_message(token, receive_id_type, receive_id, &text).await?;
+                                }
+                                None => {
+                                    let _guard = session.poll_lock.lock().await;
+                                    self.poll_claude_and_reply(token, receive_id_type, receive_id, session.controller.clone()).await?;
+                                }
+                            }
+                            if !title.is_empty() {
+                                self.send_text_message(token, receive_id_type, receive_id, &t_fmt!("feishu.session_resumed", TITLE = title)).await?;
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
                 if cmd == "cd" {
                     if let Some(path) = user_value.get("path").and_then(|v| v.as_str()) {
                         let receive_id = user_value
@@ -2155,6 +2767,90 @@ impl FeishuPlatform {
             }
         }
 
+        // Handle interactive card callbacks (permissions, selections, confirmations)
+        if let Some(ref action_value) = action_obj {
+            let user_value = action_value.get("value").unwrap_or(action_value);
+            if let Some(action) = user_value.get("action").and_then(|v| v.as_str()) {
+                if let Some(request_id) = user_value.get("request_id").and_then(|v| v.as_str()) {
+                    let receive_id = user_value
+                        .get("chat_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    let receive_id_type = user_value
+                        .get("receive_id_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("chat_id");
+
+                    if !receive_id.is_empty() {
+                        match action {
+                            "approve_once" | "approve_session" | "approve_always" | "deny" => {
+                                if let Some(ctx) = self.take_pending_permission(request_id) {
+                                    let session = self.get_session(&ctx.chat_id, "chat_id").await;
+                                    let ctrl = session.controller.lock().await;
+                                    let msg = if action == "deny" {
+                                        interaction::build_deny_response(request_id, "User denied")
+                                    } else {
+                                        interaction::build_allow_response(request_id)
+                                    };
+                                    let _ = ctrl.send_input(msg).await;
+                                    drop(ctrl);
+                                    let reply = if action == "deny" {
+                                        "已拒绝".to_string()
+                                    } else {
+                                        format!("已允许执行: {}", ctx.tool_name)
+                                    };
+                                    let _ = self.send_text_message(token, receive_id_type, receive_id, &reply).await;
+                                    return Ok(());
+                                }
+                            }
+                            "confirm" => {
+                                if let Some(answer) = user_value.get("answer").and_then(|v| v.as_bool()) {
+                                    if let Some(_pending) = self.interaction_store.take(request_id) {
+                                        let session = self.get_session(receive_id, receive_id_type).await;
+                                        let ctrl = session.controller.lock().await;
+                                        let answer_val = serde_json::json!(answer);
+                                        let msg = interaction::build_select_response(request_id, answer_val);
+                                        let _ = ctrl.send_input(msg).await;
+                                        drop(ctrl);
+                                        let reply = if answer { "已确认" } else { "已取消" };
+                                        let _ = self.send_text_message(token, receive_id_type, receive_id, reply).await;
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            "select" => {
+                                if let Some(answer) = user_value.get("answer").and_then(|v| v.as_str()) {
+                                    if let Some(_pending) = self.interaction_store.take(request_id) {
+                                        let session = self.get_session(receive_id, receive_id_type).await;
+                                        let ctrl = session.controller.lock().await;
+                                        let answer_val = serde_json::json!(answer);
+                                        let msg = interaction::build_select_response(request_id, answer_val);
+                                        let _ = ctrl.send_input(msg).await;
+                                        drop(ctrl);
+                                        let _ = self.send_text_message(token, receive_id_type, receive_id, &format!("已选择: {}", answer)).await;
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            "cancel_text_input" => {
+                                if let Some(_pending) = self.interaction_store.take(request_id) {
+                                    let session = self.get_session(receive_id, receive_id_type).await;
+                                    let ctrl = session.controller.lock().await;
+                                    let msg = interaction::build_deny_response(request_id, "User cancelled");
+                                    let _ = ctrl.send_input(msg).await;
+                                    drop(ctrl);
+                                    let _ = self.send_text_message(token, receive_id_type, receive_id, "已取消").await;
+                                    return Ok(());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         // Fallback: treat other card actions as simple text commands.
         let text = format!("Card action: {:?}", action_obj);
         let open_message_id = context
@@ -2206,7 +2902,7 @@ impl FeishuPlatform {
         // Feishu-specific command validation when no session is active
         if !trimmed.is_empty() && trimmed.starts_with('/') {
             if !session_active {
-                let known = ["/help", "/cd", "/cd_default", "/claude", "/ll", "/mkdir", "/quit", "/pwd", "/show-thinking", "/hide-thinking", "/show-thinking-toggle"];
+                let known = ["/help", "/cd", "/cd_default", "/claude", "/claude-history", "/claude-resume", "/ll", "/mkdir", "/quit", "/pwd", "/show-thinking", "/hide-thinking", "/show-thinking-toggle"];
                 let cmd = trimmed.split_whitespace().next().unwrap_or(trimmed);
                 if !known.contains(&cmd) {
                     if msg.receive_id.is_empty() {
@@ -2238,6 +2934,7 @@ impl FeishuPlatform {
             }
             None => {
                 // Message forwarded to Claude; each chat has its own subprocess.
+                let _guard = session.poll_lock.lock().await;
                 self.poll_claude_and_reply(token, &msg.receive_id_type, &msg.receive_id, session.controller.clone()).await?;
             }
         }
@@ -2324,19 +3021,89 @@ impl FeishuPlatform {
                 event_res = timeout(remaining, event_fut) => {
                     match event_res {
                         Ok(Some(event)) => {
-                            if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
-                                let card = self.build_permission_card(req_id, tool_name, None);
+                            if let ControllerEvent::PermissionRequest { request_id, tool_name, input } = &event {
+                                let card = self.build_permission_card(request_id, tool_name, input.as_ref());
                                 let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
                                 let ctx = PendingPermissionContext {
-                                    request_id: req_id.clone(),
+                                    request_id: request_id.clone(),
                                     tool_name: tool_name.clone(),
                                     chat_id: receive_id.to_string(),
                                     sender_open_id: String::new(),
                                     created_at: Instant::now(),
                                 };
                                 self.store_pending_permission(ctx);
-                                let notice = format!("Permission request: `{}`  ID: `{}`", tool_name, req_id);
+                                let notice = format!("Permission request: `{}`  ID: `{}`", tool_name, request_id);
                                 crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "system", &notice);
+                                continue;
+                            }
+                            if let ControllerEvent::ConfirmRequest { request_id, prompt, .. } = &event {
+                                let card = self.build_confirm_card(request_id, prompt);
+                                let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
+                                let interaction = interaction::PendingInteraction {
+                                    request_id: request_id.clone(),
+                                    interaction_type: interaction::InteractionType::Confirm { prompt: prompt.clone() },
+                                    state: interaction::InteractionState::Waiting,
+                                    chat_id: receive_id.to_string(),
+                                    sender_open_id: String::new(),
+                                    message_id: String::new(),
+                                    created_at: Instant::now(),
+                                };
+                                self.interaction_store.insert(interaction);
+                                continue;
+                            }
+                            if let ControllerEvent::SelectRequest { request_id, prompt, options } = &event {
+                                let card = self.build_single_select_card(request_id, prompt, options);
+                                let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
+                                let interaction = interaction::PendingInteraction {
+                                    request_id: request_id.clone(),
+                                    interaction_type: interaction::InteractionType::SingleSelect {
+                                        prompt: prompt.clone(),
+                                        options: options.clone(),
+                                    },
+                                    state: interaction::InteractionState::Waiting,
+                                    chat_id: receive_id.to_string(),
+                                    sender_open_id: String::new(),
+                                    message_id: String::new(),
+                                    created_at: Instant::now(),
+                                };
+                                self.interaction_store.insert(interaction);
+                                continue;
+                            }
+                            if let ControllerEvent::QuestionRequest { request_id, questions } = &event {
+                                let first = &questions[0];
+                                let opts: Vec<String> = first.options.iter().map(|o| o.label.clone()).collect();
+                                if !opts.is_empty() && !first.multi_select {
+                                    let card = self.build_single_select_card(request_id, &first.question, &opts);
+                                    let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
+                                    let interaction = interaction::PendingInteraction {
+                                        request_id: request_id.clone(),
+                                        interaction_type: interaction::InteractionType::SingleSelect {
+                                            prompt: first.question.clone(),
+                                            options: opts,
+                                        },
+                                        state: interaction::InteractionState::Waiting,
+                                        chat_id: receive_id.to_string(),
+                                        sender_open_id: String::new(),
+                                        message_id: String::new(),
+                                        created_at: Instant::now(),
+                                    };
+                                    self.interaction_store.insert(interaction);
+                                } else {
+                                    let card = self.build_text_input_hint_card(request_id, &first.question);
+                                    let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
+                                    let interaction = interaction::PendingInteraction {
+                                        request_id: request_id.clone(),
+                                        interaction_type: interaction::InteractionType::TextInput {
+                                            prompt: first.question.clone(),
+                                        },
+                                        state: interaction::InteractionState::Waiting,
+                                        chat_id: receive_id.to_string(),
+                                        sender_open_id: String::new(),
+                                        message_id: String::new(),
+                                        created_at: Instant::now(),
+                                    };
+                                    self.interaction_store.insert(interaction);
+                                }
                                 continue;
                             }
                             let is_text = matches!(event, ControllerEvent::Text(_));

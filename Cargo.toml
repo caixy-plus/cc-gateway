@@ -72,6 +72,9 @@ async-trait = "0.1"
 # UUID generation
 uuid = { version = "1.16", features = ["v4", "serde"] }
 
+# SQLite persistence
+rusqlite = { version = "0.34", features = ["bundled"] }
+
 # HTTP server & WebUI
 axum = { version = "0.8", features = ["multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }

@@ -193,8 +193,8 @@ impl TelegramPlatform {
                 event_res = tokio::time::timeout(remaining, event_fut) => {
                     match event_res {
                         Ok(Some(event)) => {
-                            if let ControllerEvent::PermissionRequest(req_id, tool_name) = &event {
-                                let card = format!("Permission request: `{}`\nID: `{}`", tool_name, req_id);
+                            if let ControllerEvent::PermissionRequest { request_id, tool_name, .. } = &event {
+                                let card = format!("Permission request: `{}`\nID: `{}`", tool_name, request_id);
                                 let _ = self.send_message(chat_id, &card).await;
                                 crate::web::state::broadcast_event(&chat_id_str, "telegram", &chat_id_str, "system", &card);
                                 continue;

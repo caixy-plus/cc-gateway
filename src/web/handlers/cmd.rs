@@ -14,6 +14,7 @@ pub struct CdRequest {
 pub struct LlRequest {
     session_id: Option<String>,
     path: Option<String>,
+    show_hidden: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -60,7 +61,9 @@ async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
     if let Some(id) = session_id {
         if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
             let ctrl = runtime.controller.lock().await;
-            ctrl.init_work_dir(dir).await;
+            ctrl.init_work_dir(dir.clone()).await;
+            drop(ctrl);
+            GLOBAL_SESSIONS.update_work_dir(id, &dir);
             return;
         }
     }
@@ -69,20 +72,22 @@ async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
 
 pub async fn handle_ll(Json(req): Json<LlRequest>) -> (StatusCode, String) {
     let path = req.path.unwrap_or_else(|| "~".to_string());
+    let show_hidden = req.show_hidden.unwrap_or(false);
     let expanded = shellexpand::tilde(&path).to_string();
     match std::fs::read_dir(&expanded) {
         Ok(entries) => {
             let mut items: Vec<String> = entries
                 .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') && !show_hidden {
+                        return false;
+                    }
+                    e.file_type().ok().map(|t| t.is_dir()).unwrap_or(false)
+                })
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
-                    let file_type = e.file_type().ok();
-                    let suffix = if file_type.map(|t| t.is_dir()).unwrap_or(false) {
-                        "/"
-                    } else {
-                        ""
-                    };
-                    format!("{}{}", name, suffix)
+                    format!("{}/", name)
                 })
                 .collect();
             items.sort();

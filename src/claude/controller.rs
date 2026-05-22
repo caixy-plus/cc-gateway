@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
-use crate::claude::protocol::{build_user_message, OutputEvent};
+use crate::claude::protocol::{build_user_message, InputMessage, OutputEvent};
 use crate::claude::session::ClaudeSession;
 use crate::config::model::ClaudeConfig;
 use crate::{t, t_fmt};
@@ -89,9 +89,41 @@ pub enum ControllerEvent {
     Thinking(String),
     ToolUse(String, String),
     ToolResult(String, bool),
-    PermissionRequest(String, String),
+    PermissionRequest {
+        request_id: String,
+        tool_name: String,
+        input: Option<serde_json::Value>,
+    },
+    ConfirmRequest {
+        request_id: String,
+        prompt: String,
+        options: Vec<String>,
+    },
+    SelectRequest {
+        request_id: String,
+        prompt: String,
+        options: Vec<String>,
+    },
+    QuestionRequest {
+        request_id: String,
+        questions: Vec<QuestionItem>,
+    },
     Error(String),
     Done,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuestionItem {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +143,8 @@ pub struct ClaudeController {
     pending_permission: Arc<RwLock<Option<(String, String)>>>,
     session_state: Arc<RwLock<SessionState>>,
     message_buffer: Arc<Mutex<Vec<String>>>,
+    claude_session_id: Arc<RwLock<Option<String>>>,
+    pending_resume_session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl ClaudeController {
@@ -126,6 +160,8 @@ impl ClaudeController {
             pending_permission: Arc::new(RwLock::new(None)),
             session_state: Arc::new(RwLock::new(SessionState::Inactive)),
             message_buffer: Arc::new(Mutex::new(Vec::new())),
+            claude_session_id: Arc::new(RwLock::new(None)),
+            pending_resume_session_id: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -140,12 +176,28 @@ impl ClaudeController {
 
         let validated = ensure_under_home(&work_dir)?;
 
+        let pending_resume = {
+            let mut pending = self.pending_resume_session_id.write().await;
+            pending.take()
+        };
+
+        let resume_id = if let Some(id) = pending_resume {
+            Some(id)
+        } else {
+            let sid = self.claude_session_id.read().await;
+            sid.clone()
+        };
+
         let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
-        let session = ClaudeSession::spawn(validated.clone(), extra_args, &self.config, claude_tx).await?;
+        let (session, claude_session_id) = ClaudeSession::spawn(validated.clone(), extra_args, &self.config, claude_tx, resume_id).await?;
 
         {
             let mut s = self.session.write().await;
             *s = Some(session);
+        }
+        {
+            let mut sid = self.claude_session_id.write().await;
+            *sid = claude_session_id.clone();
         }
         {
             let mut wd = self.work_dir.write().await;
@@ -248,6 +300,8 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
+        // NOTE: we intentionally keep claude_session_id here so that a
+        // subsequent /claude can resume the same Claude session.
         Ok(())
     }
 
@@ -264,6 +318,28 @@ impl ClaudeController {
             }
             SessionState::Active => {
                 let msg = build_user_message(text);
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.send(msg).await?;
+                    Ok(())
+                } else {
+                    anyhow::bail!("{}", t!("controller.no_active_session"))
+                }
+            }
+        }
+    }
+
+    /// Send an arbitrary InputMessage (e.g. ControlResponse) to the active session.
+    pub async fn send_input(&self, msg: InputMessage) -> Result<()> {
+        let state = self.session_state.read().await.clone();
+        match state {
+            SessionState::Inactive => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Starting => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Active => {
                 let mut s = self.session.write().await;
                 if let Some(ref mut session) = *s {
                     session.send(msg).await?;
@@ -328,6 +404,26 @@ impl ClaudeController {
         rx.recv().await
     }
 
+    pub async fn get_claude_session_id(&self) -> Option<String> {
+        let sid = self.claude_session_id.read().await;
+        sid.clone()
+    }
+
+    pub async fn set_claude_session_id(&self, id: Option<String>) {
+        let mut sid = self.claude_session_id.write().await;
+        *sid = id;
+    }
+
+    pub async fn get_pending_resume_session_id(&self) -> Option<String> {
+        let sid = self.pending_resume_session_id.read().await;
+        sid.clone()
+    }
+
+    pub async fn set_pending_resume_session_id(&self, id: Option<String>) {
+        let mut sid = self.pending_resume_session_id.write().await;
+        *sid = id;
+    }
+
     async fn process_claude_event(
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
         pending_perm: &Arc<RwLock<Option<(String, String)>>>,
@@ -389,9 +485,96 @@ impl ClaudeController {
                 let _ = event_tx.send(ControllerEvent::Done);
             }
             OutputEvent::ControlRequest { .. } => {
-                if let Some((req_id, tool_name, _input)) = event.is_permission_request() {
-                    let _ = event_tx
-                        .send(ControllerEvent::PermissionRequest(req_id.clone(), tool_name.clone()));
+                if let Some((req_id, tool_name, input)) = event.is_permission_request() {
+                    let subtype = event.extract_control_subtype().unwrap_or_default();
+
+                    let dispatched = if tool_name == "AskUserQuestion" {
+                        if let Some(ref val) = input {
+                            if let Some(questions) = val.get("questions").and_then(|q| q.as_array()) {
+                                let parsed: Vec<QuestionItem> = questions
+                                    .iter()
+                                    .filter_map(|q| {
+                                        let question = q.get("question")?.as_str()?.to_string();
+                                        let header = q.get("header")?.as_str()?.to_string();
+                                        let multi_select = q.get("multi_select").and_then(|m| m.as_bool()).unwrap_or(false);
+                                        let options = q.get("options")?.as_array()?;
+                                        let parsed_options: Vec<QuestionOption> = options
+                                            .iter()
+                                            .filter_map(|o| {
+                                                let label = o.get("label")?.as_str()?.to_string();
+                                                let description = o.get("description")?.as_str()?.to_string();
+                                                Some(QuestionOption { label, description })
+                                            })
+                                            .collect();
+                                        Some(QuestionItem {
+                                            question,
+                                            header,
+                                            options: parsed_options,
+                                            multi_select,
+                                        })
+                                    })
+                                    .collect();
+                                if !parsed.is_empty() {
+                                    Some(ControllerEvent::QuestionRequest {
+                                        request_id: req_id.clone(),
+                                        questions: parsed,
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else if subtype == "confirm" {
+                        if let Some(ref val) = input {
+                            let prompt = val.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let options: Vec<String> = val
+                                .get("options")
+                                .and_then(|o| o.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                                .unwrap_or_default();
+                            Some(ControllerEvent::ConfirmRequest {
+                                request_id: req_id.clone(),
+                                prompt,
+                                options,
+                            })
+                        } else {
+                            None
+                        }
+                    } else if subtype == "select_option" {
+                        if let Some(ref val) = input {
+                            let prompt = val.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let options: Vec<String> = val
+                                .get("options")
+                                .and_then(|o| o.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                                .unwrap_or_default();
+                            Some(ControllerEvent::SelectRequest {
+                                request_id: req_id.clone(),
+                                prompt,
+                                options,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(ControllerEvent::PermissionRequest {
+                            request_id: req_id.clone(),
+                            tool_name: tool_name.clone(),
+                            input: input.clone(),
+                        })
+                    };
+
+                    let ev = dispatched.unwrap_or_else(|| ControllerEvent::PermissionRequest {
+                        request_id: req_id.clone(),
+                        tool_name: tool_name.clone(),
+                        input: input.clone(),
+                    });
+
+                    let _ = event_tx.send(ev);
                     let pp = pending_perm.clone();
                     let req_id = req_id.clone();
                     let tool_name = tool_name.clone();
