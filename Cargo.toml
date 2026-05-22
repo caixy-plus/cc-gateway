@@ -20,6 +20,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -67,6 +68,15 @@ fs2 = "0.4"
 
 # Async trait support (object-safe async methods in traits)
 async-trait = "0.1"
+
+# UUID generation
+uuid = { version = "1.16", features = ["v4", "serde"] }
+
+# HTTP server & WebUI
+axum = { version = "0.8", features = ["multipart"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+mime_guess = "2.0"
+rust-embed = { version = "8.3", features = ["include-exclude"] }
 
 # Unix signals
 [target.'cfg(unix)'.dependencies]
