@@ -65,7 +65,8 @@ impl SessionManager {
         claude_config: ClaudeConfig,
         show_thinking: bool,
     ) -> anyhow::Result<WebUISessionRuntime> {
-        let session = Session::new_webui(title, work_dir);
+        let mut session = Session::new_webui(title, work_dir);
+        session.active = false;
         let id = session.id.clone();
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             claude_config,
