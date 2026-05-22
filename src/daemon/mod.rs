@@ -83,11 +83,35 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     let mut confirmed = false;
     for _ in 0..10 {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-            if let Ok(found_pid) = pid_str.trim().parse::<u32>() {
-                if found_pid == pid && is_process_alive(pid) {
-                    confirmed = true;
-                    break;
+        if !is_process_alive(pid) {
+            break;
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows the PID file is locked and cannot be read by another
+            // process.  Fall back to checking whether the singleton port is
+            // already bound (run() binds it before writing the PID file).
+            let port = if let Some(ref path) = config_path {
+                ConfigLoader::load_from(path).map(|c| c.port).unwrap_or(17534)
+            } else {
+                ConfigLoader::load().map(|c| c.port).unwrap_or(17534)
+            };
+            let bind_addr = format!("127.0.0.1:{}", port);
+            if std::net::TcpListener::bind(&bind_addr).is_err() {
+                confirmed = true;
+                break;
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+                if let Ok(found_pid) = pid_str.trim().parse::<u32>() {
+                    if found_pid == pid {
+                        confirmed = true;
+                        break;
+                    }
                 }
             }
         }
@@ -200,20 +224,37 @@ pub async fn stop() -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    let pid_str = match fs::read_to_string(&pid_file) {
-        Ok(s) => s,
-        Err(_) => {
-            println!("{}", t!("daemon.not_running"));
-            return Ok(());
+    let mut pid: Option<u32> = None;
+
+    // Try reading the PID file first.
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(p) = pid_str.trim().parse::<u32>() {
+            pid = Some(p);
         }
-    };
-    let pid: u32 = match pid_str.trim().parse() {
-        Ok(p) => p,
-        Err(_) => {
-            let _ = fs::remove_file(&pid_file);
-            println!("{}", t!("daemon.stopped"));
-            return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        // On Windows the PID file may be locked; fall back to tasklist.
+        if pid.is_none() {
+            pid = std::process::Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq cc-gateway.exe", "/NH", "/FO", "CSV"])
+                .output()
+                .ok()
+                .and_then(|output| {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    stdout.lines().next().and_then(|line| {
+                        line.split(',').nth(1).and_then(|s| {
+                            s.trim_matches('"').parse::<u32>().ok()
+                        })
+                    })
+                });
         }
+    }
+
+    let Some(pid) = pid else {
+        println!("{}", t!("daemon.not_running"));
+        return Ok(());
     };
 
     if !is_process_alive(pid) {
@@ -290,12 +331,36 @@ pub async fn status() -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
+    let mut pid: Option<u32> = None;
+
     if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            if is_process_alive(pid) {
-                println!("{}", t_fmt!("daemon.running", PID = pid));
-                return Ok(());
-            }
+        if let Ok(p) = pid_str.trim().parse::<u32>() {
+            pid = Some(p);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if pid.is_none() {
+            pid = std::process::Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq cc-gateway.exe", "/NH", "/FO", "CSV"])
+                .output()
+                .ok()
+                .and_then(|output| {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    stdout.lines().next().and_then(|line| {
+                        line.split(',').nth(1).and_then(|s| {
+                            s.trim_matches('"').parse::<u32>().ok()
+                        })
+                    })
+                });
+        }
+    }
+
+    if let Some(pid) = pid {
+        if is_process_alive(pid) {
+            println!("{}", t_fmt!("daemon.running", PID = pid));
+            return Ok(());
         }
     }
 

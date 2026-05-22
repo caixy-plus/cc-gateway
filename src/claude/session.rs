@@ -23,6 +23,37 @@ fn resolve_cli_path(config_path: &str) -> String {
         return config_path.to_string();
     }
 
+    // On Windows, try resolving via `where` (handles .exe, .cmd, .bat, etc.)
+    #[cfg(windows)]
+    {
+        for search_name in [config_path, &format!("{}.exe", config_path)] {
+            if let Ok(output) = std::process::Command::new("cmd")
+                .args(["/C", "where", search_name])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // `where` may return multiple lines (e.g. npm installs both
+                // a shell script and a .cmd). Pick a line with a known
+                // Windows executable extension first.
+                let resolved = stdout
+                    .lines()
+                    .find(|line| {
+                        let lower = line.to_lowercase();
+                        lower.ends_with(".exe")
+                            || lower.ends_with(".cmd")
+                            || lower.ends_with(".bat")
+                    })
+                    .or_else(|| stdout.lines().next())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !resolved.is_empty() && std::path::Path::new(&resolved).exists() {
+                    return resolved;
+                }
+            }
+        }
+    }
+
     // Try to resolve via the user's shell (handles shell functions/aliases)
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let shell_cmd = format!("command -v {} 2>/dev/null", config_path);
