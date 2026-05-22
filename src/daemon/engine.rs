@@ -15,7 +15,7 @@ impl DaemonEngine {
         Self { config }
     }
 
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self, listener: tokio::net::TcpListener) -> Result<()> {
         let log_path = shellexpand::tilde(&self.config.log.file).to_string();
         crate::daemon::cleaner::start_background_task(
             log_path,
@@ -23,6 +23,9 @@ impl DaemonEngine {
             self.config.log.max_size_mb,
             self.config.media_retention_days,
         );
+
+        // Start history recorder for WebUI sessions
+        crate::history::recorder::start_recorder();
 
         // Start all enabled platforms concurrently
         let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();
@@ -59,6 +62,15 @@ impl DaemonEngine {
             platforms.push((Box::new(platform), handle));
         }
 
+        // Start HTTP server on the singleton port
+        let app = crate::web::server::create_app(&self.config);
+        let server_handle = tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                error!("HTTP server error: {}", e);
+            }
+        });
+        info!("HTTP server listening on http://127.0.0.1:{}", self.config.port);
+
         if platforms.is_empty() {
             info!("No platform enabled. Daemon is idle.");
         } else {
@@ -67,6 +79,10 @@ impl DaemonEngine {
 
         // Wait for shutdown signal
         self.wait_shutdown_signal().await?;
+
+        // Graceful shutdown: stop HTTP server
+        info!("Shutting down HTTP server...");
+        server_handle.abort();
 
         // Graceful shutdown: notify all platforms and their chat sessions
         if !platforms.is_empty() {

@@ -7,10 +7,13 @@ mod claude;
 mod command;
 mod config;
 mod daemon;
+mod history;
 mod i18n;
 mod platform;
 mod prompt;
+mod session;
 mod utils;
+mod web;
 
 use cli::interactive::run_interactive;
 

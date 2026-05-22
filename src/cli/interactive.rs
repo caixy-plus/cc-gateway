@@ -12,7 +12,9 @@ use rustyline::history::MemHistory;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::claude::controller::{ClaudeController, ControllerEvent};
+use crate::claude::controller::ClaudeController;
+#[cfg(test)]
+use crate::claude::controller::ControllerEvent;
 use crate::config::loader::ConfigLoader;
 use crate::t;
 
