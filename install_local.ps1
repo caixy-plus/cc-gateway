@@ -25,7 +25,30 @@ function Write-Msg($en, $zh) {
     }
 }
 
-Write-Msg "1. Building release version..." "1. 构建 release 版本..."
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$WebUiDir = Join-Path (Split-Path -Parent $ScriptDir) "cc-gateway-webui"
+
+if (Test-Path $WebUiDir -PathType Container) {
+    try {
+        npm --version | Out-Null
+        Write-Msg "1. Building frontend..." "1. 构建前端..."
+        Push-Location $WebUiDir
+        npm ci
+        npm run build
+        Pop-Location
+        $DistDir = Join-Path $ScriptDir "webui\dist"
+        if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
+        Copy-Item -Path (Join-Path $WebUiDir "dist\*") -Destination $DistDir -Recurse -Force
+        Write-Msg "   Frontend embedded" "   前端已嵌入"
+    } catch {
+        Write-Msg "   Frontend build skipped: $_" "   跳过前端构建: $_"
+    }
+} else {
+    Write-Msg "   Frontend source not found, skipping..." "   未找到前端源码，跳过..."
+}
+
+Write-Msg "2. Building release version..." "2. 构建 release 版本..."
 cargo build --release
 
 Write-Msg "2. Stopping running daemon (if any)..." "2. 停止运行中的 daemon（如有）..."

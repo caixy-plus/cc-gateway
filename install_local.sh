@@ -44,7 +44,25 @@ with open('$CONFIG_FILE', 'w') as f:
     fi
 fi
 
-echo "1. 构建 release 版本"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WEBUI_DIR="$(dirname "$SCRIPT_DIR")/cc-gateway-webui"
+
+# Build frontend if source exists
+if [ -d "$WEBUI_DIR" ] && command -v npm >/dev/null 2>&1; then
+    echo "1. 构建前端 ..."
+    cd "$WEBUI_DIR"
+    npm ci
+    npm run build
+    rm -rf "$SCRIPT_DIR/webui/dist"
+    mkdir -p "$SCRIPT_DIR/webui/dist"
+    cp -r "$WEBUI_DIR/dist"/* "$SCRIPT_DIR/webui/dist/"
+    cd "$SCRIPT_DIR"
+    echo "   前端已嵌入"
+else
+    echo "1. 跳过前端构建（源码未找到或缺少 npm）"
+fi
+
+echo "2. 构建 release 版本"
 cargo build --release
 
 echo "2. 复制到 PATH（避免 inode 复用问题）"
