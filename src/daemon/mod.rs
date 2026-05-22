@@ -141,10 +141,14 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
         ConfigLoader::load()?
     };
 
-    // --- Singleton guard 1: bind to a fixed local port ---
+    // --- Singleton guard 1: bind to a fixed local port (will be used as HTTP server) ---
     let bind_addr = format!("127.0.0.1:{}", config.port);
-    let _singleton_socket = std::net::TcpListener::bind(&bind_addr)
+    let std_listener = std::net::TcpListener::bind(&bind_addr)
         .with_context(|| format!("Another cc-gateway daemon is already running (port {} in use)", config.port))?;
+    std_listener.set_nonblocking(true)
+        .context("Failed to set listener to non-blocking")?;
+    let tokio_listener = tokio::net::TcpListener::from_std(std_listener)
+        .context("Failed to convert std listener to tokio listener")?;
 
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
@@ -212,7 +216,7 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
 
     // Start the daemon engine
     let engine = engine::DaemonEngine::new(config);
-    engine.run().await?;
+    engine.run(tokio_listener).await?;
 
     // Cleanup: lock is released when pid_lock drops.
     let _ = fs::remove_file(&pid_file);
