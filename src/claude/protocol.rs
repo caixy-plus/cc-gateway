@@ -211,6 +211,13 @@ impl OutputEvent {
             _ => None,
         }
     }
+
+    pub fn extract_control_subtype(&self) -> Option<String> {
+        match self {
+            OutputEvent::ControlRequest { request, .. } => Some(request.subtype.clone()),
+            _ => None,
+        }
+    }
 }
 
 pub fn build_user_message(text: &str) -> InputMessage {

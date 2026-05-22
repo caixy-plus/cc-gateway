@@ -95,9 +95,33 @@ impl EventAccumulator {
                 }
                 false
             }
-            ControllerEvent::PermissionRequest(req_id, tool_name) => {
+            ControllerEvent::PermissionRequest { request_id, tool_name, .. } => {
                 self.flush_text();
-                self.accumulated.push_str(&format_permission_request(req_id, tool_name));
+                self.accumulated.push_str(&format_permission_request(request_id, tool_name));
+                self.accumulated.push('\n');
+                false
+            }
+            ControllerEvent::ConfirmRequest { request_id, prompt, options } => {
+                self.flush_text();
+                self.accumulated.push_str(&format!("Confirm: {} (id: {})\nOptions: {:?}\n", prompt, request_id, options));
+                self.accumulated.push('\n');
+                false
+            }
+            ControllerEvent::SelectRequest { request_id, prompt, options } => {
+                self.flush_text();
+                self.accumulated.push_str(&format!("Select: {} (id: {})\nOptions: {:?}\n", prompt, request_id, options));
+                self.accumulated.push('\n');
+                false
+            }
+            ControllerEvent::QuestionRequest { request_id, questions } => {
+                self.flush_text();
+                self.accumulated.push_str(&format!("Question (id: {})\n", request_id));
+                for q in questions {
+                    self.accumulated.push_str(&format!("  {}: {}\n", q.header, q.question));
+                    for opt in &q.options {
+                        self.accumulated.push_str(&format!("    - {}: {}\n", opt.label, opt.description));
+                    }
+                }
                 self.accumulated.push('\n');
                 false
             }

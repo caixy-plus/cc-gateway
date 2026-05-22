@@ -281,9 +281,9 @@ impl CliOutput {
                 }
                 false
             }
-            ControllerEvent::PermissionRequest(req_id, tool_name) => {
+            ControllerEvent::PermissionRequest { request_id, tool_name, .. } => {
                 self.flush_text();
-                self.lines.push(format_permission_request(req_id, tool_name));
+                self.lines.push(format_permission_request(request_id, tool_name));
                 false
             }
             ControllerEvent::Error(err) => {
@@ -294,6 +294,30 @@ impl CliOutput {
             ControllerEvent::Done => {
                 self.flush_text();
                 true
+            }
+            ControllerEvent::ConfirmRequest { request_id, prompt, options } => {
+                self.flush_text();
+                self.lines.push(format!(
+                    "Confirm (id: {}): {}\nOptions: {:?}",
+                    request_id, prompt, options
+                ));
+                false
+            }
+            ControllerEvent::SelectRequest { request_id, prompt, options } => {
+                self.flush_text();
+                self.lines.push(format!(
+                    "Select (id: {}): {}\nOptions: {:?}",
+                    request_id, prompt, options
+                ));
+                false
+            }
+            ControllerEvent::QuestionRequest { request_id, questions } => {
+                self.flush_text();
+                self.lines.push(format!(
+                    "Question (id: {}): {:?}",
+                    request_id, questions
+                ));
+                false
             }
         }
     }
@@ -516,7 +540,11 @@ mod tests {
     fn test_cli_output_permission_request_flushes_text() {
         let mut out = CliOutput::new();
         out.process_event(&ControllerEvent::Text("pre".into()));
-        out.process_event(&ControllerEvent::PermissionRequest("req-1".into(), "Bash".into()));
+        out.process_event(&ControllerEvent::PermissionRequest {
+            request_id: "req-1".into(),
+            tool_name: "Bash".into(),
+            input: None,
+        });
         assert!(out.lines[0].contains("pre"));
         assert!(out.lines[1].contains("Permission"));
     }
