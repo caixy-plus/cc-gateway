@@ -16,6 +16,7 @@ use ratatui::{
 };
 use regex::Regex;
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -23,17 +24,19 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::command::builtin::TUI_EVENT_READER_PAUSED;
 
-use crate::claude::controller::{ClaudeController, ControllerEvent};
-use crate::command::router::CommandRouter;
+use crate::claude::controller::{ClaudeController, QuestionItem};
+use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
+use crate::command::{CommandAction, CommandRouter};
 use crate::cli::interactive::format_banner;
-use crate::t;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+use crate::t_fmt;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /// Strip ANSI escape sequences so text renders cleanly in ratatui.
-fn strip_ansi(s: &str) -> String {
+pub(crate) fn strip_ansi(s: &str) -> String {
     thread_local! {
         static RE: Regex = Regex::new("\x1b\\[[0-9;]*m").unwrap();
     }
@@ -41,7 +44,7 @@ fn strip_ansi(s: &str) -> String {
 }
 
 /// Split a string into display lines (respecting embedded newlines).
-fn to_lines(s: &str) -> Vec<String> {
+pub(crate) fn to_lines(s: &str) -> Vec<String> {
     if s.is_empty() {
         return vec![String::new()];
     }
@@ -49,31 +52,143 @@ fn to_lines(s: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Poll events from ClaudeEventPoller → main TUI loop
+// ---------------------------------------------------------------------------
+
+enum TuiPollEvent {
+    Flush(String, bool),
+    PermissionRequest(String, String),
+    ConfirmRequest(String, String, Vec<String>),
+    SelectRequest(String, String, Vec<String>),
+    QuestionRequest(String, Vec<QuestionItem>),
+    Done,
+}
+
+struct TuiEventSink {
+    tx: mpsc::UnboundedSender<TuiPollEvent>,
+}
+
+#[async_trait::async_trait]
+impl EventPollSink for TuiEventSink {
+    async fn flush(&mut self, text: &str, is_done: bool) -> Result<()> {
+        let _ = self.tx.send(TuiPollEvent::Flush(text.to_string(), is_done));
+        Ok(())
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        request_id: &str,
+        tool_name: &str,
+        _input: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let _ = self
+            .tx
+            .send(TuiPollEvent::PermissionRequest(request_id.to_string(), tool_name.to_string()));
+        Ok(())
+    }
+
+    async fn on_confirm_request(
+        &mut self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Result<()> {
+        let _ = self.tx.send(TuiPollEvent::ConfirmRequest(
+            request_id.to_string(),
+            prompt.to_string(),
+            options.to_vec(),
+        ));
+        Ok(())
+    }
+
+    async fn on_select_request(
+        &mut self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Result<()> {
+        let _ = self.tx.send(TuiPollEvent::SelectRequest(
+            request_id.to_string(),
+            prompt.to_string(),
+            options.to_vec(),
+        ));
+        Ok(())
+    }
+
+    async fn on_question_request(
+        &mut self,
+        request_id: &str,
+        questions: &[QuestionItem],
+    ) -> Result<()> {
+        let _ = self
+            .tx
+            .send(TuiPollEvent::QuestionRequest(request_id.to_string(), questions.to_vec()));
+        Ok(())
+    }
+
+}
+
+/// Spawn a background task that runs the ClaudeEventPoller and forwards
+/// events to the main TUI loop via `poll_tx`. The task loops as long as
+/// the session remains active, so multiple user messages within one session
+/// are all handled.
+fn spawn_poller_task(
+    controller: Arc<Mutex<ClaudeController>>,
+    poll_tx: mpsc::UnboundedSender<TuiPollEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            let poller = {
+                let ctrl = controller.lock().await;
+                if !ctrl.is_session_active().await {
+                    break;
+                }
+                ClaudeEventPoller::from_controller(&*ctrl)
+            };
+
+            let mut sink = TuiEventSink { tx: poll_tx.clone() };
+            if let Err(e) = poller.run(&mut sink).await {
+                tracing::warn!("[TUI] Poller error: {}", e);
+            }
+
+            // Notify main loop that this response stream is done
+            let _ = poll_tx.send(TuiPollEvent::Done);
+
+            // If session is still active, loop and wait for the next response
+            let still_active = {
+                let ctrl = controller.lock().await;
+                ctrl.is_session_active().await
+            };
+            if !still_active {
+                break;
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Message model
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, PartialEq)]
-enum MsgRole {
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum MsgRole {
     User,
     Claude,
     System,
-    Thinking,
-    Tool,
-    Error,
 }
 
-#[derive(Clone)]
-struct ChatMessage {
-    role: MsgRole,
-    lines: Vec<String>,
+#[derive(Clone, Debug)]
+pub(crate) struct ChatMessage {
+    pub(crate) role: MsgRole,
+    pub(crate) lines: Vec<String>,
 }
 
 impl ChatMessage {
-    fn new(role: MsgRole, text: &str) -> Self {
+    pub(crate) fn new(role: MsgRole, text: &str) -> Self {
         Self { role, lines: to_lines(&strip_ansi(text)) }
     }
 
-    fn append(&mut self, text: &str) {
+    pub(crate) fn append(&mut self, text: &str) {
         let clean = strip_ansi(text);
         if let Some(last) = self.lines.last_mut() {
             last.push_str(&clean);
@@ -87,30 +202,31 @@ impl ChatMessage {
 // App state
 // ---------------------------------------------------------------------------
 
-struct App {
-    messages: Vec<ChatMessage>,
-    input: String,
-    input_cursor: usize,
-    scroll_offset: usize,
-    claude_busy: bool,
-    needs_claude_response: bool,
-    session_active: bool,
-    work_dir: String,
-    banner_shown: bool,
+pub(crate) struct App {
+    pub(crate) messages: Vec<ChatMessage>,
+    pub(crate) input: String,
+    pub(crate) input_cursor: usize,
+    pub(crate) scroll_offset: usize,
+    pub(crate) claude_busy: bool,
+    pub(crate) needs_claude_response: bool,
+    pub(crate) session_active: bool,
+    pub(crate) banner_shown: bool,
     /// Track consecutive thinking events for dedup.
-    last_was_thinking: bool,
+    pub(crate) last_was_thinking: bool,
     /// Available slash commands for Tab completion.
-    commands: Vec<String>,
+    pub(crate) commands: Vec<String>,
     /// Current completion match list (recomputed on input change).
-    completion_matches: Vec<String>,
+    pub(crate) completion_matches: Vec<String>,
     /// Index within completion_matches for cycling.
-    completion_index: usize,
+    pub(crate) completion_index: usize,
     /// Last input that triggered a completion (to detect change).
-    last_input_for_completion: String,
+    pub(crate) last_input_for_completion: String,
+    /// ID of the implicit TUI ChannelSession.
+    pub(crate) channel_id: String,
 }
 
 impl App {
-    fn new() -> Self {
+    pub(crate) fn new(channel_id: String) -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -119,7 +235,6 @@ impl App {
             claude_busy: false,
             needs_claude_response: false,
             session_active: false,
-            work_dir: String::new(),
             banner_shown: false,
             last_was_thinking: false,
             commands: vec![
@@ -131,18 +246,19 @@ impl App {
                 "/pwd".into(),
                 "/ll".into(),
                 "/mkdir".into(),
-                "/show-thinking-toggle".into(),
                 "/show-thinking".into(),
                 "/hide-thinking".into(),
+                "/claude-history".into(),
             ],
             completion_matches: Vec::new(),
             completion_index: 0,
             last_input_for_completion: String::new(),
+            channel_id,
         }
     }
 
     /// Return the suffix of the first matching command for inline hint display.
-    fn compute_inline_hint(&self) -> Option<String> {
+    pub(crate) fn compute_inline_hint(&self) -> Option<String> {
         if self.input.is_empty() || !self.input.starts_with('/') {
             return None;
         }
@@ -152,48 +268,27 @@ impl App {
             .map(|cmd| cmd[self.input.len()..].to_string())
     }
 
-    fn prompt_prefix(&self) -> String {
-        let dir = if self.work_dir.is_empty() {
-            std::env::current_dir()
-                .map(|p| {
-                    let s = p.to_string_lossy().to_string();
-                    let parts: Vec<&str> = s.split('/').collect();
-                    if parts.len() > 2 {
-                        parts[parts.len() - 2..].join("/")
-                    } else {
-                        s
-                    }
-                })
-                .unwrap_or_else(|_| "~".to_string())
-        } else {
-            let parts: Vec<&str> = self.work_dir.split('/').collect();
-            if parts.len() > 2 {
-                parts[parts.len() - 2..].join("/")
-            } else {
-                self.work_dir.clone()
-            }
-        };
-
+    pub(crate) fn prompt_prefix(&self) -> String {
         if self.session_active {
-            format!("\u{1f4ac} {} \u{25b6} ", dir)
+            "\u{1f4ac} \u{25b6} ".to_string()
         } else {
-            format!("\u{25cb} {} > ", dir)
+            "\u{25cb} > ".to_string()
         }
     }
 
-    fn prompt_display_width(&self) -> usize {
+    pub(crate) fn prompt_display_width(&self) -> usize {
         let prefix = self.prompt_prefix();
         UnicodeWidthStr::width(prefix.as_str())
     }
 
-    fn add_message(&mut self, role: MsgRole, text: &str) {
+    pub(crate) fn add_message(&mut self, role: MsgRole, text: &str) {
         if text.trim().is_empty() && role == MsgRole::System {
             return;
         }
         self.messages.push(ChatMessage::new(role, text));
     }
 
-    fn update_last_message(&mut self, role: MsgRole, text: &str) {
+    pub(crate) fn update_last_message(&mut self, role: MsgRole, text: &str) {
         if text.is_empty() {
             return;
         }
@@ -222,9 +317,7 @@ fn render(f: &mut Frame, app: &App) {
     for msg in &app.messages {
         let color = match msg.role {
             MsgRole::User => Some(Color::Gray),
-            MsgRole::System | MsgRole::Thinking => Some(Color::DarkGray),
-            MsgRole::Tool => Some(Color::Cyan),
-            MsgRole::Error => Some(Color::Red),
+            MsgRole::System => Some(Color::DarkGray),
             MsgRole::Claude => None,
         };
         for line in &msg.lines {
@@ -455,85 +548,92 @@ async fn process_submit(
     router: &CommandRouter,
     controller: &Arc<Mutex<ClaudeController>>,
 ) -> Result<SubmitResult> {
-    // /quit when session active
-    if text == "/quit" && app.session_active {
-        {
-            let ctrl = controller.lock().await;
-            let _ = ctrl.stop_session().await;
+    let action = router.route(text).await;
+
+    match action {
+        CommandAction::NoOp => Ok(SubmitResult { poll_claude: false }),
+
+        CommandAction::Reply(msg) => {
+            app.add_message(MsgRole::System, &msg);
+            Ok(SubmitResult { poll_claude: false })
         }
-        app.session_active = false;
-        app.add_message(MsgRole::System, &t!("cli.session_stopped"));
-        return Ok(SubmitResult { poll_claude: false });
-    }
 
-    // /quit when session inactive — caller handles exit
-    if text == "/quit" && !app.session_active {
-        app.add_message(MsgRole::System, &t!("cli.goodbye"));
-        return Ok(SubmitResult { poll_claude: false });
-    }
+        CommandAction::StopSession => {
+            if let Some(reply) = router.execute(CommandAction::StopSession).await {
+                app.add_message(MsgRole::System, &reply);
+            }
+            let _ = GLOBAL_CHANNEL_SESSIONS.stop_channel_session(&app.channel_id).await;
+            app.session_active = false;
+            Ok(SubmitResult { poll_claude: false })
+        }
 
-    let response = router.handle(text).await;
-
-    match response {
-        Some(reply) => {
-            app.add_message(MsgRole::System, &reply);
-
-            if text.starts_with("/claude") {
+        CommandAction::StartSession { work_dir, args } => {
+            let result = router
+                .execute(CommandAction::StartSession {
+                    work_dir: work_dir.clone(),
+                    args,
+                })
+                .await;
+            if let Some(ref reply) = result {
+                app.add_message(MsgRole::System, reply);
+            }
+            let ctrl = controller.lock().await;
+            if ctrl.is_session_active().await {
                 app.session_active = true;
-                {
-                    let ctrl = controller.lock().await;
-                    app.work_dir = ctrl.get_work_dir().await;
-                }
             }
             Ok(SubmitResult { poll_claude: false })
         }
-        None => {
-            app.add_message(MsgRole::User, text);
-            app.needs_claude_response = true;
-            Ok(SubmitResult { poll_claude: true })
+
+        CommandAction::ChangeDir(_) | CommandAction::ChangeDirDefault => {
+            let result = router.execute(action.clone()).await;
+            if let Some(ref reply) = result {
+                app.add_message(MsgRole::System, reply);
+            }
+            let ctrl = controller.lock().await;
+            let wd = ctrl.get_work_dir().await;
+            drop(ctrl);
+            if !wd.is_empty() {
+                let _ = GLOBAL_CHANNEL_SESSIONS
+                    .switch_work_dir(&app.channel_id, PathBuf::from(wd))
+                    .await;
+            }
+            Ok(SubmitResult { poll_claude: false })
+        }
+
+        CommandAction::ForwardToClaude(msg) => {
+            let ctrl = controller.lock().await;
+            match ctrl.send_message(&msg).await {
+                Ok(()) => {
+                    app.add_message(MsgRole::User, text);
+                    app.needs_claude_response = true;
+                    Ok(SubmitResult { poll_claude: true })
+                }
+                Err(e) => {
+                    app.add_message(MsgRole::System, &t_fmt!("forward.failed_send", ERR = e));
+                    Ok(SubmitResult { poll_claude: false })
+                }
+            }
+        }
+
+        other => {
+            if let Some(reply) = router.execute(other).await {
+                app.add_message(MsgRole::System, &reply);
+            }
+            Ok(SubmitResult { poll_claude: false })
         }
     }
 }
 
-/// Process a single Claude event, updating the app state.
+/// Process a single poll event from the ClaudeEventPoller, updating app state.
 /// Returns true when the response stream is done.
-fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
+fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
     match event {
-        ControllerEvent::Text(text) => {
+        TuiPollEvent::Flush(text, _is_done) => {
             app.last_was_thinking = false;
             app.update_last_message(MsgRole::Claude, text);
             false
         }
-        ControllerEvent::Thinking(thinking) => {
-            let display = if thinking.is_empty() {
-                "\u{1f4ad} Thinking...".to_string()
-            } else {
-                format!("\u{1f4ad} Thinking... ({} chars)", thinking.len())
-            };
-            if !app.last_was_thinking {
-                app.add_message(MsgRole::Thinking, &display);
-            }
-            app.last_was_thinking = true;
-            false
-        }
-        ControllerEvent::ToolUse(name, input) => {
-            let first_line = input.lines().next().unwrap_or("");
-            let text = if first_line.is_empty() {
-                format!("\u{1f527} Tool: {}", name)
-            } else {
-                format!("\u{1f527} Tool: {}\n  {}", name, first_line)
-            };
-            app.add_message(MsgRole::Tool, &text);
-            false
-        }
-        ControllerEvent::ToolResult(content, is_error) => {
-            if !content.is_empty() {
-                let role = if *is_error { MsgRole::Error } else { MsgRole::System };
-                app.add_message(role, content);
-            }
-            false
-        }
-        ControllerEvent::PermissionRequest { request_id, tool_name, .. } => {
+        TuiPollEvent::PermissionRequest(request_id, tool_name) => {
             let text = format!(
                 "Permission Required: {} (id: {})\n  /allow or /deny",
                 tool_name, request_id
@@ -541,7 +641,7 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
             app.add_message(MsgRole::System, &text);
             false
         }
-        ControllerEvent::ConfirmRequest { request_id, prompt, options } => {
+        TuiPollEvent::ConfirmRequest(request_id, prompt, options) => {
             let text = format!(
                 "Confirm (id: {}): {}\nOptions: {:?}",
                 request_id, prompt, options
@@ -549,7 +649,7 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
             app.add_message(MsgRole::System, &text);
             false
         }
-        ControllerEvent::SelectRequest { request_id, prompt, options } => {
+        TuiPollEvent::SelectRequest(request_id, prompt, options) => {
             let text = format!(
                 "Select (id: {}): {}\nOptions: {:?}",
                 request_id, prompt, options
@@ -557,7 +657,7 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
             app.add_message(MsgRole::System, &text);
             false
         }
-        ControllerEvent::QuestionRequest { request_id, questions } => {
+        TuiPollEvent::QuestionRequest(request_id, questions) => {
             let mut text = format!("Questions (id: {}):\n", request_id);
             for q in questions {
                 text.push_str(&format!("  {}: {}\n", q.header, q.question));
@@ -568,11 +668,7 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
             app.add_message(MsgRole::System, &text);
             false
         }
-        ControllerEvent::Error(err) => {
-            app.add_message(MsgRole::Error, err);
-            false
-        }
-        ControllerEvent::Done => true,
+        TuiPollEvent::Done => true,
     }
 }
 
@@ -583,20 +679,20 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
 pub async fn run_tui(
     controller: Arc<Mutex<ClaudeController>>,
     router: CommandRouter,
-    _event_rx: Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
+    channel_id: String,
 ) -> Result<()> {
-    let mut app = App::new();
+    let mut app = App::new(channel_id);
+    {
+        let ctrl = controller.lock().await;
+        if ctrl.is_session_active().await {
+            app.session_active = true;
+        }
+    }
 
     // Show banner
     let banner = format_banner();
     app.add_message(MsgRole::System, &banner);
     app.banner_shown = true;
-
-    // Initial work dir
-    {
-        let ctrl = controller.lock().await;
-        app.work_dir = ctrl.get_work_dir().await;
-    }
 
     // --- Setup terminal ---
     let mut stdout = io::stdout();
@@ -622,6 +718,9 @@ pub async fn run_tui(
         }
     });
 
+    // --- Poll channel (ClaudeEventPoller → main loop) ---
+    let (poll_tx, mut poll_rx) = mpsc::unbounded_channel::<TuiPollEvent>();
+
     // --- Initial render ---
     terminal.draw(|f| render(f, &app))?;
 
@@ -638,14 +737,6 @@ pub async fn run_tui(
     let result: Result<()> = async {
         loop {
             if app.claude_busy {
-                // Interleave keyboard input and Claude event polling.
-                // The event_rx clone shares the underlying mpsc receiver,
-                // so each clone receives the same event stream.
-                let event_rx = {
-                    let ctrl = controller.lock().await;
-                    ctrl.event_rx_clone()
-                };
-
                 tokio::select! {
                     key_opt = key_rx.recv() => {
                         match key_opt {
@@ -672,13 +763,10 @@ pub async fn run_tui(
                             None => return Ok(()),
                         }
                     }
-                    event_opt = async {
-                        let mut rx = event_rx.lock().await;
-                        rx.recv().await
-                    } => {
-                        match event_opt {
+                    poll_opt = poll_rx.recv() => {
+                        match poll_opt {
                             Some(event) => {
-                                let done = handle_claude_event(&event, &mut app);
+                                let done = handle_poll_event(&event, &mut app);
                                 if done {
                                     app.claude_busy = false;
                                     app.needs_claude_response = false;
@@ -686,7 +774,6 @@ pub async fn run_tui(
                                 }
                             }
                             None => {
-                                // Channel closed — stop polling
                                 app.claude_busy = false;
                                 app.needs_claude_response = false;
                                 app.last_was_thinking = false;
@@ -707,6 +794,9 @@ pub async fn run_tui(
 
                                 if submit.poll_claude {
                                     app.claude_busy = true;
+                                    // Spawn the poller background task now that
+                                    // we expect a Claude response.
+                                    spawn_poller_task(controller.clone(), poll_tx.clone());
                                 }
 
                                 // /quit when inactive exits

@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json;
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::claude::mcp_server::McpContext;
 use crate::claude::protocol::{InputMessage, OutputEvent};
 use crate::config::model::ClaudeConfig;
 
@@ -21,9 +23,10 @@ pub struct ClaudeSession {
     stdin: tokio::process::ChildStdin,
     #[allow(dead_code)]
     work_dir: String,
+    mcp_config_path: Option<PathBuf>,
 }
 
-fn resolve_cli_path(config_path: &str) -> String {
+pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     // If it's an absolute path and exists, use it directly
     let path = std::path::PathBuf::from(config_path);
     if path.is_absolute() && path.exists() {
@@ -99,6 +102,7 @@ impl ClaudeSession {
         config: &ClaudeConfig,
         event_tx: mpsc::UnboundedSender<OutputEvent>,
         resume_session_id: Option<String>,
+        mcp_context: Option<McpContext>,
     ) -> Result<(Self, Option<String>)> {
         let cli_path = resolve_cli_path(&config.cli_path);
 
@@ -124,6 +128,34 @@ impl ClaudeSession {
             args.push("--resume".to_string());
             args.push(sid.clone());
         }
+
+        // Generate MCP config file if context is provided
+        let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
+            let config_path = std::env::temp_dir()
+                .join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
+            let config_json = serde_json::json!({
+                "mcpServers": {
+                    "cc-gateway": {
+                        "command": std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cc-gateway")),
+                        "args": ["_mcp-server"],
+                        "env": {
+                            "CC_GATEWAY_FEISHU_APP_ID": mcp_ctx.feishu_app_id,
+                            "CC_GATEWAY_FEISHU_APP_SECRET": mcp_ctx.feishu_app_secret,
+                            "CC_GATEWAY_FEISHU_CHAT_ID": mcp_ctx.chat_id,
+                            "CC_GATEWAY_FEISHU_RECEIVE_ID_TYPE": mcp_ctx.receive_id_type,
+                        }
+                    }
+                }
+            });
+            let content = serde_json::to_string_pretty(&config_json)?;
+            tokio::fs::write(&config_path, &content).await?;
+            info!("Generated MCP config at {:?}", config_path);
+            args.push("--mcp-config".to_string());
+            args.push(config_path.to_string_lossy().to_string());
+            Some(config_path)
+        } else {
+            None
+        };
 
         // Append any extra args passed via /claude <cmd>
         for arg in extra_args {
@@ -189,6 +221,7 @@ impl ClaudeSession {
                 child,
                 stdin,
                 work_dir,
+                mcp_config_path,
             },
             claude_session_id,
         ))
@@ -240,8 +273,31 @@ impl ClaudeSession {
             self.child.wait(),
         )
         .await;
+
+        // Clean up MCP config file
+        if let Some(ref path) = self.mcp_config_path {
+            if let Err(e) = std::fs::remove_file(path) {
+                warn!("Failed to remove MCP config file {:?}: {}", path, e);
+            }
+        }
+
         info!("Claude session stopped");
         Ok(())
+    }
+
+    /// Check whether the child process is still running.
+    pub fn is_alive(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                warn!("Claude process exited with status: {}", status);
+                false
+            }
+            Err(e) => {
+                warn!("Failed to check Claude process status: {}", e);
+                false
+            }
+        }
     }
 
     async fn stdout_reader(
@@ -305,38 +361,7 @@ impl ClaudeSession {
             child,
             stdin,
             work_dir: ".".to_string(),
+            mcp_config_path: None,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_resolve_cli_path_absolute_exists() {
-        // Test with a known absolute path that exists
-        let path = std::env::current_exe().unwrap();
-        let path_str = path.to_string_lossy().to_string();
-        let resolved = resolve_cli_path(&path_str);
-        assert_eq!(resolved, path_str);
-    }
-
-    #[test]
-    fn test_resolve_cli_path_fallback() {
-        // Test with a non-existent path that won't resolve via shell
-        let resolved = resolve_cli_path("this_binary_definitely_does_not_exist_12345");
-        assert_eq!(resolved, "this_binary_definitely_does_not_exist_12345");
-    }
-
-    #[test]
-    fn test_resolve_cli_path_resolves_shell_command() {
-        // 'ls' should exist on most Unix systems
-        #[cfg(unix)]
-        {
-            let resolved = resolve_cli_path("ls");
-            assert_ne!(resolved, "ls"); // Should be resolved to absolute path
-            assert!(resolved.starts_with('/'));
-        }
     }
 }

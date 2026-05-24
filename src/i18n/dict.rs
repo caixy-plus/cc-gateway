@@ -276,6 +276,10 @@ pub fn t(key: &str) -> &str {
         },
 
         // command/builtin.rs
+        "builtin.help" => match lang {
+            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current claude session\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /claude [args...]    Start a new Claude session\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Claude Thinking\n  /hide-thinking       Hide Claude Thinking\n  /claude-history      Show recent Claude sessions\nAny other text is sent directly to Claude Code.",
+            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前 Claude 会话\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /claude [args...]    启动新的 Claude 会话\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示 Claude Thinking\n  /hide-thinking       隐藏 Claude Thinking\n  /claude-history      显示最近的 Claude 会话\n任何其他文本将直接发送给 Claude Code。",
+        },
         "builtin.help_title" => match lang {
             Language::En => "cc-gateway commands:",
             Language::ZhCN => "cc-gateway 命令:",
@@ -289,20 +293,16 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "  /quit                退出当前 Claude会话或退出 cc-gateway (飞书中无效)",
         },
         "builtin.help_cd" => match lang {
-            Language::En => "  /cd <path>           Change working directory and restart Claude",
-            Language::ZhCN => "  /cd <path>           更改工作目录并重启 Claude",
+            Language::En => "  /cd <path>           Change working directory",
+            Language::ZhCN => "  /cd <path>           更改工作目录",
         },
         "builtin.help_cd_default" => match lang {
             Language::En => "  /cd_default          Change working directory to the default directory",
             Language::ZhCN => "  /cd_default          将工作目录更改为默认目录",
         },
         "builtin.help_claude" => match lang {
-            Language::En => "  /claude [args...]    Start or restart Claude session (pass args to Claude CLI). Use /claude --new to force a fresh session",
-            Language::ZhCN => "  /claude [args...]    启动或重启 Claude 会话 (传递参数给 Claude CLI)。使用 /claude --new 强制开启全新会话",
-        },
-        "builtin.help_claude_resume" => match lang {
-            Language::En => "  /claude-resume <id>  Set a specific Claude session ID to resume on next /claude",
-            Language::ZhCN => "  /claude-resume <id>  设置特定的 Claude 会话 ID，下次 /claude 时恢复",
+            Language::En => "  /claude [args...]    Start a new Claude session (pass args to Claude CLI)",
+            Language::ZhCN => "  /claude [args...]    启动新的 Claude 会话 (传递参数给 Claude CLI)",
         },
         "builtin.help_pwd" => match lang {
             Language::En => "  /pwd                 Show current working directory",
@@ -315,10 +315,6 @@ pub fn t(key: &str) -> &str {
         "builtin.help_mkdir" => match lang {
             Language::En => "  /mkdir <dirname>     Create a new directory",
             Language::ZhCN => "  /mkdir <目录名>       创建新目录",
-        },
-        "builtin.help_show_thinking_toggle" => match lang {
-            Language::En => "  /show-thinking-toggle Toggle Claude Thinking display",
-            Language::ZhCN => "  /show-thinking-toggle 切换 Claude Thinking 显示",
         },
         "builtin.help_show_thinking" => match lang {
             Language::En => "  /show-thinking         Always show Claude Thinking content",
@@ -360,9 +356,9 @@ pub fn t(key: &str) -> &str {
             Language::En => "Claude session started in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat with Claude.\x1b[0m",
             Language::ZhCN => "Claude 会话已启动于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 与 Claude 对话。\x1b[0m",
         },
-        "builtin.new_session_started" => match lang {
-            Language::En => "New Claude session started in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat with Claude.\x1b[0m",
-            Language::ZhCN => "新的 Claude 会话已启动于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 与 Claude 对话。\x1b[0m",
+        "builtin.session_resumed" => match lang {
+            Language::En => "Claude session resumed in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat with Claude.\x1b[0m",
+            Language::ZhCN => "Claude 会话已恢复于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 与 Claude 对话。\x1b[0m",
         },
         "builtin.failed_start_claude" => match lang {
             Language::En => "Failed to start Claude: {ERR}",
@@ -441,12 +437,12 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "最近的 Claude 会话:",
         },
         "builtin.resume_hint" => match lang {
-            Language::En => "Use /claude-history <n> or /claude-resume <session_id> to resume a session.",
-            Language::ZhCN => "使用 /claude-history <n> 或 /claude-resume <session_id> 恢复会话。",
+            Language::En => "Use /claude-history <n> to select a session to resume.",
+            Language::ZhCN => "使用 /claude-history <n> 选择要恢复的会话。",
         },
         "builtin.resume_session_set" => match lang {
-            Language::En => "Resume session set: {SID}... Use /claude to start.",
-            Language::ZhCN => "恢复会话已设置: {SID}... 使用 /claude 启动。",
+            Language::En => "Resume session set: {SID}",
+            Language::ZhCN => "恢复会话已设置: {SID}",
         },
         "builtin.invalid_history_index" => match lang {
             Language::En => "Invalid history index.",
@@ -460,11 +456,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "Failed to read history: {ERR}",
             Language::ZhCN => "读取历史失败: {ERR}",
         },
-        "builtin.claude_resume_usage" => match lang {
-            Language::En => "Usage: /claude-resume <session_id>",
-            Language::ZhCN => "用法: /claude-resume <session_id>",
-        },
-
         // command/forward.rs
         "forward.no_session" => match lang {
             Language::En => "No active Claude session. Use /claude to start one, or type a builtin command like /help.\n\nYou said: {MSG}",
@@ -547,8 +538,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /show-thinking-toggle",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /show-thinking-toggle",
+            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
         },
 
         "feishu.file_from_user" => match lang {
@@ -578,6 +569,14 @@ pub fn t(key: &str) -> &str {
         "feishu.start_new_session" => match lang {
             Language::En => "Start New Session",
             Language::ZhCN => "开始新会话",
+        },
+        "feishu.delete_session" => match lang {
+            Language::En => "Delete",
+            Language::ZhCN => "删除",
+        },
+        "feishu.session_deleted" => match lang {
+            Language::En => "Session deleted.",
+            Language::ZhCN => "会话已删除。",
         },
         "feishu.session_resumed" => match lang {
             Language::En => "Session resumed: {TITLE}",

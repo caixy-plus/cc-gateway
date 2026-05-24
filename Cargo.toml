@@ -29,7 +29,7 @@ prost = "0.13"
 bytes = "1.7"
 
 # HTTP & WebSocket
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 futures = "0.3"
 
@@ -80,6 +80,8 @@ axum = { version = "0.8", features = ["multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 mime_guess = "2.0"
 rust-embed = { version = "8.3", features = ["include-exclude"] }
+reqwest-middleware = { version = "0.4", features = ["json"] }
+http = "1"
 
 # Unix signals
 [target.'cfg(unix)'.dependencies]
@@ -88,3 +90,5 @@ nix = { version = "0.29", features = ["signal", "process"] }
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.14"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

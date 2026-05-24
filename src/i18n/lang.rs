@@ -21,7 +21,7 @@ impl Language {
         Self::En
     }
 
-    fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         let s = s.to_lowercase();
         if s.starts_with("zh") {
             Self::ZhCN

@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use anyhow::Result;
+use tokio::sync::Notify;
 use tracing::{error, info};
 
 use crate::config::model::GatewayConfig;
@@ -31,7 +34,7 @@ impl DaemonEngine {
         if let Err(e) = crate::db::init_schema() {
             error!("Failed to initialize session database: {}", e);
         }
-        crate::session::manager::GLOBAL_SESSIONS.load_sessions();
+        crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS.load_from_db();
 
         // Start all enabled platforms concurrently
         let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();
@@ -68,11 +71,17 @@ impl DaemonEngine {
             platforms.push((Box::new(platform), handle));
         }
 
+        // Shutdown signal: used when a critical component (HTTP server) fails,
+        // so the daemon exits cleanly instead of becoming a zombie.
+        let shutdown_notify = Arc::new(Notify::new());
+
         // Start HTTP server on the singleton port
         let app = crate::web::server::create_app(&self.config);
+        let shutdown_for_server = shutdown_notify.clone();
         let server_handle = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
                 error!("HTTP server error: {}", e);
+                shutdown_for_server.notify_one();
             }
         });
         info!("HTTP server listening on http://127.0.0.1:{}", self.config.port);
@@ -83,8 +92,8 @@ impl DaemonEngine {
             info!("cc-gateway daemon is running ({} platform(s))", platforms.len());
         }
 
-        // Wait for shutdown signal
-        self.wait_shutdown_signal().await?;
+        // Wait for shutdown signal (OS signal or HTTP server failure)
+        self.wait_shutdown_signal(shutdown_notify).await?;
 
         // Graceful shutdown: stop HTTP server
         info!("Shutting down HTTP server...");
@@ -104,7 +113,7 @@ impl DaemonEngine {
     }
 
     #[cfg(unix)]
-    async fn wait_shutdown_signal(&self) -> Result<()> {
+    async fn wait_shutdown_signal(&self, shutdown_notify: Arc<Notify>) -> Result<()> {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
@@ -115,12 +124,15 @@ impl DaemonEngine {
             _ = sigint.recv() => {
                 info!("Received SIGINT, shutting down...");
             }
+            _ = shutdown_notify.notified() => {
+                info!("Internal shutdown triggered (HTTP server failure), shutting down...");
+            }
         }
         Ok(())
     }
 
     #[cfg(windows)]
-    async fn wait_shutdown_signal(&self) -> Result<()> {
+    async fn wait_shutdown_signal(&self, shutdown_notify: Arc<Notify>) -> Result<()> {
         let mut ctrl_c = tokio::signal::windows::ctrl_c()?;
         let mut ctrl_break = tokio::signal::windows::ctrl_break()?;
 
@@ -130,6 +142,9 @@ impl DaemonEngine {
             }
             _ = ctrl_break.recv() => {
                 info!("Received Ctrl+Break, shutting down...");
+            }
+            _ = shutdown_notify.notified() => {
+                info!("Internal shutdown triggered (HTTP server failure), shutting down...");
             }
         }
         Ok(())

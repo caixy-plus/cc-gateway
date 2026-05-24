@@ -5,7 +5,7 @@ use std::fs;
 use crate::config::loader::ConfigLoader;
 use crate::web::handlers::session::AppState;
 
-fn mask_secret(s: &str) -> String {
+pub(crate) fn mask_secret(s: &str) -> String {
     if s.len() <= 8 {
         "***".to_string()
     } else {

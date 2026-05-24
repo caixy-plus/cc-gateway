@@ -1,44 +1,47 @@
 #![allow(dead_code)]
-mod interaction;
+pub(crate) mod interaction;
+pub(crate) mod auth_middleware;
+pub(crate) mod cards;
+pub(crate) mod media;
+pub(crate) mod webhook;
+pub(crate) mod ws;
 use anyhow::{Context, Result};
-use bytes::BytesMut;
 use dashmap::DashMap;
-use futures::{SinkExt, StreamExt};
 use reqwest;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::{sleep, timeout, Duration as TokioDuration};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::{debug, info, warn};
 
-use crate::claude::controller::{ClaudeController, ControllerEvent};
-use crate::claude::event_formatter::EventAccumulator;
-use crate::command::router::CommandRouter;
 use crate::config::model::{ClaudeConfig, FeishuConfig};
 use crate::platform::proto::Frame;
-use crate::{t, t_fmt};
+use crate::session::channel_manager::{ActiveClaudeRuntime, GLOBAL_CHANNEL_SESSIONS};
 
-/// Per-chat session with an independent ClaudeController and CommandRouter.
-/// Each Feishu chat (private or group) gets its own subprocess and conversation context.
+/// Per-channel runtime for Feishu.
+/// Each chat gets its own ChannelSession; active ClaudeSession is optional.
 #[derive(Clone)]
-struct ChatSession {
-    controller: Arc<Mutex<ClaudeController>>,
-    router: Arc<CommandRouter>,
+struct FeishuChannelRuntime {
+    channel_session: crate::session::channel_model::ChannelSession,
+    active_claude: Option<ActiveClaudeRuntime>,
     receive_id_type: String,
     /// Ensures only one poll_claude_and_reply runs per chat at a time,
     /// preventing event-rx contention between concurrent messages.
     poll_lock: Arc<Mutex<()>>,
 }
 
-impl ChatSession {
-    fn new(claude_config: ClaudeConfig, show_thinking: bool, default_dir: &str, receive_id_type: String) -> Self {
-        let controller = Arc::new(Mutex::new(ClaudeController::new(claude_config, show_thinking)));
-        let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
-        Self { controller, router, receive_id_type, poll_lock: Arc::new(Mutex::new(())) }
+impl FeishuChannelRuntime {
+    fn new(channel_session: crate::session::channel_model::ChannelSession, receive_id_type: String) -> Self {
+        Self {
+            channel_session,
+            active_claude: None,
+            receive_id_type,
+            poll_lock: Arc::new(Mutex::new(())),
+        }
     }
 }
 
@@ -47,36 +50,36 @@ impl ChatSession {
 // ---------------------------------------------------------------------------
 
 /// Method: CONTROL (ping/pong, connection management)
-const METHOD_CONTROL: i32 = 0;
+ pub(crate) const METHOD_CONTROL: i32 = 0;
 /// Method: DATA (event/card payloads)
-const METHOD_DATA: i32 = 1;
+ pub(crate) const METHOD_DATA: i32 = 1;
 
 /// Service: unknown / connection-level
-const SERVICE_SYSTEM: i32 = 0;
+ pub(crate) const SERVICE_SYSTEM: i32 = 0;
 /// Service: IM message events
-const SERVICE_IM: i32 = 1;
+ pub(crate) const SERVICE_IM: i32 = 1;
 /// Service: Card callback events
-const SERVICE_CARD: i32 = 2;
+ pub(crate) const SERVICE_CARD: i32 = 2;
 
 /// Default heartbeat interval (seconds). Feishu recommends 30s.
-const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+ pub(crate) const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
 /// Max characters per Feishu text message (safety margin below 4096).
-const FEISHU_MAX_TEXT_CHARS: usize = 3500;
+ pub(crate) const FEISHU_MAX_TEXT_CHARS: usize = 3500;
 /// Delay between chunked message sends to avoid rate limits.
-const FEISHU_CHUNK_DELAY_MS: u64 = 300;
+ pub(crate) const FEISHU_CHUNK_DELAY_MS: u64 = 300;
 
 /// Reaction emoji type for "processing".
-const REACTION_TYPING: &str = "Typing";
+ pub(crate) const REACTION_TYPING: &str = "Typing";
 /// Reaction emoji type for "failure".
-const REACTION_FAILURE: &str = "CrossMark";
+ pub(crate) const REACTION_FAILURE: &str = "CrossMark";
 
 // ---------------------------------------------------------------------------
 // API response structs
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-struct TenantAccessTokenResp {
+ pub(crate) struct TenantAccessTokenResp {
     code: i32,
     #[serde(default)]
     msg: Option<String>,
@@ -87,11 +90,11 @@ struct TenantAccessTokenResp {
 
 #[derive(Debug, Deserialize)]
 pub struct ChatItem {
-    chat_id: String,
-    name: String,
+    pub(crate) chat_id: String,
+    pub(crate) name: String,
 }
 #[derive(Debug, Deserialize)]
-struct WsEndpointResp {
+ pub(crate) struct WsEndpointResp {
     #[serde(default)]
     code: i32,
     #[serde(default)]
@@ -101,7 +104,7 @@ struct WsEndpointResp {
 }
 
 #[derive(Debug, Deserialize)]
-struct WsEndpointData {
+ pub(crate) struct WsEndpointData {
     #[serde(rename = "URL")]
     url: Option<String>,
     #[serde(rename = "ClientConfig")]
@@ -109,7 +112,7 @@ struct WsEndpointData {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-struct WsClientConfig {
+ pub(crate) struct WsClientConfig {
     #[serde(rename = "ReconnectCount")]
     reconnect_count: i32,
     #[serde(rename = "ReconnectInterval")]
@@ -121,7 +124,7 @@ struct WsClientConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct ReactionCreateResp {
+ pub(crate) struct ReactionCreateResp {
     code: i32,
     #[serde(default)]
     msg: Option<String>,
@@ -130,19 +133,19 @@ struct ReactionCreateResp {
 }
 
 #[derive(Debug, Deserialize)]
-struct ReactionData {
+ pub(crate) struct ReactionData {
     #[serde(rename = "reaction_id")]
     reaction_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-struct BotInfo {
+ pub(crate) struct BotInfo {
     #[serde(rename = "open_id")]
     open_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct BotInfoResp {
+ pub(crate) struct BotInfoResp {
     code: i32,
     #[serde(default)]
     msg: Option<String>,
@@ -156,7 +159,7 @@ struct BotInfoResp {
 
 /// Generic event wrapper delivered over WebSocket.
 #[derive(Debug, Clone, Deserialize)]
-struct EventWrapper {
+ pub(crate) struct EventWrapper {
     #[serde(default)]
     schema: String,
     #[serde(default)]
@@ -166,7 +169,7 @@ struct EventWrapper {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct EventHeader {
+ pub(crate) struct EventHeader {
     #[serde(rename = "event_id")]
     event_id: Option<String>,
     #[serde(rename = "event_type")]
@@ -183,7 +186,7 @@ struct EventHeader {
 
 /// IM message event body.
 #[derive(Debug, Clone, Deserialize)]
-struct ImMessageEvent {
+ pub(crate) struct ImMessageEvent {
     #[serde(default)]
     sender: Option<SenderInfo>,
     #[serde(default)]
@@ -193,7 +196,7 @@ struct ImMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct SenderInfo {
+ pub(crate) struct SenderInfo {
     #[serde(rename = "sender_id")]
     sender_id: Option<OpenIdInfo>,
     #[serde(rename = "sender_type")]
@@ -203,7 +206,7 @@ struct SenderInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct OpenIdInfo {
+ pub(crate) struct OpenIdInfo {
     #[serde(rename = "open_id")]
     open_id: Option<String>,
     #[serde(rename = "union_id")]
@@ -213,7 +216,7 @@ struct OpenIdInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct MessageInfo {
+ pub(crate) struct MessageInfo {
     #[serde(rename = "message_id")]
     message_id: Option<String>,
     #[serde(rename = "root_id")]
@@ -235,7 +238,7 @@ struct MessageInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct MentionEventInfo {
+ pub(crate) struct MentionEventInfo {
     #[serde(rename = "key")]
     key: Option<String>,
     #[serde(rename = "id")]
@@ -248,13 +251,13 @@ struct MentionEventInfo {
 
 /// Parsed text content inside `message.content` JSON string.
 #[derive(Debug, Clone, Deserialize)]
-struct TextMessageContent {
+ pub(crate) struct TextMessageContent {
     text: Option<String>,
 }
 
 /// Card action event body.
 #[derive(Debug, Clone, Deserialize)]
-struct CardActionEvent {
+ pub(crate) struct CardActionEvent {
     #[serde(rename = "open_message_id")]
     open_message_id: Option<String>,
     #[serde(rename = "open_id")]
@@ -419,13 +422,12 @@ pub struct FeishuPlatform {
     config: FeishuConfig,
     default_dir: String,
     claude_config: ClaudeConfig,
-    show_thinking: bool,
-    http_client: reqwest::Client,
+    show_thinking: Arc<AtomicBool>,
+    http_client: ClientWithMiddleware,
     dedup_cache: Arc<DedupCache>,
     pending_permissions: Arc<DashMap<String, PendingPermissionContext>>,
     interaction_store: Arc<interaction::InteractionStore>,
-    cached_token: Arc<RwLock<Option<String>>>,
-    token_fetched_at: Arc<RwLock<Option<Instant>>>,
+    pub(crate) token_manager: auth_middleware::TokenManager,
     /// message_id -> reaction_id for in-progress reactions.
     pending_reactions: Arc<DashMap<String, String>>,
     /// Cached bot identity (open_id) for mention matching.
@@ -434,8 +436,8 @@ pub struct FeishuPlatform {
     rate_limiter: Arc<RateLimiter>,
     /// Webhook anomaly tracker.
     anomaly_tracker: Arc<AnomalyTracker>,
-    /// Per-chat sessions: each chat gets its own Claude subprocess.
-    sessions: Arc<DashMap<String, ChatSession>>,
+    /// Per-chat channels: each chat gets its own ChannelSession.
+    channels: Arc<DashMap<String, FeishuChannelRuntime>>,
 }
 
 impl FeishuPlatform {
@@ -445,68 +447,54 @@ impl FeishuPlatform {
         claude_config: ClaudeConfig,
         show_thinking: bool,
     ) -> Self {
+        let token_manager = auth_middleware::TokenManager::new(config.clone());
+        let http_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(auth_middleware::FeishuAuthMiddleware::new(token_manager.clone()))
+            .build();
         Self {
             config,
             default_dir: default_dir.to_string(),
             claude_config,
-            show_thinking,
-            http_client: reqwest::Client::new(),
+            show_thinking: Arc::new(AtomicBool::new(show_thinking)),
+            http_client,
             dedup_cache: Arc::new(DedupCache::new(300)),
             pending_permissions: Arc::new(DashMap::new()),
             interaction_store: Arc::new(interaction::InteractionStore::new()),
-            cached_token: Arc::new(RwLock::new(None)),
-            token_fetched_at: Arc::new(RwLock::new(None)),
+            token_manager,
             pending_reactions: Arc::new(DashMap::new()),
             bot_identity: Arc::new(RwLock::new(None)),
             rate_limiter: Arc::new(RateLimiter::new(60, 60)),
             anomaly_tracker: Arc::new(AnomalyTracker::new(25, 21600)),
-            sessions: Arc::new(DashMap::new()),
+            channels: Arc::new(DashMap::new()),
         }
     }
 
-    async fn get_session(&self, chat_id: &str, receive_id_type: &str) -> ChatSession {
-        if let Some(session) = self.sessions.get(chat_id) {
-            return session.clone();
+    async fn get_channel(&self, chat_id: &str, receive_id_type: &str) -> FeishuChannelRuntime {
+        if let Some(runtime) = self.channels.get(chat_id) {
+            return runtime.clone();
         }
-        let session = ChatSession::new(
-            self.claude_config.clone(),
-            self.show_thinking,
-            &self.default_dir,
-            receive_id_type.to_string(),
-        );
-        self.sessions.insert(chat_id.to_string(), session.clone());
-        crate::session::manager::GLOBAL_SESSIONS.insert(crate::session::model::Session::new_platform(
+        let channel = GLOBAL_CHANNEL_SESSIONS.get_or_create_platform_channel(
             "feishu",
             chat_id,
             &self.default_dir,
-        ));
-        session
+        ).await;
+        let runtime = FeishuChannelRuntime::new(channel, receive_id_type.to_string());
+        self.channels.insert(chat_id.to_string(), runtime.clone());
+        runtime
     }
 
     fn spawn_deliver_listener(&self) {
         let platform = self.clone();
-        tokio::spawn(async move {
-            let mut rx = crate::web::state::DELIVER_BUS.subscribe();
-            loop {
-                match rx.recv().await {
-                    Ok(req) => {
-                        if let Some(session) = crate::session::manager::GLOBAL_SESSIONS.get(&req.session_id) {
-                            if session.platform != "feishu" {
-                                continue;
-                            }
-                            let text = if let Some(msg) = &req.message {
-                                format!("{}\n📎 {}", msg, req.path)
-                            } else {
-                                format!("📎 {}", req.path)
-                            };
-                            if let Ok(token) = platform.get_tenant_access_token().await {
-                                let _ = platform.send_text_message(&token, "open_id", &session.chat_id, &text).await;
-                            }
-                        }
-                    }
-                    Err(_) => continue,
-                }
-            }
+        crate::platform::spawn_deliver_listener("feishu", move |channel_id, text| {
+            let platform = platform.clone();
+            tokio::spawn(async move {
+                let receive_id_type = if let Some(runtime) = platform.channels.get(&channel_id) {
+                    runtime.receive_id_type.clone()
+                } else {
+                    "chat_id".to_string()
+                };
+                let _ = platform.send_text_message(&receive_id_type, &channel_id, &text).await;
+            });
         });
     }
 
@@ -517,10 +505,7 @@ impl FeishuPlatform {
         let (ws_url, client_config) = self.get_ws_endpoint().await?;
         info!("Feishu WebSocket endpoint: {}", ws_url);
 
-        let token = self.get_tenant_access_token().await?;
-        info!("Feishu tenant access token obtained");
-
-        self.run_websocket(&ws_url, &token, client_config).await
+        self.run_websocket(&ws_url, client_config).await
     }
 
     /// Start a minimal HTTP webhook server (no extra framework deps).
@@ -614,22 +599,23 @@ impl FeishuPlatform {
                                 Err(e) => (400, json!({"error": e.to_string()}).to_string()),
                             }
                         } else {
-                            match self.handle_webhook_event(&json).await {
-                                Ok(Some(msg)) => {
-                                    let token = match self.get_tenant_access_token().await {
-                                        Ok(t) => t,
-                                        Err(e) => {
-                                            let resp = build_http_response(500, &json!({"error": e.to_string()}).to_string());
-                                            writer.write_all(resp.as_bytes()).await?;
-                                            self.anomaly_tracker.record(&ip, 500);
-                                            return Ok(());
-                                        }
-                                    };
-                                    let _ = self.route_message(msg, &token).await;
+                            let event_type = json
+                                .get("header")
+                                .and_then(|h| h.get("event_type"))
+                                .and_then(|v| v.as_str());
+                            match event_type {
+                                Some("im.message.receive_v1") => {
+                                    let _ = self.handle_event(&json).await;
                                     (200, r#"{"code":0}"#.to_string())
                                 }
-                                Ok(None) => (200, r#"{"code":0}"#.to_string()),
-                                Err(e) => (500, json!({"error": e.to_string()}).to_string()),
+                                Some(other) => {
+                                    debug!("Unhandled webhook event type: {}", other);
+                                    (200, r#"{"code":0}"#.to_string())
+                                }
+                                None => {
+                                    warn!("Webhook event missing event_type");
+                                    (200, r#"{"code":0}"#.to_string())
+                                }
                             }
                         }
                     }
@@ -648,63 +634,8 @@ impl FeishuPlatform {
     // HTTP helpers
     // -----------------------------------------------------------------------
 
-    async fn get_tenant_access_token(&self) -> Result<String> {
-        // Check cache
-        {
-            let cached = self.cached_token.read().await;
-            let fetched_at = self.token_fetched_at.read().await;
-            if let (Some(token), Some(instant)) = (cached.as_ref(), fetched_at.as_ref()) {
-                if instant.elapsed().as_secs() < 6600 {
-                    return Ok(token.clone());
-                }
-            }
-        }
-
-        // Cache miss or expired — fetch and store
-        let token = self.fetch_tenant_access_token().await?;
-        let mut cached = self.cached_token.write().await;
-        let mut fetched_at = self.token_fetched_at.write().await;
-        *cached = Some(token.clone());
-        *fetched_at = Some(Instant::now());
-        Ok(token)
-    }
-
-    pub async fn refresh_token(&self) -> Result<String> {
-        let token = self.fetch_tenant_access_token().await?;
-        let mut cached = self.cached_token.write().await;
-        let mut fetched_at = self.token_fetched_at.write().await;
-        *cached = Some(token.clone());
-        *fetched_at = Some(Instant::now());
-        Ok(token)
-    }
-
-    async fn fetch_tenant_access_token(&self) -> Result<String> {
-        let url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
-        let resp = self
-            .http_client
-            .post(url)
-            .json(&json!({
-                "app_id": self.config.app_id,
-                "app_secret": self.config.app_secret,
-            }))
-            .send()
-            .await
-            .context("Failed to request tenant access token")?;
-
-        let data: TenantAccessTokenResp = resp
-            .json()
-            .await
-            .context("Failed to parse tenant access token response")?;
-
-        if data.code != 0 {
-            anyhow::bail!(
-                "Feishu API error: {} - {}",
-                data.code,
-                data.msg.unwrap_or_default()
-            );
-        }
-
-        Ok(data.tenant_access_token)
+    pub(crate) async fn get_tenant_access_token(&self) -> Result<String> {
+        self.token_manager.get_tenant_access_token().await
     }
 
     async fn get_ws_endpoint(&self) -> Result<(String, WsClientConfig)> {
@@ -750,7 +681,7 @@ impl FeishuPlatform {
 
     /// Send a plain text message to a Feishu chat. Long messages are split into chunks
     /// to avoid triggering Feishu rate limits.
-    pub async fn send_text_message(&self, token: &str, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
+    pub async fn send_text_message(&self, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -759,18 +690,28 @@ impl FeishuPlatform {
             if i > 0 {
                 sleep(TokioDuration::from_millis(FEISHU_CHUNK_DELAY_MS)).await;
             }
-            self.send_text_message_raw(token, receive_id_type, receive_id, chunk).await?;
+            self.send_text_message_raw(receive_id_type, receive_id, chunk).await?;
         }
         Ok(())
     }
 
-    async fn send_text_message_raw(&self, token: &str, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
+    async fn send_text_message_raw(&self, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
+        match self.send_text_message_raw_inner(receive_id_type, receive_id, text).await {
+            Ok(()) => Ok(()),
+            Err(e) if auth_middleware::TokenManager::is_auth_error(&e) => {
+                self.token_manager.invalidate_token_cache().await;
+                self.send_text_message_raw_inner(receive_id_type, receive_id, text).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn send_text_message_raw_inner(&self, receive_id_type: &str, receive_id: &str, text: &str) -> Result<()> {
         let url = "https://open.feishu.cn/open-apis/im/v1/messages";
         let resp = self
             .http_client
             .post(url)
             .query(&[("receive_id_type", receive_id_type)])
-            .header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "receive_id": receive_id,
                 "content": json!({"text": text}).to_string(),
@@ -799,7 +740,22 @@ impl FeishuPlatform {
     /// Send a rich text (post) message to a Feishu chat.
     pub async fn send_post_message(
         &self,
-        token: &str,
+        receive_id_type: &str,
+        receive_id: &str,
+        content: &Value,
+    ) -> Result<()> {
+        match self.send_post_message_inner(receive_id_type, receive_id, content).await {
+            Ok(()) => Ok(()),
+            Err(e) if auth_middleware::TokenManager::is_auth_error(&e) => {
+                self.token_manager.invalidate_token_cache().await;
+                self.send_post_message_inner(receive_id_type, receive_id, content).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn send_post_message_inner(
+        &self,
         receive_id_type: &str,
         receive_id: &str,
         content: &Value,
@@ -809,7 +765,6 @@ impl FeishuPlatform {
             .http_client
             .post(url)
             .query(&[("receive_id_type", receive_id_type)])
-            .header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "receive_id": receive_id,
                 "content": content.to_string(),
@@ -831,7 +786,6 @@ impl FeishuPlatform {
     /// Send an interactive card message to a Feishu chat.
     pub async fn send_interactive_card(
         &self,
-        token: &str,
         receive_id_type: &str,
         receive_id: &str,
         card_json: &Value,
@@ -839,6 +793,22 @@ impl FeishuPlatform {
         if receive_id.is_empty() {
             anyhow::bail!("Cannot send card: receive_id is empty");
         }
+        match self.send_interactive_card_inner(receive_id_type, receive_id, card_json).await {
+            Ok(()) => Ok(()),
+            Err(e) if auth_middleware::TokenManager::is_auth_error(&e) => {
+                self.token_manager.invalidate_token_cache().await;
+                self.send_interactive_card_inner(receive_id_type, receive_id, card_json).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn send_interactive_card_inner(
+        &self,
+        receive_id_type: &str,
+        receive_id: &str,
+        card_json: &Value,
+    ) -> Result<()> {
         let url = "https://open.feishu.cn/open-apis/im/v1/messages";
         let request_body = json!({
             "receive_id": receive_id,
@@ -850,7 +820,6 @@ impl FeishuPlatform {
             .http_client
             .post(url)
             .query(&[("receive_id_type", receive_id_type)])
-            .header("Authorization", format!("Bearer {}", token))
             .json(&request_body)
             .send()
             .await
@@ -876,2326 +845,46 @@ impl FeishuPlatform {
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // Media download
-    // -----------------------------------------------------------------------
-
-    /// Download a message resource (image/file/audio) from Feishu and cache it locally.
-    async fn download_message_resource(
-        &self,
-        token: &str,
-        message_id: &str,
-        file_key: &str,
-        resource_type: &str,
-    ) -> Result<Option<(String, String)>> {
-        let url = format!(
-            "https://open.feishu.cn/open-apis/im/v1/messages/{}/resources/{}",
-            message_id, file_key
-        );
-        let resp = self
-            .http_client
-            .get(&url)
-            .query(&[("type", resource_type)])
-            .header("Authorization", format!("Bearer {}", token))
-            .send()
-            .await
-            .with_context(|| format!("Failed to download {} resource {}", resource_type, file_key))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Feishu resource download failed: {} - {}",
-                status,
-                body
-            );
-        }
-
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("application/octet-stream")
-            .split(';')
-            .next()
-            .unwrap_or("application/octet-stream")
-            .to_string();
-
-        let bytes = resp.bytes().await.context("Failed to read resource bytes")?;
-
-        let cache_dir = crate::daemon::cleaner::media_dir();
-        std::fs::create_dir_all(&cache_dir)
-            .with_context(|| format!("Failed to create media cache dir {:?}", cache_dir))?;
-
-        let ext = match content_type.as_str() {
-            "image/jpeg" | "image/jpg" => "jpg",
-            "image/png" => "png",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            "audio/mpeg" | "audio/mp3" => "mp3",
-            "audio/ogg" => "ogg",
-            "audio/wav" => "wav",
-            "audio/mp4" => "m4a",
-            "video/mp4" => "mp4",
-            "text/plain" => "txt",
-            "text/markdown" => "md",
-            "application/pdf" => "pdf",
-            _ => "bin",
-        };
-        let filename = format!("{}_{}.{}", resource_type, file_key, ext);
-        let path = cache_dir.join(&filename);
-        tokio::fs::write(&path, &bytes)
-            .await
-            .with_context(|| format!("Failed to write media file {:?}", path))?;
-
-        let path_str = path.to_string_lossy().to_string();
-        info!(
-            "[Feishu] Cached {} resource at {} ({} bytes, {})",
-            resource_type,
-            path_str,
-            bytes.len(),
-            content_type
-        );
-        Ok(Some((path_str, content_type)))
-    }
-
-    /// Build an interactive approval card for Claude tool permission requests.
-    /// Returns a Feishu card protocol v2 JSON object.
-    pub fn build_permission_card(
-        &self,
-        request_id: &str,
-        tool_name: &str,
-        tool_input: Option<&Value>,
-    ) -> Value {
-        let input_preview = tool_input
-            .and_then(|v| serde_json::to_string_pretty(v).ok())
-            .unwrap_or_else(|| "{}".to_string());
-        // Truncate if too long
-        let input_preview = if input_preview.len() > 500 {
-            format!("{}...", &input_preview[..500])
-        } else {
-            input_preview
-        };
-
-        json!({
-            "schema": "2.0",
-            "config": {
-                "style": {
-                    "text_size": {
-                        "level1": 17,
-                        "level2": 16,
-                        "level3": 14
-                    }
-                }
-            },
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": t!("feishu.permission_title")
-                },
-                "subtitle": {
-                    "tag": "plain_text",
-                    "content": t_fmt!("feishu.permission_subtitle", NAME = tool_name)
-                },
-                "template": "indigo"
-            },
-            "body": {
-                "elements": [
-                    {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": t_fmt!("feishu.request_id_label", ID = request_id)
-                        }
-                    },
-                    {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": t_fmt!("feishu.tool_input_label", INPUT = input_preview)
-                        }
-                    },
-                    {
-                        "tag": "hr"
-                    },
-                    {
-                        "tag": "action",
-                        "layout": "default",
-                        "actions": [
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.approve_once")
-                                },
-                                "type": "primary",
-                                "value": {
-                                    "action": "approve_once",
-                                    "request_id": request_id,
-                                    "tool_name": tool_name
-                                }
-                            },
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.approve_session")
-                                },
-                                "type": "primary",
-                                "value": {
-                                    "action": "approve_session",
-                                    "request_id": request_id,
-                                    "tool_name": tool_name
-                                }
-                            },
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.approve_always")
-                                },
-                                "type": "primary",
-                                "value": {
-                                    "action": "approve_always",
-                                    "request_id": request_id,
-                                    "tool_name": tool_name
-                                }
-                            },
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.deny")
-                                },
-                                "type": "danger",
-                                "value": {
-                                    "action": "deny",
-                                    "request_id": request_id,
-                                    "tool_name": tool_name
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        })
-    }
-
-    /// Build an interactive single-select card.
-    /// If options.len() > 5, uses select_static; otherwise uses primary buttons.
-    pub fn build_single_select_card(
-        &self,
-        request_id: &str,
-        prompt: &str,
-        options: &[String],
-    ) -> Value {
-        let title = if prompt.len() > 80 {
-            format!("{}...", &prompt[..80])
-        } else {
-            prompt.to_string()
-        };
-
-        let elements = if options.len() > 5 {
-            let select_options: Vec<Value> = options
-                .iter()
-                .map(|opt| {
-                    json!({
-                        "text": {
-                            "tag": "plain_text",
-                            "content": opt
-                        },
-                        "value": opt
-                    })
-                })
-                .collect();
-            vec![
-                json!({
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": title
-                    }
-                }),
-                json!({
-                    "tag": "action",
-                    "layout": "default",
-                    "actions": [
-                        {
-                            "tag": "select_static",
-                            "placeholder": {
-                                "tag": "plain_text",
-                                "content": "请选择..."
-                            },
-                            "options": select_options,
-                            "value": {
-                                "action": "select",
-                                "request_id": request_id
-                            }
-                        }
-                    ]
-                }),
-            ]
-        } else {
-            let buttons: Vec<Value> = options
-                .iter()
-                .map(|opt| {
-                    json!({
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": opt
-                        },
-                        "type": "primary",
-                        "value": {
-                            "action": "select",
-                            "request_id": request_id,
-                            "answer": opt
-                        }
-                    })
-                })
-                .collect();
-            vec![
-                json!({
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": title
-                    }
-                }),
-                json!({
-                    "tag": "action",
-                    "layout": "default",
-                    "actions": buttons
-                }),
-            ]
-        };
-
-        json!({
-            "schema": "2.0",
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": "请选择"
-                },
-                "template": "blue"
-            },
-            "body": {
-                "elements": elements
-            }
-        })
-    }
-
-    /// Build a multi-select card using buttons for each option.
-    /// Each click updates the selection state (stored in interaction_store externally).
-    pub fn build_multi_select_card(
-        &self,
-        request_id: &str,
-        prompt: &str,
-        options: &[String],
-        selected: &[String],
-    ) -> Value {
-        let title = if prompt.len() > 80 {
-            format!("{}...", &prompt[..80])
-        } else {
-            prompt.to_string()
-        };
-
-        let buttons: Vec<Value> = options
-            .iter()
-            .map(|opt| {
-                let is_selected = selected.contains(opt);
-                let label = if is_selected {
-                    format!("✅ {}", opt)
-                } else {
-                    opt.clone()
-                };
-                let btn_type = if is_selected { "default" } else { "primary" };
-                let mut new_selected = selected.to_vec();
-                if is_selected {
-                    new_selected.retain(|s| s != opt);
-                } else {
-                    new_selected.push(opt.clone());
-                }
-                json!({
-                    "tag": "button",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": label
-                    },
-                    "type": btn_type,
-                    "value": {
-                        "action": "toggle_select",
-                        "request_id": request_id,
-                        "toggle": opt,
-                        "selected": new_selected
-                    }
-                })
-            })
-            .collect();
-
-        let actions = vec![
-            json!({
-                "tag": "action",
-                "layout": "default",
-                "actions": buttons
-            }),
-            json!({
-                "tag": "action",
-                "layout": "default",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "提交"
-                        },
-                        "type": "primary",
-                        "value": {
-                            "action": "submit_multi",
-                            "request_id": request_id
-                        }
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "取消"
-                        },
-                        "type": "danger",
-                        "value": {
-                            "action": "cancel_multi",
-                            "request_id": request_id
-                        }
-                    }
-                ]
-            }),
-        ];
-
-        json!({
-            "schema": "2.0",
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": title
-                },
-                "template": "blue"
-            },
-            "body": {
-                "elements": actions
-            }
-        })
-    }
-
-    /// Build a text-input hint card prompting the user to reply with a text message.
-    pub fn build_text_input_hint_card(
-        &self,
-        request_id: &str,
-        prompt: &str,
-    ) -> Value {
-        let title = if prompt.len() > 80 {
-            format!("{}...", &prompt[..80])
-        } else {
-            prompt.to_string()
-        };
-
-        json!({
-            "schema": "2.0",
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": title
-                },
-                "template": "wathet"
-            },
-            "body": {
-                "elements": [
-                    {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": "请直接回复本条消息，输入你的回答。"
-                        }
-                    },
-                    {
-                        "tag": "action",
-                        "layout": "default",
-                        "actions": [
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "取消"
-                                },
-                                "type": "danger",
-                                "value": {
-                                    "action": "cancel_text_input",
-                                    "request_id": request_id
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        })
-    }
-
-    /// Build a confirm/deny card with two buttons.
-    pub fn build_confirm_card(
-        &self,
-        request_id: &str,
-        prompt: &str,
-    ) -> Value {
-        let title = if prompt.len() > 80 {
-            format!("{}...", &prompt[..80])
-        } else {
-            prompt.to_string()
-        };
-
-        json!({
-            "schema": "2.0",
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": title
-                },
-                "template": "orange"
-            },
-            "body": {
-                "elements": [
-                    {
-                        "tag": "action",
-                        "layout": "default",
-                        "actions": [
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "确认"
-                                },
-                                "type": "primary",
-                                "value": {
-                                    "action": "confirm",
-                                    "request_id": request_id,
-                                    "answer": true
-                                }
-                            },
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "取消"
-                                },
-                                "type": "danger",
-                                "value": {
-                                    "action": "confirm",
-                                    "request_id": request_id,
-                                    "answer": false
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        })
-    }
-
-    /// Build an interactive session history card.
-    /// Feishu card schema v2.
-    pub fn build_session_history_card(
-        &self,
-        sessions: &[crate::session::model::Session],
-        receive_id_type: &str,
-        receive_id: &str,
-    ) -> Value {
-        let mut elements: Vec<Value> = Vec::new();
-        elements.push(json!({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": t!("feishu.session_history_subtitle")
-            }
-        }));
-
-        for session in sessions {
-            let status_dot = if session.active { "🟢" } else { "⚪" };
-            let time = session.created_at.format("%Y-%m-%d %H:%M").to_string();
-            let mut info_parts = vec![
-                format!("**{}** {}", status_dot, session.title),
-                format!("📁 {}", session.work_dir),
-                format!("🕒 {}", time),
-            ];
-            if let Some(ref csid) = session.claude_session_id {
-                info_parts.push(format!("🔑 `{}`", csid));
-            }
-            let info_text = info_parts.join("\n");
-
-            elements.push(json!({
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": info_text
-                }
-            }));
-            elements.push(json!({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": t!("feishu.resume")
-                },
-                "type": "primary",
-                "behaviors": [
-                    {
-                        "type": "callback",
-                        "value": {
-                            "cmd": "resume",
-                            "session_id": session.id,
-                            "chat_id": receive_id,
-                            "receive_id_type": receive_id_type
-                        }
-                    }
-                ]
-            }));
-            elements.push(json!({ "tag": "hr" }));
-        }
-
-        // Remove trailing hr if present
-        if elements.last().and_then(|e| e.get("tag")).and_then(|v| v.as_str()) == Some("hr") {
-            elements.pop();
-        }
-
-        // Add "Start New Session" button at the bottom
-        elements.push(json!({
-            "tag": "action",
-            "layout": "default",
-            "actions": [
-                {
-                    "tag": "button",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": t!("feishu.start_new_session")
-                    },
-                    "type": "default",
-                    "behaviors": [
-                        {
-                            "type": "callback",
-                            "value": {
-                                "cmd": "resume",
-                                "session_id": "",
-                                "chat_id": receive_id,
-                                "receive_id_type": receive_id_type
-                            }
-                        }
-                    ]
-                }
-            ]
-        }));
-
-        json!({
-            "schema": "2.0",
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": t!("feishu.session_history_title")
-                },
-                "template": "indigo"
-            },
-            "body": {
-                "elements": elements
-            }
-        })
-    }
-
-    /// Build an interactive directory selection card.
-    /// Feishu card schema v2: buttons are placed directly in body.elements.
-    pub fn build_dir_select_card(
-        &self,
-        dirs: &[(String, String)],
-        page: usize,
-        dir: &str,
-        receive_id_type: &str,
-        receive_id: &str,
-    ) -> Value {
-        let mut elements: Vec<Value> = Vec::new();
-        elements.push(json!({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": t!("feishu.choose_dir")
-            }
-        }));
-
-        const MAX_DIRS: usize = 40;
-        let start = page * MAX_DIRS;
-        let end = ((page + 1) * MAX_DIRS).min(dirs.len());
-        let page_dirs = &dirs[start..end];
-
-        for (name, path) in page_dirs {
-            elements.push(json!({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": name
-                },
-                "type": "primary",
-                "behaviors": [
-                    {
-                        "type": "callback",
-                        "value": {
-                            "cmd": "cd",
-                            "path": path,
-                            "chat_id": receive_id,
-                            "receive_id_type": receive_id_type
-                        }
-                    }
-                ]
-            }));
-        }
-
-        // Pagination controls
-        let mut pagination_buttons: Vec<Value> = Vec::new();
-        if page > 0 {
-            pagination_buttons.push(json!({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": t!("feishu.prev_page")
-                },
-                "type": "default",
-                "behaviors": [
-                    {
-                        "type": "callback",
-                        "value": {
-                            "cmd": "ll_page",
-                            "page": page - 1,
-                            "dir": dir,
-                            "chat_id": receive_id,
-                            "receive_id_type": receive_id_type
-                        }
-                    }
-                ]
-            }));
-        }
-        if end < dirs.len() {
-            pagination_buttons.push(json!({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": t!("feishu.next_page")
-                },
-                "type": "default",
-                "behaviors": [
-                    {
-                        "type": "callback",
-                        "value": {
-                            "cmd": "ll_page",
-                            "page": page + 1,
-                            "dir": dir,
-                            "chat_id": receive_id,
-                            "receive_id_type": receive_id_type
-                        }
-                    }
-                ]
-            }));
-        }
-        if !pagination_buttons.is_empty() {
-            elements.push(json!({
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": t_fmt!("feishu.page_info", PAGE = page + 1, TOTAL = (dirs.len() + MAX_DIRS - 1) / MAX_DIRS)
-                }
-            }));
-            elements.push(json!({
-                "tag": "action",
-                "actions": pagination_buttons
-            }));
-        }
-
-        json!({
-            "schema": "2.0",
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": t!("feishu.select_dir_title")
-                },
-                "template": "indigo"
-            },
-            "body": {
-                "elements": elements
-            }
-        })
-    }
-
-    /// List directory names under the given path.
-    /// Store a pending permission context so card callbacks can be matched to requests.
-    pub fn store_pending_permission(&self, ctx: PendingPermissionContext) {
-        self.pending_permissions
-            .insert(ctx.request_id.clone(), ctx);
-    }
-
-    /// Retrieve and remove a pending permission context by request_id.
-    pub fn take_pending_permission(&self, request_id: &str) -> Option<PendingPermissionContext> {
-        self.pending_permissions.remove(request_id).map(|(_, v)| v)
-    }
-
-    /// Clean up expired pending permissions (older than 10 minutes).
-    pub fn cleanup_pending_permissions(&self) {
-        let now = Instant::now();
-        let max_age = Duration::from_secs(600);
-        self.pending_permissions
-            .retain(|_, v| now.duration_since(v.created_at) < max_age);
-    }
-
-    /// Normalize a raw Feishu event JSON into a structured message.
-    pub fn normalize_message(&self, event_json: &Value) -> Option<NormalizedMessage> {
-        let event = event_json.get("event")?;
-        let message = event.get("message")?;
-
-        let message_id = message
-            .get("message_id")?
-            .as_str()?
-            .to_string();
-
-        // Deduplicate by message_id
-        if self.dedup_cache.contains(&message_id) {
-            return None;
-        }
-        self.dedup_cache.insert(message_id.clone());
-
-        let message_type = message
-            .get("message_type")?
-            .as_str()?
-            .to_string();
-
-        let content = message
-            .get("content")?
-            .as_str()?
-            .to_string();
-
-        let sender = event.get("sender")?;
-        let sender_id = sender.get("sender_id")?;
-        let sender_open_id = sender_id
-            .get("open_id")?
-            .as_str()?
-            .to_string();
-        let sender_name = sender
-            .get("sender_type")?
-            .as_str()
-            .map(|s| s.to_string());
-
-        let chat_id = message
-            .get("chat_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let chat_type = message
-            .get("chat_type")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        // Extract mentions
-        let mut mentions = Vec::new();
-        if let Some(mentions_arr) = message.get("mentions").and_then(|v| v.as_array()) {
-            for m in mentions_arr {
-                let open_id = m
-                    .get("id")
-                    .and_then(|v| v.get("open_id"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let name = m
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let key = m
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                if let Some(oid) = open_id {
-                    mentions.push(MentionInfo {
-                        open_id: oid,
-                        name,
-                        key,
-                    });
-                }
-            }
-        }
-
-        let (receive_id_type, receive_id) = if chat_type.as_deref() == Some("p2p") {
-            ("open_id".to_string(), sender_open_id.clone())
-        } else {
-            ("chat_id".to_string(), chat_id.clone().unwrap_or_default())
-        };
-
-        Some(NormalizedMessage {
-            message_id,
-            message_type,
-            content,
-            sender_open_id,
-            sender_name,
-            chat_id,
-            chat_type,
-            mentions,
-            raw: event_json.clone(),
-            receive_id_type,
-            receive_id,
-        })
-    }
-
-    /// Handle an incoming Feishu event: normalize, route, and respond.
-    pub async fn handle_event(
-        &self,
-        event: &Value,
-        router: &CommandRouter,
-        controller: &ClaudeController,
-    ) -> Result<()> {
-        let normalized = match self.normalize_message(event) {
-            Some(n) => n,
-            None => {
-                // Deduplicated or malformed event
-                return Ok(());
-            }
-        };
-
-        // Extract text content for routing
-        let message_text = match normalized.message_type.as_str() {
-            "text" => {
-                // Parse JSON content for text messages (Feishu wraps text in JSON)
-                serde_json::from_str::<Value>(&normalized.content)
-                    .ok()
-                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| normalized.content.clone())
-            }
-            "post" => {
-                // For post messages, try to extract plain text or use raw content
-                normalized.content.clone()
-            }
-            _ => normalized.content.clone(),
-        };
-
-        // Route the message
-        let response = router.handle(&message_text).await;
-
-        // Send response back to the user if there is one
-        if let Some(reply) = response {
-            if !normalized.receive_id.is_empty() {
-                let token = self.get_tenant_access_token().await?;
-                self.send_text_message(&token, &normalized.receive_id_type, &normalized.receive_id, &reply).await?;
-            }
-        }
-
-        // Forward Claude controller events to Feishu
-        self.forward_claude_events(controller, &normalized).await?;
-
-        Ok(())
-    }
-
-    /// Forward Claude controller events to Feishu using the same accumulator as CLI.
-    async fn forward_claude_events(
-        &self,
-        controller: &ClaudeController,
-        normalized: &NormalizedMessage,
-    ) -> Result<()> {
-        if normalized.receive_id.is_empty() {
-            return Ok(());
-        }
-        let receive_id_type = &normalized.receive_id_type;
-        let receive_id = &normalized.receive_id;
-
-        let mut accumulator = EventAccumulator::new();
-        let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
-        let mut interval = tokio::time::interval(TokioDuration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut first_text_sent = false;
-
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-
-            tokio::select! {
-                _ = interval.tick() => {
-                    let partial = accumulator.take_output();
-                    if !partial.trim().is_empty() {
-                        let token = match self.get_tenant_access_token().await {
-                            Ok(t) => t,
-                            Err(_) => continue,
-                        };
-                        let _ = self.send_text_message(&token, receive_id_type, receive_id, &partial).await;
-                    }
-                }
-                event_res = timeout(remaining, controller.recv_event()) => {
-                    match event_res {
-                        Ok(Some(event)) => {
-                            if let ControllerEvent::PermissionRequest { request_id, tool_name, input } = &event {
-                                let token = self.get_tenant_access_token().await?;
-                                let card = self.build_permission_card(request_id, tool_name, input.as_ref());
-                                self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
-                                let ctx = PendingPermissionContext {
-                                    request_id: request_id.clone(),
-                                    tool_name: tool_name.clone(),
-                                    chat_id: receive_id.clone(),
-                                    sender_open_id: normalized.sender_open_id.clone(),
-                                    created_at: Instant::now(),
-                                };
-                                self.store_pending_permission(ctx);
-                                continue;
-                            }
-                            if let ControllerEvent::ConfirmRequest { request_id, prompt, .. } = &event {
-                                let token = self.get_tenant_access_token().await?;
-                                let card = self.build_confirm_card(request_id, prompt);
-                                self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
-                                let interaction = interaction::PendingInteraction {
-                                    request_id: request_id.clone(),
-                                    interaction_type: interaction::InteractionType::Confirm { prompt: prompt.clone() },
-                                    state: interaction::InteractionState::Waiting,
-                                    chat_id: receive_id.clone(),
-                                    sender_open_id: normalized.sender_open_id.clone(),
-                                    message_id: String::new(),
-                                    created_at: Instant::now(),
-                                };
-                                self.interaction_store.insert(interaction);
-                                continue;
-                            }
-                            if let ControllerEvent::SelectRequest { request_id, prompt, options } = &event {
-                                let token = self.get_tenant_access_token().await?;
-                                let card = self.build_single_select_card(request_id, prompt, options);
-                                self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
-                                let interaction = interaction::PendingInteraction {
-                                    request_id: request_id.clone(),
-                                    interaction_type: interaction::InteractionType::SingleSelect {
-                                        prompt: prompt.clone(),
-                                        options: options.clone(),
-                                    },
-                                    state: interaction::InteractionState::Waiting,
-                                    chat_id: receive_id.clone(),
-                                    sender_open_id: normalized.sender_open_id.clone(),
-                                    message_id: String::new(),
-                                    created_at: Instant::now(),
-                                };
-                                self.interaction_store.insert(interaction);
-                                continue;
-                            }
-                            if let ControllerEvent::QuestionRequest { request_id, questions } = &event {
-                                let token = self.get_tenant_access_token().await?;
-                                let first = &questions[0];
-                                let opts: Vec<String> = first.options.iter().map(|o| o.label.clone()).collect();
-                                if !opts.is_empty() && !first.multi_select {
-                                    let card = self.build_single_select_card(request_id, &first.question, &opts);
-                                    self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
-                                    let interaction = interaction::PendingInteraction {
-                                        request_id: request_id.clone(),
-                                        interaction_type: interaction::InteractionType::SingleSelect {
-                                            prompt: first.question.clone(),
-                                            options: opts,
-                                        },
-                                        state: interaction::InteractionState::Waiting,
-                                        chat_id: receive_id.clone(),
-                                        sender_open_id: normalized.sender_open_id.clone(),
-                                        message_id: String::new(),
-                                        created_at: Instant::now(),
-                                    };
-                                    self.interaction_store.insert(interaction);
-                                } else {
-                                    let card = self.build_text_input_hint_card(request_id, &first.question);
-                                    self.send_interactive_card(&token, receive_id_type, receive_id, &card).await?;
-                                    let interaction = interaction::PendingInteraction {
-                                        request_id: request_id.clone(),
-                                        interaction_type: interaction::InteractionType::TextInput {
-                                            prompt: first.question.clone(),
-                                        },
-                                        state: interaction::InteractionState::Waiting,
-                                        chat_id: receive_id.clone(),
-                                        sender_open_id: normalized.sender_open_id.clone(),
-                                        message_id: String::new(),
-                                        created_at: Instant::now(),
-                                    };
-                                    self.interaction_store.insert(interaction);
-                                }
-                                continue;
-                            }
-                            let is_text = matches!(event, ControllerEvent::Text(_));
-                            let is_done = accumulator.process_event(&event);
-                            // Send first text chunk immediately, then flush every ~300 chars
-                            let should_flush = if !first_text_sent {
-                                is_text
-                            } else {
-                                accumulator.peek_output().len() >= 300
-                            };
-                            if is_text && should_flush {
-                                let partial = accumulator.take_output();
-                                if !partial.trim().is_empty() {
-                                    let token = match self.get_tenant_access_token().await {
-                                        Ok(t) => t,
-                                        Err(_) => continue,
-                                    };
-                                    let _ = self.send_text_message(&token, receive_id_type, receive_id, &partial).await;
-                                    first_text_sent = true;
-                                }
-                            }
-                            if is_done {
-                                break;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(_) => break,
-                    }
-                }
-            }
-        }
-
-        let reply = accumulator.take_output();
-        if !reply.trim().is_empty() {
-            let token = self.get_tenant_access_token().await?;
-            self.send_text_message(&token, receive_id_type, receive_id, &reply).await?;
-        }
-
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // WebSocket loop
-    // -----------------------------------------------------------------------
-
-    async fn run_websocket(&self, ws_url: &str, token: &str, client_config: WsClientConfig) -> Result<()> {
-        let mut current_url = ws_url.to_string();
-        let mut current_token = token.to_string();
-        let mut current_config = client_config;
-        let mut retry_count: u32 = 0;
-
-        loop {
-            let service_id = Self::extract_service_id(&current_url).unwrap_or(0);
-            match self.ws_connection_loop(&current_url, &current_token, &current_config, service_id).await {
-                Ok(()) => {
-                    info!("Feishu WebSocket closed gracefully");
-                    break;
-                }
-                Err(e) => {
-                    retry_count += 1;
-                    // Fixed 3-second retry to guarantee recovery under 50s
-                    warn!(
-                        "WebSocket error: {}. Reconnecting in 3s... (retry #{})",
-                        e, retry_count
-                    );
-                    sleep(TokioDuration::from_secs(3)).await;
-
-                    // Refresh endpoint and token before reconnect
-                    match self.get_ws_endpoint().await {
-                        Ok((u, cfg)) => {
-                            current_url = u;
-                            current_config = cfg;
-                        }
-                        Err(e2) => {
-                            warn!("Failed to refresh WS endpoint: {}", e2);
-                        }
-                    }
-                    match self.get_tenant_access_token().await {
-                        Ok(t) => current_token = t,
-                        Err(e2) => warn!("Failed to refresh token: {}", e2),
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn extract_service_id(url: &str) -> Option<i32> {
-        url.split('?').nth(1)?.split('&').find(|p| p.starts_with("service_id="))?
-            .strip_prefix("service_id=")?.parse().ok()
-    }
-
-    async fn ws_connection_loop(&self, ws_url: &str, token: &str, client_config: &WsClientConfig, service_id: i32) -> Result<()> {
-        // Build WebSocket request (no User-Agent, matching Go SDK behavior)
-        let req = ws_url.into_client_request()
-            .context("Invalid WebSocket URL")?;
-        let (ws_stream, response) = timeout(
-                TokioDuration::from_secs(10),
-                connect_async(req)
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("WebSocket connect timeout (10s)"))?
-            .context("WebSocket connect failed")?;
-
-        info!("Feishu WebSocket connected, response status={:?}, headers={:?}", response.status(), response.headers());
-
-        let (write, mut read) = ws_stream.split();
-        let write = Arc::new(Mutex::new(write));
-        let ping_interval = Arc::new(std::sync::atomic::AtomicU64::new(client_config.ping_interval.max(1) as u64));
-
-        // Send initial PING immediately so Feishu server acknowledges the new connection
-        {
-            let ping = build_ping_frame(service_id);
-            let mut buf = BytesMut::new();
-            ping.encode(&mut buf);
-            let mut w = write.lock().await;
-            if w.send(WsMessage::Binary(buf.freeze())).await.is_ok() {
-                info!("Sent initial PING seq_id={} service_id={} immediately after connect", ping.seq_id, service_id);
-            }
-            drop(w);
-        }
-
-        // Small delay (200ms) to stabilize the connection before entering the read loop
-        sleep(TokioDuration::from_millis(200)).await;
-
-        // Spawn heartbeat writer
-        let write_for_heartbeat = write.clone();
-        let ping_interval_for_heartbeat = ping_interval.clone();
-        let heartbeat_handle = {
-            tokio::spawn(async move {
-                loop {
-                    let interval_secs = ping_interval_for_heartbeat.load(std::sync::atomic::Ordering::Relaxed);
-                    sleep(TokioDuration::from_secs(interval_secs)).await;
-                    let ping = build_ping_frame(service_id);
-                    let mut buf = BytesMut::new();
-                    ping.encode(&mut buf);
-                    let mut w = write_for_heartbeat.lock().await;
-                    if w.send(WsMessage::Binary(buf.freeze())).await.is_err() {
-                        break;
-                    }
-                    debug!("Sent PING seq_id={} service_id={}", ping.seq_id, service_id);
-                    drop(w);
-                }
-            })
-        };
-
-        // Main read loop with timeout to detect silent disconnections
-        let read_timeout_duration = TokioDuration::from_secs(
-            (client_config.ping_interval.max(1) as u64) * 3
-        );
-        let result: Result<()> = async {
-            loop {
-                match timeout(read_timeout_duration, read.next()).await {
-                    Ok(Some(Ok(msg))) => {
-                        match msg {
-                            WsMessage::Binary(data) => {
-                                debug!("WS raw binary len={}", data.len());
-                                // Log hex dump of first 100 bytes for debugging
-                                let hex_dump: String = data.iter().take(100).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-                                debug!("WS raw binary hex (first 100 bytes): {}", hex_dump);
-                                if let Some(frame) = Frame::decode(&data) {
-                                    debug!("Decoded frame: seq_id={} log_id={} service={} method={} headers={:?} payload_encoding={:?} payload_type={:?} payload_len={:?} log_id_new={:?}",
-                                        frame.seq_id, frame.log_id, frame.service, frame.method,
-                                        frame.headers.iter().map(|h| format!("{}={}", h.key, h.value)).collect::<Vec<_>>(),
-                                        frame.payload_encoding, frame.payload_type,
-                                        frame.payload.as_ref().map(|v| v.len()),
-                                        frame.log_id_new
-                                    );
-                                    // Handle pong control frame: update ping interval from server config
-                                    if frame.method == METHOD_CONTROL {
-                                        if let Some(ref payload) = frame.payload {
-                                            if let Ok(cfg) = serde_json::from_slice::<WsClientConfig>(payload) {
-                                                debug!("Received pong with ClientConfig: ping_interval={}s", cfg.ping_interval);
-                                                ping_interval.store(cfg.ping_interval.max(1) as u64, std::sync::atomic::Ordering::Relaxed);
-                                            }
-                                        }
-                                    }
-                                    if let Some(ack) = self.handle_frame(&frame, token).await? {
-                                        let mut buf = BytesMut::new();
-                                        ack.encode(&mut buf);
-                                        let mut w = write.lock().await;
-                                        w.send(WsMessage::Binary(buf.freeze())).await.ok();
-                                        drop(w);
-                                        debug!("Sent ACK for seq_id={}", frame.seq_id);
-                                    }
-                                } else {
-                                    warn!("Received invalid protobuf frame");
-                                }
-                            }
-                            WsMessage::Close(_) => {
-                                info!("WebSocket close frame received");
-                                break;
-                            }
-                            WsMessage::Ping(data) => {
-                                let mut w = write.lock().await;
-                                w.send(WsMessage::Pong(data)).await.ok();
-                            }
-                            WsMessage::Text(text) => {
-                                debug!("Unexpected text frame: {}", text);
-                            }
-                            _ => {}
-                        }
-                    }
-                    Ok(Some(Err(e))) => {
-                        return Err(anyhow::anyhow!("WebSocket read error: {}", e));
-                    }
-                    Ok(None) => {
-                        info!("WebSocket stream ended");
-                        break;
-                    }
-                    Err(_) => {
-                        warn!("WebSocket read timeout: no data received for {}s", read_timeout_duration.as_secs());
-                        return Err(anyhow::anyhow!("WebSocket read timeout"));
-                    }
-                }
-            }
-            Ok(())
-        }
-        .await;
-
-        heartbeat_handle.abort();
-        result
-    }
-
-    // -----------------------------------------------------------------------
-    // Frame handling
-    // -----------------------------------------------------------------------
-
-    async fn handle_frame(&self, frame: &Frame, _token: &str) -> Result<Option<Frame>> {
-        debug!(
-            "Frame seq_id={} method={} service={} payload_len={:?}",
-            frame.seq_id,
-            frame.method,
-            frame.service,
-            frame.payload.as_ref().map(|v| v.len())
-        );
-
-        match frame.method {
-            METHOD_CONTROL => {
-                // Control frames (pong with ClientConfig) are handled in ws_connection_loop
-                debug!("Received control frame seq_id={}, type={:?}", frame.seq_id, frame.headers.iter().find(|h| h.key == "type").map(|h| &h.value));
-            }
-            METHOD_DATA => {
-                // Send ACK immediately; business processing is done in the background
-                // so Feishu does not time out and resend while Claude is thinking.
-                if let Some(ref payload) = frame.payload {
-                    let payload = payload.clone();
-                    let platform = self.clone();
-                    tokio::spawn(async move {
-                        let token = match platform.get_tenant_access_token().await {
-                            Ok(t) => t,
-                            Err(e) => {
-                                warn!("[Feishu] Failed to get tenant access token: {}", e);
-                                return;
-                            }
-                        };
-                        if let Err(e) = platform.handle_im_payload(&payload, &token).await {
-                            warn!("[Feishu] IM payload failed: {}, trying card fallback", e);
-                            if let Err(e2) = platform.handle_card_payload(&payload, &token).await {
-                                warn!("[Feishu] Card payload also failed: {}", e2);
-                            }
-                        }
-                    });
-                }
-                return Ok(Some(build_ack_frame(&frame)));
-            }
-            _ => {
-                debug!(
-                    "Unhandled frame method={} service={}",
-                    frame.method, frame.service
-                );
-            }
-        }
-        Ok(None)
-    }
-
-    async fn handle_im_payload(&self, payload: &[u8], token: &str) -> Result<()> {
-        let wrapper: EventWrapper =
-            serde_json::from_slice(payload).context("Failed to parse IM event wrapper")?;
-
-        debug!("IM event schema={:?} type={:?}", wrapper.schema, wrapper.header);
-
-        let event_json = match wrapper.event {
-            Some(v) => v,
-            None => {
-                debug!("IM event missing event body");
-                return Ok(());
-            }
-        };
-
-        let event: ImMessageEvent =
-            serde_json::from_value(event_json).context("Failed to parse IM message event")?;
-
-        let message = match event.message {
-            Some(m) => m,
-            None => {
-                anyhow::bail!("IM event missing message body, event_type={:?}", wrapper.header.as_ref().and_then(|h| h.event_type.as_ref()));
-            }
-        };
-
-        let chat_id = match message.chat_id {
-            Some(ref id) if !id.is_empty() => id.clone(),
-            _ => {
-                anyhow::bail!("IM event missing chat_id, message_id={:?}", message.message_id);
-            }
-        };
-
-        let sender_open_id = event
-            .sender
-            .as_ref()
-            .and_then(|s| s.sender_id.as_ref())
-            .and_then(|id| id.open_id.clone())
-            .unwrap_or_default();
-
-        // Filter by allow_from if configured
-        if !self.is_allowed_sender(&sender_open_id) {
-            debug!("Sender {} not in allow_from list, ignoring", sender_open_id);
-            return Ok(());
-        }
-
-        info!(
-            "[Feishu] Processing IM payload: msg_type={:?}, msg_id={:?}",
-            message.message_type, message.message_id
-        );
-
-        // Dump raw content for debugging image/file handling
-        if let Some(ref content_str) = message.content {
-            debug!("[Feishu] Raw message content: {}", content_str);
-        }
-        let (text, media_note, file_attachment) = match message.message_type.as_deref() {
-            Some("text") => {
-                let mut download_info: Option<(String, String)> = None;
-                let t = if let Some(ref content_str) = message.content {
-                    // Check for embedded image/file keys in text messages.
-                    // Feishu can send text + image in a single message where the
-                    // content includes both "text" and "image_key" fields.
-                    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
-                        if let Some(key) = v.get("image_key").and_then(|k| k.as_str()) {
-                            info!("[Feishu] Text message has embedded image_key={}", key);
-                            let msg_id = message.message_id.as_deref().unwrap_or("");
-                            match self.download_message_resource(token, msg_id, key, "image").await {
-                                Ok(Some((path, ctype))) => {
-                                    info!("[Feishu] Embedded image downloaded: {} ({})", path, ctype);
-                                    download_info = Some((path.clone(), ctype.clone()));
-                                }
-                                Ok(None) => { info!("[Feishu] Embedded image download returned None"); }
-                                Err(e) => warn!("Failed to download embedded image {}: {}", key, e),
-                            }
-                        }
-                        if download_info.is_none() {
-                            if let Some(key) = v.get("file_key").and_then(|k| k.as_str()) {
-                                info!("[Feishu] Text message has embedded file_key={}", key);
-                                let msg_id = message.message_id.as_deref().unwrap_or("");
-                                match self.download_message_resource(token, msg_id, key, "file").await {
-                                    Ok(Some((path, ctype))) => {
-                                        info!("[Feishu] Embedded file downloaded: {} ({})", path, ctype);
-                                        download_info = Some((path.clone(), ctype.clone()));
-                                    }
-                                    Ok(None) => { info!("[Feishu] Embedded file download returned None"); }
-                                    Err(e) => warn!("Failed to download embedded file {}: {}", key, e),
-                                }
-                            }
-                        }
-                        if let Ok(content) = serde_json::from_str::<TextMessageContent>(content_str) {
-                            content.text.unwrap_or_default()
-                        } else {
-                            content_str.clone()
-                        }
-                    } else {
-                        content_str.clone()
-                    }
-                } else {
-                    String::new()
-                };
-                (t, None, download_info)
-            }
-            Some("image") => {
-                let mut download_info: Option<(String, String)> = None;
-                let note = if let Some(ref content_str) = message.content {
-                    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
-                        if let Some(key) = v.get("image_key").and_then(|k| k.as_str()) {
-                            let msg_id = message.message_id.as_deref().unwrap_or("");
-                            match self.download_message_resource(token, msg_id, key, "image").await {
-                                Ok(Some((path, ctype))) => {
-                                    download_info = Some((path.clone(), ctype.clone()));
-                                    Some(format!("[Image: {} ({})]", path, ctype))
-                                }
-                                Ok(None) => Some("[Image: download failed]".to_string()),
-                                Err(e) => {
-                                    warn!("Failed to download image {}: {}", key, e);
-                                    Some(format!("[Image: download error {}]", e))
-                                }
-                            }
-                        } else {
-                            Some("[Image: no image_key]".to_string())
-                        }
-                    } else {
-                        Some("[Image: invalid content]".to_string())
-                    }
-                } else {
-                    Some("[Image: empty content]".to_string())
-                };
-                (String::new(), note, download_info)
-            }
-            Some("file") => {
-                let mut download_info: Option<(String, String)> = None;
-                let note = if let Some(ref content_str) = message.content {
-                    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
-                        let file_key = v.get("file_key").and_then(|k| k.as_str()).unwrap_or("");
-                        let file_name = v.get("file_name").and_then(|k| k.as_str()).unwrap_or("");
-                        if !file_key.is_empty() {
-                            let msg_id = message.message_id.as_deref().unwrap_or("");
-                            match self.download_message_resource(token, msg_id, file_key, "file").await {
-                                Ok(Some((path, ctype))) => {
-                                    let name = if file_name.is_empty() { &path } else { file_name };
-                                    download_info = Some((path.clone(), ctype.clone()));
-                                    info!("[Feishu] File downloaded: {} ({})", path, ctype);
-                                    Some(format!("[File: {} ({})]", name, ctype))
-                                }
-                                Ok(None) => Some("[File: download failed]".to_string()),
-                                Err(e) => {
-                                    warn!("Failed to download file {}: {}", file_key, e);
-                                    Some(format!("[File: download error {}]", e))
-                                }
-                            }
-                        } else {
-                            Some("[File: no file_key]".to_string())
-                        }
-                    } else {
-                        Some("[File: invalid content]".to_string())
-                    }
-                } else {
-                    Some("[File: empty content]".to_string())
-                };
-                (String::new(), note, download_info)
-            }
-            Some("audio") => {
-                let mut download_info: Option<(String, String)> = None;
-                let note = if let Some(ref content_str) = message.content {
-                    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
-                        let file_key = v.get("file_key").and_then(|k| k.as_str()).unwrap_or("");
-                        let duration = v.get("duration").and_then(|d| d.as_u64()).unwrap_or(0);
-                        if !file_key.is_empty() {
-                            let msg_id = message.message_id.as_deref().unwrap_or("");
-                            match self.download_message_resource(token, msg_id, file_key, "file").await {
-                                Ok(Some((path, ctype))) => {
-                                    download_info = Some((path.clone(), ctype.clone()));
-                                    info!("[Feishu] Audio downloaded: {} ({})", path, ctype);
-                                    Some(format!(
-                                        "[Audio: {}s ({})]",
-                                        duration, ctype
-                                    ))
-                                }
-                                Ok(None) => Some("[Audio: download failed]".to_string()),
-                                Err(e) => {
-                                    warn!("Failed to download audio {}: {}", file_key, e);
-                                    Some(format!("[Audio: download error {}]", e))
-                                }
-                            }
-                        } else {
-                            Some("[Audio: no file_key]".to_string())
-                        }
-                    } else {
-                        Some("[Audio: invalid content]".to_string())
-                    }
-                } else {
-                    Some("[Audio: empty content]".to_string())
-                };
-                (String::new(), note, download_info)
-            }
-            Some("post") => {
-                let (text_content, image_keys) = if let Some(ref content_str) = message.content {
-                    extract_post_content(content_str)
-                } else {
-                    (String::new(), Vec::new())
-                };
-                // Download the first embedded image (if any) for forwarding to Claude
-                let mut download_info: Option<(String, String)> = None;
-                if let Some(key) = image_keys.first() {
-                    let msg_id = message.message_id.as_deref().unwrap_or("");
-                    info!("[Feishu] Post message has embedded image, image_key={}", key);
-                    match self.download_message_resource(token, msg_id, key, "image").await {
-                        Ok(Some((path, ctype))) => {
-                            info!("[Feishu] Post image downloaded: {} ({})", path, ctype);
-                            download_info = Some((path.clone(), ctype.clone()));
-                        }
-                        Ok(None) => { info!("[Feishu] Post image download returned None"); }
-                        Err(e) => warn!("[Feishu] Failed to download post image {}: {}", key, e),
-                    }
-                }
-                (text_content, None, download_info)
-            }
-            Some(other) => {
-                warn!("Unsupported message type: {}", other);
-                return Ok(());
-            }
-            None => (String::new(), None, None),
-        };
-
-        let text = if file_attachment.is_some() {
-            // When a file will be forwarded to Claude separately, skip the media
-            // note to avoid redundant path info in the message.
-            text
-        } else if let Some(note) = media_note {
-            if text.is_empty() {
-                note
-            } else {
-                format!("{}\n{}", text, note)
-            }
-        } else {
-            text
-        };
-
-        let trimmed = text.trim();
-        if trimmed.is_empty() && file_attachment.is_none() {
-            warn!("IM event has empty text content, message_id={:?}, message_type={:?}", message.message_id, message.message_type);
-            return Ok(());
-        }
-
-        // Extract mentions
-        let mut mentions = Vec::new();
-        if let Some(mentions_arr) = message.mentions.as_ref() {
-            for m in mentions_arr {
-                if let Some(oid) = m.id.as_ref().and_then(|id| id.open_id.clone()) {
-                    mentions.push(MentionInfo {
-                        open_id: oid,
-                        name: m.name.clone(),
-                        key: m.key.clone(),
-                    });
-                }
-            }
-        }
-
-        let chat_type = message.chat_type.as_deref().unwrap_or("");
-        // In group chats, only respond when the bot is @mentioned
-        if chat_type == "group" {
-            let bot_open_id = self.get_bot_open_id().await;
-            let mentions_bot = bot_open_id.as_ref().map_or(false, |bot_id| {
-                mentions.iter().any(|m| &m.open_id == bot_id)
-            });
-            if !mentions_bot {
-                debug!("Group message does not mention bot, ignoring");
-                return Ok(());
-            }
-        }
-
-        let msg_id = message.message_id.clone().unwrap_or_default();
-
-        // Deduplicate by message_id
-        if !msg_id.is_empty() && self.dedup_cache.contains(&msg_id) {
-            debug!("Duplicate message {} deduplicated", msg_id);
-            return Ok(());
-        }
-        self.dedup_cache.insert(msg_id.clone());
-
-        // Determine correct receive_id and receive_id_type based on chat type
-        let (receive_id_type, receive_id) = if chat_type == "p2p" {
-            ("open_id", sender_open_id.as_str())
-        } else {
-            ("chat_id", chat_id.as_str())
-        };
-
-        // Each chat gets its own Claude session; look up (or create) the session
-        // for this receive_id (open_id for p2p, chat_id for group).
-        let session = self.get_session(receive_id, receive_id_type).await;
-
-        // Intercept /ll for Feishu interactive directory card only when no session is active
-        let session_active = {
-            let ctrl = session.controller.lock().await;
-            ctrl.is_session_active().await
-        };
-        info!("[Feishu] handle_im_payload session_active={}, text='{}'", session_active, trimmed);
-
-        if !session_active && trimmed == "/claude-history" {
-            info!("[Feishu] /claude-history command received from {}, chat_type={}, receive_id_type={}, receive_id={}",
-                  sender_open_id, chat_type, receive_id_type, receive_id);
-            self.on_processing_start(token, &msg_id).await;
-            let result = async {
-                let sessions = crate::db::load_sessions_by_chat_id(receive_id);
-                info!("[Feishu] /claude-history found {} sessions for chat_id={}", sessions.len(), receive_id);
-                if sessions.is_empty() {
-                    self.send_text_message(token, receive_id_type, receive_id, t!("feishu.no_sessions")).await?;
-                } else {
-                    let card = self.build_session_history_card(&sessions, receive_id_type, receive_id);
-                    self.send_interactive_card(token, receive_id_type, receive_id, &card).await?;
-                }
-                Ok::<(), anyhow::Error>(())
-            }.await;
-            if let Err(ref e) = result {
-                warn!("[Feishu] /claude-history command failed: {}", e);
-            }
-            self.on_processing_complete(token, &msg_id, result.is_ok()).await;
-            return result;
-        }
-
-        if !session_active && trimmed == "/ll" {
-            info!("[Feishu] /ll command received from {}, chat_type={}, receive_id_type={}, receive_id={}, processing...",
-                  sender_open_id, chat_type, receive_id_type, receive_id);
-            self.on_processing_start(token, &msg_id).await;
-            let result = async {
-                let ctrl = session.controller.lock().await;
-                let work_dir = ctrl.get_work_dir().await;
-                let dir = if work_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    work_dir
-                };
-                drop(ctrl);
-                let dirs = crate::command::builtin::list_directory_paths(&dir)
-                    .unwrap_or_default();
-                info!("[Feishu] /ll found {} directories under {}", dirs.len(), dir);
-                if dirs.is_empty() {
-                    info!("[Feishu] /ll no directories, sending text fallback");
-                    self.send_text_message(token, receive_id_type, receive_id, t!("feishu.no_directories")).await?;
-                } else {
-                    info!("[Feishu] /ll building dir select card for {}", receive_id);
-                    let card = self.build_dir_select_card(&dirs, 0, &dir, receive_id_type, receive_id);
-                    debug!("[Feishu] /ll card JSON: {}", card);
-                    info!("[Feishu] /ll sending interactive card to receive_id_type={} receive_id={}", receive_id_type, receive_id);
-                    self.send_interactive_card(token, receive_id_type, receive_id, &card).await?;
-                    info!("[Feishu] /ll card sent successfully");
-                }
-                Ok::<(), anyhow::Error>(())
-            }
-            .await;
-            if let Err(ref e) = result {
-                warn!("[Feishu] /ll command failed: {}", e);
-            }
-            self.on_processing_complete(token, &msg_id, result.is_ok()).await;
-            return result;
-        }
-
-        // When a file (image/document/audio) was downloaded and a Claude session
-        // is active, send the actual file data directly as a base64 content block.
-        if let Some((ref path, ref ctype)) = file_attachment {
-            if session_active {
-                info!(
-                    "[Feishu] Sending file to Claude: path={}, type={}, user_text='{}'",
-                    path, ctype, text,
-                );
-                self.on_processing_start(token, &msg_id).await;
-                let _guard = session.poll_lock.lock().await;
-                let result = self
-                    .send_file_to_claude_and_reply(
-                        token, &text, path, ctype, &receive_id_type, receive_id, session.controller.clone(),
-                    )
-                    .await;
-                self.on_processing_complete(token, &msg_id, result.is_ok()).await;
-                return result;
-            } else {
-                info!(
-                    "[Feishu] File downloaded but session inactive, falling through to text routing: path={}",
-                    path
-                );
-            }
-        }
-
-        // Check for pending text-input interaction and intercept the message as answer.
-        if let Some(pending) = self.interaction_store.find_waiting_by_chat_id(receive_id) {
-            if matches!(pending.interaction_type, interaction::InteractionType::TextInput { .. }) {
-                let answer = text.trim();
-                if !answer.is_empty() {
-                    self.interaction_store.take(&pending.request_id);
-                    let session = self.get_session(receive_id, receive_id_type).await;
-                    let ctrl = session.controller.lock().await;
-                    let answer_val = serde_json::json!(answer);
-                    let msg = interaction::build_select_response(&pending.request_id, answer_val);
-                    let _ = ctrl.send_input(msg).await;
-                    drop(ctrl);
-                    let _ = self.send_text_message(
-                        token,
-                        receive_id_type,
-                        receive_id,
-                        &format!("已收到: {}", answer),
-                    )
-                    .await;
-                    return Ok(());
-                }
-            }
-        }
-
-        let normalized = NormalizedMessage {
-            message_id: msg_id.clone(),
-            message_type: message.message_type.clone().unwrap_or_default(),
-            content: text.clone(),
-            sender_open_id: sender_open_id.clone(),
-            sender_name: None,
-            chat_id: Some(chat_id.clone()),
-            chat_type: message.chat_type.clone(),
-            mentions,
-            raw: json!({}),
-            receive_id_type: receive_id_type.to_string(),
-            receive_id: receive_id.to_string(),
-        };
-
-        self.on_processing_start(token, &msg_id).await;
-        let result = self.route_message(normalized, token).await;
-        self.on_processing_complete(token, &msg_id, result.is_ok()).await;
-        result
-    }
-
-    async fn handle_card_payload(&self, payload: &[u8], token: &str) -> Result<()> {
-        let wrapper: EventWrapper =
-            serde_json::from_slice(payload).context("Failed to parse card event wrapper")?;
-
-        let event_json = match wrapper.event {
-            Some(v) => v,
-            None => return Ok(()),
-        };
-
-        // Parse card action event manually since Feishu nests fields differently.
-        let open_id = event_json
-            .get("operator")
-            .and_then(|o| o.get("open_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if !self.is_allowed_sender(&open_id) {
-            debug!("Card action from {} not allowed", open_id);
-            return Ok(());
-        }
-
-        let action_obj = event_json.get("action").cloned();
-        let context = event_json.get("context");
-
-        // Handle directory selection card callbacks
-        if let Some(ref action_value) = action_obj {
-            // User-defined values are nested under action.value
-            let user_value = action_value.get("value").unwrap_or(action_value);
-            if let Some(cmd) = user_value.get("cmd").and_then(|v| v.as_str()) {
-                if cmd == "resume" {
-                    let session_id = user_value
-                        .get("session_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let receive_id = user_value
-                        .get("chat_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    let receive_id_type = user_value
-                        .get("receive_id_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("chat_id");
-                    if !receive_id.is_empty() {
-                        let session = self.get_session(receive_id, receive_id_type).await;
-                        if session_id.is_empty() {
-                            // Start new session
-                            match session.router.handle("/claude").await {
-                                Some(text) => {
-                                    self.send_text_message(token, receive_id_type, receive_id, &text).await?;
-                                }
-                                None => {
-                                    let _guard = session.poll_lock.lock().await;
-                                    self.poll_claude_and_reply(token, receive_id_type, receive_id, session.controller.clone()).await?;
-                                }
-                            }
-                        } else {
-                            // Resume existing session
-                            let db_session = crate::session::manager::GLOBAL_SESSIONS.get(session_id);
-                            let extra_args = if let Some(ref s) = db_session {
-                                if let Some(ref csid) = s.claude_session_id {
-                                    vec![format!("--resume {}", csid)]
-                                } else {
-                                    vec![]
-                                }
-                            } else {
-                                vec![]
-                            };
-                            if let Some(ref s) = db_session {
-                                let ctrl = session.controller.lock().await;
-                                ctrl.init_work_dir(s.work_dir.clone()).await;
-                                drop(ctrl);
-                            }
-                            let title = db_session.as_ref().map(|s| s.title.clone()).unwrap_or_default();
-                            match session.router.handle(&format!("/claude {}", extra_args.join(" "))).await {
-                                Some(text) => {
-                                    self.send_text_message(token, receive_id_type, receive_id, &text).await?;
-                                }
-                                None => {
-                                    let _guard = session.poll_lock.lock().await;
-                                    self.poll_claude_and_reply(token, receive_id_type, receive_id, session.controller.clone()).await?;
-                                }
-                            }
-                            if !title.is_empty() {
-                                self.send_text_message(token, receive_id_type, receive_id, &t_fmt!("feishu.session_resumed", TITLE = title)).await?;
-                            }
-                        }
-                        return Ok(());
-                    }
-                }
-                if cmd == "cd" {
-                    if let Some(path) = user_value.get("path").and_then(|v| v.as_str()) {
-                        let receive_id = user_value
-                            .get("chat_id")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
-                            .unwrap_or("");
-                        let receive_id_type = user_value
-                            .get("receive_id_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("chat_id");
-                        if !receive_id.is_empty() {
-                            let session = self.get_session(receive_id, receive_id_type).await;
-                            let ctrl = session.controller.lock().await;
-                            ctrl.init_work_dir(path.to_string()).await;
-                            drop(ctrl);
-                            self.send_text_message(
-                                token,
-                                receive_id_type,
-                                receive_id,
-                                &t_fmt!("feishu.dir_changed", PATH = path),
-                            )
-                            .await?;
-                            return Ok(());
-                        }
-                    }
-                }
-                if cmd == "ll_page" {
-                    let page = user_value
-                        .get("page")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as usize;
-                    let dir = user_value
-                        .get("dir")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let receive_id = user_value
-                        .get("chat_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    let receive_id_type = user_value
-                        .get("receive_id_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("chat_id");
-                    if !receive_id.is_empty() && !dir.is_empty() {
-                        let dirs = crate::command::builtin::list_directory_paths(dir)
-                            .unwrap_or_default();
-                        if !dirs.is_empty() {
-                            let card = self.build_dir_select_card(
-                                &dirs,
-                                page,
-                                dir,
-                                receive_id_type,
-                                receive_id,
-                            );
-                            self.send_interactive_card(token, receive_id_type, receive_id, &card)
-                                .await?;
-                        }
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        // Handle interactive card callbacks (permissions, selections, confirmations)
-        if let Some(ref action_value) = action_obj {
-            let user_value = action_value.get("value").unwrap_or(action_value);
-            if let Some(action) = user_value.get("action").and_then(|v| v.as_str()) {
-                if let Some(request_id) = user_value.get("request_id").and_then(|v| v.as_str()) {
-                    let receive_id = user_value
-                        .get("chat_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| context.and_then(|c| c.get("open_chat_id")).and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    let receive_id_type = user_value
-                        .get("receive_id_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("chat_id");
-
-                    if !receive_id.is_empty() {
-                        match action {
-                            "approve_once" | "approve_session" | "approve_always" | "deny" => {
-                                if let Some(ctx) = self.take_pending_permission(request_id) {
-                                    let session = self.get_session(&ctx.chat_id, "chat_id").await;
-                                    let ctrl = session.controller.lock().await;
-                                    let msg = if action == "deny" {
-                                        interaction::build_deny_response(request_id, "User denied")
-                                    } else {
-                                        interaction::build_allow_response(request_id)
-                                    };
-                                    let _ = ctrl.send_input(msg).await;
-                                    drop(ctrl);
-                                    let reply = if action == "deny" {
-                                        "已拒绝".to_string()
-                                    } else {
-                                        format!("已允许执行: {}", ctx.tool_name)
-                                    };
-                                    let _ = self.send_text_message(token, receive_id_type, receive_id, &reply).await;
-                                    return Ok(());
-                                }
-                            }
-                            "confirm" => {
-                                if let Some(answer) = user_value.get("answer").and_then(|v| v.as_bool()) {
-                                    if let Some(_pending) = self.interaction_store.take(request_id) {
-                                        let session = self.get_session(receive_id, receive_id_type).await;
-                                        let ctrl = session.controller.lock().await;
-                                        let answer_val = serde_json::json!(answer);
-                                        let msg = interaction::build_select_response(request_id, answer_val);
-                                        let _ = ctrl.send_input(msg).await;
-                                        drop(ctrl);
-                                        let reply = if answer { "已确认" } else { "已取消" };
-                                        let _ = self.send_text_message(token, receive_id_type, receive_id, reply).await;
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                            "select" => {
-                                if let Some(answer) = user_value.get("answer").and_then(|v| v.as_str()) {
-                                    if let Some(_pending) = self.interaction_store.take(request_id) {
-                                        let session = self.get_session(receive_id, receive_id_type).await;
-                                        let ctrl = session.controller.lock().await;
-                                        let answer_val = serde_json::json!(answer);
-                                        let msg = interaction::build_select_response(request_id, answer_val);
-                                        let _ = ctrl.send_input(msg).await;
-                                        drop(ctrl);
-                                        let _ = self.send_text_message(token, receive_id_type, receive_id, &format!("已选择: {}", answer)).await;
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                            "cancel_text_input" => {
-                                if let Some(_pending) = self.interaction_store.take(request_id) {
-                                    let session = self.get_session(receive_id, receive_id_type).await;
-                                    let ctrl = session.controller.lock().await;
-                                    let msg = interaction::build_deny_response(request_id, "User cancelled");
-                                    let _ = ctrl.send_input(msg).await;
-                                    drop(ctrl);
-                                    let _ = self.send_text_message(token, receive_id_type, receive_id, "已取消").await;
-                                    return Ok(());
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fallback: treat other card actions as simple text commands.
-        let text = format!("Card action: {:?}", action_obj);
-        let open_message_id = context
-            .and_then(|c| c.get("open_message_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let fallback_chat_id = context
-            .and_then(|c| c.get("open_chat_id"))
-            .and_then(|v| v.as_str());
-        let (receive_id_type, receive_id) = if let Some(cid) = fallback_chat_id {
-            ("chat_id", cid)
-        } else {
-            ("open_id", open_id)
-        };
-        let normalized = NormalizedMessage {
-            message_id: open_message_id.to_string(),
-            message_type: "card".to_string(),
-            content: text,
-            sender_open_id: open_id.to_string(),
-            sender_name: None,
-            chat_id: fallback_chat_id.map(|s| s.to_string()),
-            chat_type: None,
-            mentions: Vec::new(),
-            raw: json!({}),
-            receive_id_type: receive_id_type.to_string(),
-            receive_id: receive_id.to_string(),
-        };
-
-        self.route_message(normalized, token).await?;
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Routing
-    // -----------------------------------------------------------------------
-
-    async fn route_message(&self, msg: NormalizedMessage, token: &str) -> Result<()> {
-        let chat_id = msg.receive_id.clone();
-        let session = self.get_session(&chat_id, &msg.receive_id_type).await;
-
-        let session_active = {
-            let ctrl = session.controller.lock().await;
-            ctrl.is_session_active().await
-        };
-        info!("[Feishu] route_message session_active={}, content='{}'", session_active, msg.content);
-
-        let trimmed = msg.content.trim();
-
-        // Feishu-specific command validation when no session is active
-        if !trimmed.is_empty() && trimmed.starts_with('/') {
-            if !session_active {
-                let known = ["/help", "/cd", "/cd_default", "/claude", "/claude-history", "/claude-resume", "/ll", "/mkdir", "/quit", "/pwd", "/show-thinking", "/hide-thinking", "/show-thinking-toggle"];
-                let cmd = trimmed.split_whitespace().next().unwrap_or(trimmed);
-                if !known.contains(&cmd) {
-                    if msg.receive_id.is_empty() {
-                        return Ok(());
-                    }
-                    self.send_text_message(
-                        token,
-                        &msg.receive_id_type,
-                        &msg.receive_id,
-                        t!("feishu.unknown_command"),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            }
-        }
-
-        // Use the CommandRouter to handle the message.
-        let response = session.router.handle(&msg.content).await;
-
-        if msg.receive_id.is_empty() {
-            return Ok(());
-        }
-
-        match response {
-            Some(text) => {
-                // Immediate synchronous response
-                self.send_text_message(token, &msg.receive_id_type, &msg.receive_id, &text).await?;
-            }
-            None => {
-                // Message forwarded to Claude; each chat has its own subprocess.
-                let _guard = session.poll_lock.lock().await;
-                self.poll_claude_and_reply(token, &msg.receive_id_type, &msg.receive_id, session.controller.clone()).await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Send a downloaded file path + user text to Claude, let Claude handle it.
-    async fn send_file_to_claude_and_reply(
-        &self,
-        token: &str,
-        user_text: &str,
-        path: &str,
-        content_type: &str,
-        receive_id_type: &str,
-        receive_id: &str,
-        controller: Arc<Mutex<ClaudeController>>,
-    ) -> Result<()> {
-        let message = if user_text.is_empty() {
-            format!("{}: {} ({})", t!("feishu.file_from_user"), path, content_type)
-        } else {
-            format!("{}\n{}: {} ({})", user_text, t!("feishu.file_from_user"), path, content_type)
-        };
-
-        {
-            let ctrl = controller.lock().await;
-            ctrl.send_message(&message).await?;
-        }
-
-        // Acknowledge to the Feishu user
-        self.send_text_message(
-            token,
-            receive_id_type,
-            receive_id,
-            &t_fmt!("feishu.file_received"),
-        )
-        .await?;
-
-        // Poll Claude events and reply with the response
-        self.poll_claude_and_reply(token, receive_id_type, receive_id, controller)
-            .await
-    }
-
-    async fn poll_claude_and_reply(
-        &self,
-        token: &str,
-        receive_id_type: &str,
-        receive_id: &str,
-        controller: Arc<Mutex<ClaudeController>>,
-    ) -> Result<()> {
-        // Clone event receiver so we don't hold the controller lock during polling.
-        // This allows /quit and other commands to acquire the lock even when
-        // Claude process hangs or the event loop is blocked.
-        let event_rx = {
-            let ctrl = controller.lock().await;
-            ctrl.event_rx_clone()
-        };
-        let mut accumulator = EventAccumulator::new();
-        let deadline = tokio::time::Instant::now() + TokioDuration::from_secs(300);
-        let mut interval = tokio::time::interval(TokioDuration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut first_text_sent = false;
-
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-
-            let event_fut = async {
-                let mut rx = event_rx.lock().await;
-                rx.recv().await
-            };
-            tokio::pin!(event_fut);
-
-            tokio::select! {
-                _ = interval.tick() => {
-                    let partial = accumulator.take_output();
-                    if !partial.trim().is_empty() {
-                        let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
-                        crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "assistant", &partial);
-                    }
-                }
-                event_res = timeout(remaining, event_fut) => {
-                    match event_res {
-                        Ok(Some(event)) => {
-                            if let ControllerEvent::PermissionRequest { request_id, tool_name, input } = &event {
-                                let card = self.build_permission_card(request_id, tool_name, input.as_ref());
-                                let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
-                                let ctx = PendingPermissionContext {
-                                    request_id: request_id.clone(),
-                                    tool_name: tool_name.clone(),
-                                    chat_id: receive_id.to_string(),
-                                    sender_open_id: String::new(),
-                                    created_at: Instant::now(),
-                                };
-                                self.store_pending_permission(ctx);
-                                let notice = format!("Permission request: `{}`  ID: `{}`", tool_name, request_id);
-                                crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "system", &notice);
-                                continue;
-                            }
-                            if let ControllerEvent::ConfirmRequest { request_id, prompt, .. } = &event {
-                                let card = self.build_confirm_card(request_id, prompt);
-                                let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
-                                let interaction = interaction::PendingInteraction {
-                                    request_id: request_id.clone(),
-                                    interaction_type: interaction::InteractionType::Confirm { prompt: prompt.clone() },
-                                    state: interaction::InteractionState::Waiting,
-                                    chat_id: receive_id.to_string(),
-                                    sender_open_id: String::new(),
-                                    message_id: String::new(),
-                                    created_at: Instant::now(),
-                                };
-                                self.interaction_store.insert(interaction);
-                                continue;
-                            }
-                            if let ControllerEvent::SelectRequest { request_id, prompt, options } = &event {
-                                let card = self.build_single_select_card(request_id, prompt, options);
-                                let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
-                                let interaction = interaction::PendingInteraction {
-                                    request_id: request_id.clone(),
-                                    interaction_type: interaction::InteractionType::SingleSelect {
-                                        prompt: prompt.clone(),
-                                        options: options.clone(),
-                                    },
-                                    state: interaction::InteractionState::Waiting,
-                                    chat_id: receive_id.to_string(),
-                                    sender_open_id: String::new(),
-                                    message_id: String::new(),
-                                    created_at: Instant::now(),
-                                };
-                                self.interaction_store.insert(interaction);
-                                continue;
-                            }
-                            if let ControllerEvent::QuestionRequest { request_id, questions } = &event {
-                                let first = &questions[0];
-                                let opts: Vec<String> = first.options.iter().map(|o| o.label.clone()).collect();
-                                if !opts.is_empty() && !first.multi_select {
-                                    let card = self.build_single_select_card(request_id, &first.question, &opts);
-                                    let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
-                                    let interaction = interaction::PendingInteraction {
-                                        request_id: request_id.clone(),
-                                        interaction_type: interaction::InteractionType::SingleSelect {
-                                            prompt: first.question.clone(),
-                                            options: opts,
-                                        },
-                                        state: interaction::InteractionState::Waiting,
-                                        chat_id: receive_id.to_string(),
-                                        sender_open_id: String::new(),
-                                        message_id: String::new(),
-                                        created_at: Instant::now(),
-                                    };
-                                    self.interaction_store.insert(interaction);
-                                } else {
-                                    let card = self.build_text_input_hint_card(request_id, &first.question);
-                                    let _ = self.send_interactive_card(token, receive_id_type, receive_id, &card).await;
-                                    let interaction = interaction::PendingInteraction {
-                                        request_id: request_id.clone(),
-                                        interaction_type: interaction::InteractionType::TextInput {
-                                            prompt: first.question.clone(),
-                                        },
-                                        state: interaction::InteractionState::Waiting,
-                                        chat_id: receive_id.to_string(),
-                                        sender_open_id: String::new(),
-                                        message_id: String::new(),
-                                        created_at: Instant::now(),
-                                    };
-                                    self.interaction_store.insert(interaction);
-                                }
-                                continue;
-                            }
-                            let is_text = matches!(event, ControllerEvent::Text(_));
-                            let is_done = accumulator.process_event(&event);
-                            // Send first text chunk immediately, then flush every ~300 chars
-                            let should_flush = if !first_text_sent {
-                                is_text && !first_text_sent
-                            } else {
-                                accumulator.peek_output().len() >= 300
-                            };
-                            if is_text && should_flush {
-                                let partial = accumulator.take_output();
-                                if !partial.trim().is_empty() {
-                                    let _ = self.send_text_message(token, receive_id_type, receive_id, &partial).await;
-                                    first_text_sent = true;
-                                    crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "assistant", &partial);
-                                }
-                            }
-                            if is_done {
-                                break;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(_) => break,
-                    }
-                }
-            }
-        }
-
-        let reply = accumulator.take_output();
-        if !reply.trim().is_empty() {
-            self.send_text_message(token, receive_id_type, receive_id, &reply.trim()).await?;
-            crate::web::state::broadcast_event(receive_id, "feishu", receive_id, "assistant", reply.trim());
-        }
-        Ok(())
-    }
-
-
-    // -----------------------------------------------------------------------
-    // Chat management
-    // -----------------------------------------------------------------------
-
     /// Gracefully shutdown all per-chat Claude sessions.
     /// Sends a "session exited" message to each chat, then gives each session
     /// 500ms to exit; if it doesn't, the timeout cancels the future and
     /// tokio::process::Child's Drop impl sends SIGKILL.
     pub async fn shutdown_all_sessions(&self) {
-        let token = match self.get_tenant_access_token().await {
-            Ok(t) => t,
-            Err(e) => {
-                warn!("[Feishu] Failed to get token for shutdown messages: {}", e);
-                String::new()
-            }
-        };
-
-        for entry in self.sessions.iter() {
+        for entry in self.channels.iter() {
             let chat_id = entry.key().clone();
-            let session = entry.value().clone();
+            let runtime = entry.value().clone();
             drop(entry);
 
             // Notify the chat that the bot is shutting down
-            if !token.is_empty() {
-                let _ = self
-                    .send_text_message(
-                        &token,
-                        &session.receive_id_type,
-                        &chat_id,
-                        "机器人正在关闭，会话已退出",
-                    )
-                    .await;
-            }
+            let _ = self
+                .send_text_message(
+                    &runtime.receive_id_type,
+                    &chat_id,
+                    "机器人正在关闭，会话已退出",
+                )
+                .await;
 
-            let ctrl = session.controller.lock().await;
-            match tokio::time::timeout(
-                tokio::time::Duration::from_millis(500),
-                ctrl.stop_session(),
-            )
-            .await
-            {
-                Ok(Ok(())) => info!("[Feishu] Session {} stopped gracefully", chat_id),
-                Ok(Err(e)) => warn!("[Feishu] Session {} stop error: {}", chat_id, e),
-                Err(_) => warn!("[Feishu] Session {} stop timed out, killing", chat_id),
+            if let Some(ref active) = runtime.active_claude {
+                let ctrl = active.controller.lock().await;
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_millis(500),
+                    ctrl.stop_session(),
+                )
+                .await
+                {
+                    Ok(Ok(())) => info!("[Feishu] Session {} stopped gracefully", chat_id),
+                    Ok(Err(e)) => warn!("[Feishu] Session {} stop error: {}", chat_id, e),
+                    Err(_) => warn!("[Feishu] Session {} stop timed out, killing", chat_id),
+                }
             }
         }
     }
 
-    pub async fn list_chats(&self, token: &str) -> Result<Vec<ChatItem>> {
+    pub async fn list_chats(&self) -> Result<Vec<ChatItem>> {
         let url = "https://open.feishu.cn/open-apis/im/v1/chats";
         let resp = self
             .http_client
             .get(url)
-            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
             .context("Failed to list chats")?;
@@ -3232,43 +921,6 @@ impl FeishuPlatform {
     }
 
     // -----------------------------------------------------------------------
-    // Webhook challenge & event handling
-    // -----------------------------------------------------------------------
-
-    pub fn verify_challenge(&self, body: &Value) -> Result<Value> {
-        let challenge = body
-            .get("challenge")
-            .and_then(|v| v.as_str())
-            .context("Missing challenge field")?;
-        Ok(json!({ "challenge": challenge }))
-    }
-
-    pub async fn handle_webhook_event(&self, body: &Value) -> Result<Option<NormalizedMessage>> {
-        if body.get("challenge").is_some() {
-            anyhow::bail!("Challenge requests should be handled by verify_challenge");
-        }
-
-        let event_type = body
-            .get("header")
-            .and_then(|h| h.get("event_type"))
-            .and_then(|v| v.as_str());
-
-        match event_type {
-            Some("im.message.receive_v1") => {
-                let normalized = self.normalize_message(body);
-                Ok(normalized)
-            }
-            Some(other) => {
-                debug!("Unhandled webhook event type: {}", other);
-                Ok(None)
-            }
-            None => {
-                warn!("Webhook event missing event_type");
-                Ok(None)
-            }
-        }
-    }
-    // -----------------------------------------------------------------------
     // ACL
     // -----------------------------------------------------------------------
 
@@ -3288,7 +940,6 @@ impl FeishuPlatform {
 
     async fn add_reaction(
         &self,
-        token: &str,
         message_id: &str,
         emoji_type: &str,
     ) -> Result<Option<String>> {
@@ -3299,7 +950,6 @@ impl FeishuPlatform {
         let resp = self
             .http_client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "reaction_type": { "emoji_type": emoji_type }
             }))
@@ -3330,7 +980,6 @@ impl FeishuPlatform {
 
     async fn remove_reaction(
         &self,
-        token: &str,
         message_id: &str,
         reaction_id: &str,
     ) -> Result<()> {
@@ -3341,7 +990,6 @@ impl FeishuPlatform {
         let resp = self
             .http_client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
             .context("Failed to remove reaction")?;
@@ -3355,11 +1003,11 @@ impl FeishuPlatform {
         Ok(())
     }
 
-    async fn on_processing_start(&self, token: &str, message_id: &str) {
+    async fn on_processing_start(&self, message_id: &str) {
         if message_id.is_empty() {
             return;
         }
-        match self.add_reaction(token, message_id, REACTION_TYPING).await {
+        match self.add_reaction(message_id, REACTION_TYPING).await {
             Ok(Some(reaction_id)) => {
                 self.pending_reactions
                     .insert(message_id.to_string(), reaction_id);
@@ -3376,17 +1024,17 @@ impl FeishuPlatform {
         }
     }
 
-    async fn on_processing_complete(&self, token: &str, message_id: &str, success: bool) {
+    async fn on_processing_complete(&self, message_id: &str, success: bool) {
         if message_id.is_empty() {
             return;
         }
         if let Some((_, reaction_id)) = self.pending_reactions.remove(message_id) {
-            if let Err(e) = self.remove_reaction(token, message_id, &reaction_id).await {
+            if let Err(e) = self.remove_reaction(message_id, &reaction_id).await {
                 debug!("Failed to remove typing reaction: {}", e);
             }
         }
         if !success {
-            if let Err(e) = self.add_reaction(token, message_id, REACTION_FAILURE).await {
+            if let Err(e) = self.add_reaction(message_id, REACTION_FAILURE).await {
                 debug!("Failed to add failure reaction: {}", e);
             }
         }
@@ -3397,12 +1045,10 @@ impl FeishuPlatform {
     // -----------------------------------------------------------------------
 
     async fn fetch_bot_identity(&self) -> Result<Option<BotInfo>> {
-        let token = self.get_tenant_access_token().await?;
         let url = "https://open.feishu.cn/open-apis/bot/v3/info";
         let resp = self
             .http_client
             .get(url)
-            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
             .context("Failed to fetch bot identity")?;
@@ -3450,7 +1096,7 @@ impl FeishuPlatform {
 
 /// Split long text into chunks at line boundaries where possible,
 /// falling back to character boundaries for very long lines.
-fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
+pub(crate) fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
     if text.len() <= max_chars {
         return vec![text.to_string()];
     }
@@ -3471,7 +1117,7 @@ fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
             while !remaining.is_empty() {
                 let split_at = remaining
                     .char_indices()
-                    .take_while(|(i, _)| *i < max_chars)
+                    .take(max_chars)
                     .last()
                     .map(|(i, c)| i + c.len_utf8())
                     .unwrap_or(remaining.len());
@@ -3497,7 +1143,7 @@ fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
     chunks
 }
 
-fn build_http_response(status: u16, body: &str) -> String {
+pub(crate) fn build_http_response(status: u16, body: &str) -> String {
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -3517,7 +1163,7 @@ fn build_http_response(status: u16, body: &str) -> String {
 
 /// Extract text and image keys from a Feishu post message content JSON.
 /// Returns (text, list_of_image_keys).
-fn extract_post_content(content_str: &str) -> (String, Vec<String>) {
+pub(crate) fn extract_post_content(content_str: &str) -> (String, Vec<String>) {
     let mut texts = Vec::new();
     let mut image_keys = Vec::new();
     if let Ok(v) = serde_json::from_str::<Value>(content_str) {
@@ -3568,7 +1214,7 @@ fn extract_post_content(content_str: &str) -> (String, Vec<String>) {
     (text, image_keys)
 }
 
-fn build_ping_frame(service_id: i32) -> Frame {
+ pub(crate) fn build_ping_frame(service_id: i32) -> Frame {
     use crate::platform::proto::Header;
     Frame {
         seq_id: 0,
@@ -3607,7 +1253,7 @@ fn build_pong_frame(service_id: i32) -> Frame {
 /// Build an ACK frame for a received data event.
 /// Matches official Feishu/Lark SDK behavior: keep the original DATA method (1)
 /// and respond with a Response payload so the server knows we processed it.
-fn build_ack_frame(original_frame: &Frame) -> Frame {
+ pub(crate) fn build_ack_frame(original_frame: &Frame) -> Frame {
     use crate::platform::proto::Header;
     let mut ack_frame = original_frame.clone();
 
@@ -3653,176 +1299,5 @@ impl Platform for FeishuPlatform {
 
     async fn shutdown(&self) {
         self.shutdown_all_sessions().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::claude::controller::ClaudeController;
-    use crate::command::router::CommandRouter;
-    use crate::config::model::{FeishuConfig, GatewayConfig};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    fn test_platform() -> FeishuPlatform {
-        let config = FeishuConfig {
-            enabled: true,
-            app_id: "${FEISHU_APP_ID}".to_string(),
-            app_secret: "${FEISHU_APP_SECRET}".to_string(),
-            allow_from: "*".to_string(),
-            encrypt_key: "".to_string(),
-            mode: "websocket".to_string(),
-            webhook_bind: "0.0.0.0:3000".to_string(),
-        };
-        let gateway_config = GatewayConfig::default();
-        let default_dir = &gateway_config.default_dir;
-        FeishuPlatform::new(config, default_dir, gateway_config.claude.clone(), gateway_config.show_thinking)
-    }
-
-    #[tokio::test]
-    #[ignore = "requires network access to Feishu API"]
-    async fn test_get_tenant_access_token_with_real_credentials() {
-        let platform = test_platform();
-        let token = platform.get_tenant_access_token().await;
-        assert!(token.is_ok(), "Failed to get token: {:?}", token.err());
-        let token_str = token.unwrap();
-        assert!(!token_str.is_empty(), "Token should not be empty");
-        println!("Got Feishu tenant_access_token: {}", token_str);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires network access to Feishu API"]
-    async fn test_refresh_token_with_real_credentials() {
-        let platform = test_platform();
-        let token = platform.refresh_token().await;
-        assert!(token.is_ok(), "Failed to refresh token: {:?}", token.err());
-        let token_str = token.unwrap();
-        assert!(!token_str.is_empty(), "Token should not be empty");
-        println!("Refreshed Feishu tenant_access_token: {}", token_str);
-    }
-
-    #[tokio::test]
-    async fn test_token_caching_logic() {
-        let platform = test_platform();
-        {
-            let cached = platform.cached_token.read().await;
-            assert!(cached.is_none());
-        }
-        let token = platform.get_tenant_access_token().await;
-        if token.is_ok() {
-            let cached = platform.cached_token.read().await;
-            assert!(cached.is_some());
-            let fetched_at = platform.token_fetched_at.read().await;
-            assert!(fetched_at.is_some());
-        }
-    }
-
-    #[tokio::test]
-    #[ignore = "requires network access to Feishu API"]
-    async fn test_list_chats_and_send_message() {
-        let platform = test_platform();
-        let token = platform.get_tenant_access_token().await.unwrap();
-
-        // List chats
-        let chats = platform.list_chats(&token).await;
-        assert!(chats.is_ok(), "Failed to list chats: {:?}", chats.err());
-        let chats = chats.unwrap();
-        println!("Chats: {:?}", chats);
-
-        // If there are chats, try sending a message to the first one
-        if let Some(chat) = chats.first() {
-            let result = platform.send_text_message(&token, "chat_id", &chat.chat_id, "Hello from cc-gateway test!").await;
-            assert!(result.is_ok(), "Failed to send message: {:?}", result.err());
-            println!("Sent message to chat: {} ({})", chat.name, chat.chat_id);
-        }
-    }
-
-    #[test]
-    fn test_verify_challenge() {
-        let platform = test_platform();
-        let body = json!({
-            "challenge": "abc123",
-            "token": "verification-token",
-            "type": "url_verification"
-        });
-        let resp = platform.verify_challenge(&body).unwrap();
-        assert_eq!(resp.get("challenge").unwrap().as_str().unwrap(), "abc123");
-    }
-
-    #[test]
-    fn test_verify_challenge_missing_field() {
-        let platform = test_platform();
-        let body = json!({
-            "token": "verification-token",
-            "type": "url_verification"
-        });
-        assert!(platform.verify_challenge(&body).is_err());
-    }
-
-    #[tokio::test]
-    async fn test_handle_webhook_event_text_message() {
-        let platform = test_platform();
-        let body = json!({
-            "schema": "2.0",
-            "header": {
-                "event_id": "event-123",
-                "event_type": "im.message.receive_v1",
-                "create_time": "1234567890"
-            },
-            "event": {
-                "message": {
-                    "message_id": "om_123",
-                    "message_type": "text",
-                    "content": "{\"text\":\"hello world\"}",
-                    "chat_id": "oc_123",
-                    "chat_type": "group"
-                },
-                "sender": {
-                    "sender_id": {
-                        "open_id": "ou_123"
-                    },
-                    "sender_type": "user"
-                }
-            }
-        });
-
-        let result = platform.handle_webhook_event(&body).await;
-        assert!(result.is_ok());
-        let msg = result.unwrap();
-        assert!(msg.is_some());
-        let msg = msg.unwrap();
-        assert_eq!(msg.message_id, "om_123");
-        assert_eq!(msg.message_type, "text");
-        assert_eq!(msg.sender_open_id, "ou_123");
-        assert_eq!(msg.chat_id, Some("oc_123".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_handle_webhook_event_challenge_refused() {
-        let platform = test_platform();
-        let body = json!({
-            "challenge": "abc123",
-            "token": "verification-token",
-            "type": "url_verification"
-        });
-        let result = platform.handle_webhook_event(&body).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_handle_webhook_event_unhandled_type() {
-        let platform = test_platform();
-        let body = json!({
-            "schema": "2.0",
-            "header": {
-                "event_id": "event-456",
-                "event_type": "drive.file.created_v1"
-            },
-            "event": {}
-        });
-        let result = platform.handle_webhook_event(&body).await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
     }
 }

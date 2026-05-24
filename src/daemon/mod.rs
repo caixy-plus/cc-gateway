@@ -14,8 +14,6 @@ use crate::config::loader::ConfigLoader;
 use crate::{t, t_fmt};
 
 const DAEMON_PID_FILE: &str = "daemon.pid";
-#[allow(dead_code)]
-const DAEMON_SOCKET_FILE: &str = "daemon.sock";
 
 /// Start the daemon in background (idempotent).
 /// Uses file locking to prevent multiple instances — the lock is held by the
@@ -536,30 +534,30 @@ pub async fn log(follow: bool, lines: usize) -> Result<()> {
     }
 
     if follow {
-        use std::io::{self, BufRead, Seek};
+        use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
         println!("{}", t!("daemon.following_log"));
-        let mut file = std::fs::File::open(&log_path)?;
-        file.seek(io::SeekFrom::End(0))?;
-        let mut reader = io::BufReader::new(file);
-        let mut buf = String::new();
+        let mut file = tokio::fs::File::open(&log_path).await?;
+        file.seek(std::io::SeekFrom::End(0)).await?;
+        let mut reader = tokio::io::BufReader::new(file);
+        let mut line = String::new();
 
         loop {
-            match reader.read_line(&mut buf) {
+            match reader.read_line(&mut line).await {
                 Ok(0) => {
                     // EOF: wait a bit then retry, like tail -f
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                 }
                 Ok(_) => {
-                    if !buf.is_empty() {
+                    if !line.is_empty() {
                         // Remove trailing newline if present
-                        if buf.ends_with('\n') {
-                            buf.pop();
-                            if buf.ends_with('\r') {
-                                buf.pop();
+                        if line.ends_with('\n') {
+                            line.pop();
+                            if line.ends_with('\r') {
+                                line.pop();
                             }
                         }
-                        println!("{}", buf);
-                        buf.clear();
+                        println!("{}", line);
+                        line.clear();
                     }
                 }
                 Err(_) => break,
@@ -570,7 +568,7 @@ pub async fn log(follow: bool, lines: usize) -> Result<()> {
     Ok(())
 }
 
-fn is_process_alive(pid: u32) -> bool {
+pub(crate) fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         use nix::sys::signal;
@@ -585,27 +583,5 @@ fn is_process_alive(pid: u32) -> bool {
             .output()
             .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_process_alive_current_pid() {
-        let current_pid = std::process::id();
-        assert!(
-            is_process_alive(current_pid),
-            "is_process_alive should return true for the current process"
-        );
-    }
-
-    #[test]
-    fn test_is_process_alive_nonexistent_pid() {
-        assert!(
-            !is_process_alive(999_999),
-            "is_process_alive should return false for a non-existent PID"
-        );
     }
 }

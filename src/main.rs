@@ -83,6 +83,9 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Internal: run MCP server for Claude Code (do not use directly)
+    #[command(hide = true, name = "_mcp-server")]
+    McpServer,
 }
 
 #[tokio::main]
@@ -133,7 +136,13 @@ async fn main() -> Result<()> {
         Some(Commands::Update { check, force }) => {
             update::run(check, force).await?;
         }
+        Some(Commands::McpServer) => {
+            claude::mcp_server::run_mcp_server().await?;
+        }
     }
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

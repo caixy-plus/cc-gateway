@@ -82,6 +82,16 @@ cargo run -- start        # Start daemon (spawns background process)
 - **`platform/telegram/mod.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Each chat gets its own `TgChatSession` (isolated Claude subprocess). Routes messages through `CommandRouter` and streams Claude responses back via `sendMessage`.
 - **`platform/proto/mod.rs`**: Protobuf frame codec for Feishu pbbp2 (METHOD_CONTROL / METHOD_DATA, SERVICE_IM / SERVICE_CARD).
 
+### Platform Reference Docs
+
+- **Feishu / Lark Open Platform**: https://open.feishu.cn/document/home/index
+  - Card JSON v2.0 breaking changes: https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes
+  - Button component (V2): https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button
+  - WebSocket real-time messaging (pbbp2): https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes (search "pbbp2")
+- **Telegram Bot API**: https://core.telegram.org/bots/api
+  - `getUpdates` long-polling reference: https://core.telegram.org/bots/api#getupdates
+  - `sendMessage` reference: https://core.telegram.org/bots/api#sendmessage
+
 ### Configuration (`src/config/`)
 
 - **`config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.

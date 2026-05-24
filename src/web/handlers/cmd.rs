@@ -2,7 +2,7 @@ use axum::{extract::Json, http::StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::session::manager::GLOBAL_SESSIONS;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 #[derive(Deserialize)]
 pub struct CdRequest {
@@ -12,6 +12,7 @@ pub struct CdRequest {
 
 #[derive(Deserialize)]
 pub struct LlRequest {
+    #[allow(dead_code)]
     session_id: Option<String>,
     path: Option<String>,
     show_hidden: Option<bool>,
@@ -22,34 +23,25 @@ pub struct SessionCmdRequest {
     session_id: Option<String>,
 }
 
-fn get_work_dir(session_id: Option<&str>) -> String {
-    if let Some(id) = session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
-            let _ctrl = runtime.controller.blocking_lock();
-            // Use a blocking lock here because this is called from sync context in handlers.
-            // Actually, handlers are async so we should use async. But since we're inside
-            // an async handler, we can use the async version. Let me restructure.
-            // For now, just return the session's work_dir field.
-            return runtime.session.work_dir.clone();
-        }
-    }
-    std::env::current_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "~".to_string())
+fn webui_channel_id() -> Option<String> {
+    GLOBAL_CHANNEL_SESSIONS
+        .list_channels()
+        .into_iter()
+        .find(|c| c.platform == "webui")
+        .map(|c| c.id)
 }
 
-// NOTE: handlers are async, so we can await locks.
-// get_work_dir above won't work well. Let me make it async.
-
-async fn get_work_dir_async(session_id: Option<&str>) -> String {
-    if let Some(id) = session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
-            let ctrl = runtime.controller.lock().await;
-            let wd = ctrl.get_work_dir().await;
-            if !wd.is_empty() {
-                return wd;
+async fn get_work_dir_async(_session_id: Option<&str>) -> String {
+    if let Some(channel_id) = webui_channel_id() {
+        if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+            if let Some(ref active) = runtime.active_claude {
+                let ctrl = active.controller.lock().await;
+                let wd = ctrl.get_work_dir().await;
+                if !wd.is_empty() {
+                    return wd;
+                }
             }
-            return runtime.session.work_dir.clone();
+            return runtime.channel_session.work_dir.clone();
         }
     }
     std::env::current_dir()
@@ -57,13 +49,14 @@ async fn get_work_dir_async(session_id: Option<&str>) -> String {
         .unwrap_or_else(|_| "~".to_string())
 }
 
-async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
-    if let Some(id) = session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
-            let ctrl = runtime.controller.lock().await;
-            ctrl.init_work_dir(dir.clone()).await;
-            drop(ctrl);
-            GLOBAL_SESSIONS.update_work_dir(id, &dir);
+async fn set_session_work_dir(_session_id: Option<&str>, dir: String) {
+    if let Some(channel_id) = webui_channel_id() {
+        if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+            if let Some(ref active) = runtime.active_claude {
+                let ctrl = active.controller.lock().await;
+                ctrl.init_work_dir(dir.clone()).await;
+            }
+            GLOBAL_CHANNEL_SESSIONS.update_channel_work_dir(&channel_id, &dir);
             return;
         }
     }
@@ -136,26 +129,9 @@ pub async fn handle_help() -> (StatusCode, String) {
         { "cmd": "/quit", "desc": "Quit current Claude session" },
         { "cmd": "/cd <path>", "desc": "Change working directory" },
         { "cmd": "/cd_default", "desc": "Reset to default directory" },
-        { "cmd": "/claude [args...]", "desc": "Start or restart Claude session" },
+        { "cmd": "/claude [args...]", "desc": "Start a new Claude session" },
         { "cmd": "/pwd", "desc": "Show current working directory" },
         { "cmd": "/ll", "desc": "List directory contents" },
-        { "cmd": "/show-thinking-toggle", "desc": "Toggle thinking display" },
     ]);
     (StatusCode::OK, commands.to_string())
-}
-
-pub async fn handle_show_thinking_toggle(
-    Json(req): Json<SessionCmdRequest>,
-) -> (StatusCode, String) {
-    if let Some(id) = req.session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(&id) {
-            let ctrl = runtime.controller.lock().await;
-            let new_value = !ctrl.get_show_thinking();
-            ctrl.set_show_thinking(new_value);
-            let body = json!({ "show_thinking": new_value });
-            return (StatusCode::OK, body.to_string());
-        }
-    }
-    let body = json!({ "message": "Thinking display toggled (no active session)" });
-    (StatusCode::OK, body.to_string())
 }

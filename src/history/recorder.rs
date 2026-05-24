@@ -2,13 +2,13 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::session::manager::GLOBAL_SESSIONS;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::web::state::Event;
 
 /// Start a background task that listens to the global event bus and records
-/// WebUI session events to JSONL files in `~/.cc-gateway/history/`.
+/// events to JSONL files in `~/.cc-gateway/history/`.
 pub fn start_recorder() {
     tokio::spawn(async {
         let mut rx = crate::web::state::EVENT_BUS.subscribe();
@@ -21,8 +21,12 @@ pub fn start_recorder() {
                         error!("[History] Failed to record event: {}", e);
                     }
                 }
-                Err(e) => {
-                    error!("[History] Event bus receive error: {}", e);
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    info!("[History] Event bus closed, shutting down recorder");
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("[History] Event bus lagged, skipped {} messages", n);
                 }
             }
         }
@@ -30,20 +34,41 @@ pub fn start_recorder() {
 }
 
 async fn record_event(event: &Event) -> anyhow::Result<()> {
-    // Only record WebUI sessions
-    let is_webui = GLOBAL_SESSIONS
-        .get(&event.session_id)
-        .map(|s| matches!(s.source, crate::session::model::SessionSource::WebUI))
-        .unwrap_or(false);
+    // event.session_id may be:
+    // - WebUI: ClaudeSession.id
+    // - Feishu/Telegram: chat_id (ChannelSession.channel_id)
+    // Try all three lookup strategies.
+    let claude_session =
+        // 1) WebUI passes ClaudeSession.id directly
+        GLOBAL_CHANNEL_SESSIONS.get_claude_session(&event.session_id)
+        .or_else(|| {
+            // 2) session_id might be ChannelSession.id
+            GLOBAL_CHANNEL_SESSIONS.get_active_claude_session(&event.session_id)
+        })
+        .or_else(|| {
+            // 3) Feishu/Telegram pass chat_id; find ChannelSession by channel_id
+            GLOBAL_CHANNEL_SESSIONS.list_channels()
+                .into_iter()
+                .find(|c| c.channel_id == event.session_id && c.platform == event.platform)
+                .and_then(|c| GLOBAL_CHANNEL_SESSIONS.get_active_claude_session(&c.id))
+        });
 
-    if !is_webui {
-        return Ok(());
-    }
+    let claude_session = match claude_session {
+        Some(cs) => cs,
+        None => {
+            // No active session for this channel; skip recording.
+            return Ok(());
+        }
+    };
+
+    // Use the ClaudeSession's own id as the history file name.
+    let history_file_id = claude_session.claude_session_id.as_deref()
+        .unwrap_or(&claude_session.id);
 
     let history_dir = get_history_dir()?;
     fs::create_dir_all(&history_dir)?;
 
-    let file_path = history_dir.join(format!("{}.jsonl", event.session_id));
+    let file_path = history_dir.join(format!("{}.jsonl", history_file_id));
     let line = serde_json::to_string(&serde_json::json!({
         "timestamp": &event.timestamp,
         "role": &event.role,
