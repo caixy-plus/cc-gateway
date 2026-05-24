@@ -1019,55 +1019,69 @@ impl FeishuPlatform {
                         "tag": "hr"
                     },
                     {
-                        "tag": "action",
-                        "layout": "default",
-                        "actions": [
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.approve_once")
+                        },
+                        "type": "primary",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.approve_once")
-                                },
-                                "type": "primary",
+                                "type": "callback",
                                 "value": {
                                     "action": "approve_once",
                                     "request_id": request_id,
                                     "tool_name": tool_name
                                 }
-                            },
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.approve_session")
+                        },
+                        "type": "primary",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.approve_session")
-                                },
-                                "type": "primary",
+                                "type": "callback",
                                 "value": {
                                     "action": "approve_session",
                                     "request_id": request_id,
                                     "tool_name": tool_name
                                 }
-                            },
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.approve_always")
+                        },
+                        "type": "primary",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.approve_always")
-                                },
-                                "type": "primary",
+                                "type": "callback",
                                 "value": {
                                     "action": "approve_always",
                                     "request_id": request_id,
                                     "tool_name": tool_name
                                 }
-                            },
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.deny")
+                        },
+                        "type": "danger",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": t!("feishu.deny")
-                                },
-                                "type": "danger",
+                                "type": "callback",
                                 "value": {
                                     "action": "deny",
                                     "request_id": request_id,
@@ -1117,16 +1131,15 @@ impl FeishuPlatform {
                     }
                 }),
                 json!({
-                    "tag": "action",
-                    "layout": "default",
-                    "actions": [
+                    "tag": "select_static",
+                    "placeholder": {
+                        "tag": "plain_text",
+                        "content": "请选择..."
+                    },
+                    "options": select_options,
+                    "behaviors": [
                         {
-                            "tag": "select_static",
-                            "placeholder": {
-                                "tag": "plain_text",
-                                "content": "请选择..."
-                            },
-                            "options": select_options,
+                            "type": "callback",
                             "value": {
                                 "action": "select",
                                 "request_id": request_id
@@ -1146,15 +1159,20 @@ impl FeishuPlatform {
                             "content": opt
                         },
                         "type": "primary",
-                        "value": {
-                            "action": "select",
-                            "request_id": request_id,
-                            "answer": opt
-                        }
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "select",
+                                    "request_id": request_id,
+                                    "answer": opt
+                                }
+                            }
+                        ]
                     })
                 })
                 .collect();
-            vec![
+            let mut elements = vec![
                 json!({
                     "tag": "div",
                     "text": {
@@ -1162,12 +1180,9 @@ impl FeishuPlatform {
                         "content": title
                     }
                 }),
-                json!({
-                    "tag": "action",
-                    "layout": "default",
-                    "actions": buttons
-                }),
-            ]
+            ];
+            elements.extend(buttons);
+            elements
         };
 
         json!({
@@ -1223,53 +1238,56 @@ impl FeishuPlatform {
                         "content": label
                     },
                     "type": btn_type,
-                    "value": {
-                        "action": "toggle_select",
-                        "request_id": request_id,
-                        "toggle": opt,
-                        "selected": new_selected
-                    }
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {
+                                "action": "toggle_select",
+                                "request_id": request_id,
+                                "toggle": opt,
+                                "selected": new_selected
+                            }
+                        }
+                    ]
                 })
             })
             .collect();
 
-        let actions = vec![
-            json!({
-                "tag": "action",
-                "layout": "default",
-                "actions": buttons
-            }),
-            json!({
-                "tag": "action",
-                "layout": "default",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "提交"
-                        },
-                        "type": "primary",
-                        "value": {
-                            "action": "submit_multi",
-                            "request_id": request_id
-                        }
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "取消"
-                        },
-                        "type": "danger",
-                        "value": {
-                            "action": "cancel_multi",
-                            "request_id": request_id
-                        }
+        let mut actions = buttons;
+        actions.push(json!({
+            "tag": "button",
+            "text": {
+                "tag": "plain_text",
+                "content": "提交"
+            },
+            "type": "primary",
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "action": "submit_multi",
+                        "request_id": request_id
                     }
-                ]
-            }),
-        ];
+                }
+            ]
+        }));
+        actions.push(json!({
+            "tag": "button",
+            "text": {
+                "tag": "plain_text",
+                "content": "取消"
+            },
+            "type": "danger",
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "action": "cancel_multi",
+                        "request_id": request_id
+                    }
+                }
+            ]
+        }));
 
         json!({
             "schema": "2.0",
@@ -1317,16 +1335,15 @@ impl FeishuPlatform {
                         }
                     },
                     {
-                        "tag": "action",
-                        "layout": "default",
-                        "actions": [
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "取消"
+                        },
+                        "type": "danger",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "取消"
-                                },
-                                "type": "danger",
+                                "type": "callback",
                                 "value": {
                                     "action": "cancel_text_input",
                                     "request_id": request_id
@@ -1363,29 +1380,33 @@ impl FeishuPlatform {
             "body": {
                 "elements": [
                     {
-                        "tag": "action",
-                        "layout": "default",
-                        "actions": [
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "确认"
+                        },
+                        "type": "primary",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "确认"
-                                },
-                                "type": "primary",
+                                "type": "callback",
                                 "value": {
                                     "action": "confirm",
                                     "request_id": request_id,
                                     "answer": true
                                 }
-                            },
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "取消"
+                        },
+                        "type": "danger",
+                        "behaviors": [
                             {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "取消"
-                                },
-                                "type": "danger",
+                                "type": "callback",
                                 "value": {
                                     "action": "confirm",
                                     "request_id": request_id,
@@ -1465,27 +1486,21 @@ impl FeishuPlatform {
 
         // Add "Start New Session" button at the bottom
         elements.push(json!({
-            "tag": "action",
-            "layout": "default",
-            "actions": [
+            "tag": "button",
+            "text": {
+                "tag": "plain_text",
+                "content": t!("feishu.start_new_session")
+            },
+            "type": "default",
+            "behaviors": [
                 {
-                    "tag": "button",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": t!("feishu.start_new_session")
-                    },
-                    "type": "default",
-                    "behaviors": [
-                        {
-                            "type": "callback",
-                            "value": {
-                                "cmd": "resume",
-                                "session_id": "",
-                                "chat_id": receive_id,
-                                "receive_id_type": receive_id_type
-                            }
-                        }
-                    ]
+                    "type": "callback",
+                    "value": {
+                        "cmd": "resume",
+                        "session_id": "",
+                        "chat_id": receive_id,
+                        "receive_id_type": receive_id_type
+                    }
                 }
             ]
         }));
@@ -1605,10 +1620,7 @@ impl FeishuPlatform {
                     "content": t_fmt!("feishu.page_info", PAGE = page + 1, TOTAL = (dirs.len() + MAX_DIRS - 1) / MAX_DIRS)
                 }
             }));
-            elements.push(json!({
-                "tag": "action",
-                "actions": pagination_buttons
-            }));
+            elements.extend(pagination_buttons);
         }
 
         json!({
@@ -3824,5 +3836,151 @@ mod tests {
         let result = platform.handle_webhook_event(&body).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    // Card schema v2 compliance helpers
+    fn assert_no_action_tag(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(tag) = map.get("tag").and_then(|t| t.as_str()) {
+                    assert_ne!(tag, "action", "Found deprecated 'action' tag in card JSON");
+                }
+                for v in map.values() {
+                    assert_no_action_tag(v);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    assert_no_action_tag(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_interactive_uses_behaviors(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(tag) = map.get("tag").and_then(|t| t.as_str()) {
+                    if tag == "button" || tag == "select_static" {
+                        assert!(
+                            map.contains_key("behaviors"),
+                            "'{}' must use 'behaviors' instead of root 'value'",
+                            tag
+                        );
+                        assert!(
+                            !map.contains_key("value"),
+                            "'{}' should not have root 'value' when using 'behaviors'",
+                            tag
+                        );
+                    }
+                }
+                for v in map.values() {
+                    assert_interactive_uses_behaviors(v);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    assert_interactive_uses_behaviors(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_build_permission_card_schema_v2() {
+        let platform = test_platform();
+        let card = platform.build_permission_card("req-123", "test_tool", Some(&json!("some input")));
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_single_select_card_dropdown_schema_v2() {
+        let platform = test_platform();
+        let options: Vec<String> = (1..=10).map(|i| format!("option {}", i)).collect();
+        let card = platform.build_single_select_card("req-456", "Choose one:", &options);
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_single_select_card_buttons_schema_v2() {
+        let platform = test_platform();
+        let options = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let card = platform.build_single_select_card("req-789", "Choose one:", &options);
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_multi_select_card_schema_v2() {
+        let platform = test_platform();
+        let options = vec!["X".to_string(), "Y".to_string(), "Z".to_string()];
+        let selected = vec!["X".to_string()];
+        let card = platform.build_multi_select_card("req-abc", "Pick items:", &options, &selected);
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_text_input_hint_card_schema_v2() {
+        let platform = test_platform();
+        let card = platform.build_text_input_hint_card("req-def", "Enter your name");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_confirm_card_schema_v2() {
+        let platform = test_platform();
+        let card = platform.build_confirm_card("req-ghi", "Are you sure?");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_session_history_card_schema_v2() {
+        let platform = test_platform();
+        let sessions = vec![
+            crate::session::model::Session {
+                id: "sess-1".to_string(),
+                title: "Test Session".to_string(),
+                source: crate::session::model::SessionSource::Feishu,
+                platform: "feishu".to_string(),
+                chat_id: "chat-1".to_string(),
+                work_dir: "/tmp".to_string(),
+                active: true,
+                created_at: chrono::Utc::now(),
+                claude_session_id: Some("csid-1".to_string()),
+            },
+        ];
+        let card = platform.build_session_history_card(&sessions, "chat_id", "chat-1");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_dir_select_card_schema_v2() {
+        let platform = test_platform();
+        let dirs = vec![
+            ("workspace".to_string(), "/home/user/workspace".to_string()),
+            ("docs".to_string(), "/home/user/docs".to_string()),
+        ];
+        let card = platform.build_dir_select_card(&dirs, 0, "/home/user", "chat_id", "chat-1");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_dir_select_card_with_pagination_schema_v2() {
+        let platform = test_platform();
+        let dirs: Vec<(String, String)> = (0..50)
+            .map(|i| (format!("dir{}", i), format!("/home/user/dir{}", i)))
+            .collect();
+        let card = platform.build_dir_select_card(&dirs, 0, "/home/user", "chat_id", "chat-1");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
     }
 }

@@ -110,6 +110,7 @@ pub enum ControllerEvent {
     },
     Error(String),
     Done,
+    Dead,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,10 @@ impl ClaudeController {
         self.stop_session().await?;
 
         let validated = ensure_under_home(&work_dir)?;
+        {
+            let mut wd = self.work_dir.write().await;
+            *wd = validated.clone();
+        }
 
         let pending_resume = {
             let mut pending = self.pending_resume_session_id.write().await;
@@ -188,6 +193,13 @@ impl ClaudeController {
             sid.clone()
         };
 
+        // Clear any stale claude_session_id so a new session gets a new ID
+        // unless we are explicitly resuming via pending_resume.
+        if resume_id.is_none() {
+            let mut sid = self.claude_session_id.write().await;
+            *sid = None;
+        }
+
         let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
         let (session, claude_session_id) = ClaudeSession::spawn(validated.clone(), extra_args, &self.config, claude_tx, resume_id).await?;
 
@@ -198,10 +210,6 @@ impl ClaudeController {
         {
             let mut sid = self.claude_session_id.write().await;
             *sid = claude_session_id.clone();
-        }
-        {
-            let mut wd = self.work_dir.write().await;
-            *wd = validated.clone();
         }
         {
             let mut state = self.session_state.write().await;
@@ -242,10 +250,15 @@ impl ClaudeController {
             let _ = event_tx.send(ControllerEvent::Done);
 
             // Auto-cleanup: stdout closed means the child process exited
-            {
+            let was_active = {
                 let mut state = session_state.write().await;
+                let was = *state == SessionState::Active;
                 info!("SessionState: {:?} -> Inactive (event processor ended)", *state);
                 *state = SessionState::Inactive;
+                was
+            };
+            if was_active {
+                let _ = event_tx.send(ControllerEvent::Dead);
             }
             {
                 let mut s = session_arc.write().await;
@@ -300,8 +313,10 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        // NOTE: we intentionally keep claude_session_id here so that a
-        // subsequent /claude can resume the same Claude session.
+        {
+            let mut sid = self.claude_session_id.write().await;
+            *sid = None;
+        }
         Ok(())
     }
 
@@ -373,6 +388,8 @@ impl ClaudeController {
         wd.clone()
     }
 
+    #[allow(dead_code)]
+    #[deprecated(note = "work_dir is immutable after init_work_dir / start_session")]
     #[allow(dead_code)]
     pub async fn set_work_dir(&self, dir: String) -> Result<()> {
         let validated = ensure_under_home(&dir)?;

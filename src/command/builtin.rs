@@ -29,10 +29,10 @@ impl BuiltinCommands {
 
         match cmd {
             "/help" => Some(self.help()),
-            "/quit" => Some(self.quit().await),
+            "/quit" | "/close-session" => Some(self.quit().await),
             "/cd" => Some(self.cd(arg).await),
             "/cd_default" => Some(self.cd_default().await),
-            "/claude" => Some(self.claude(arg).await),
+            "/claude" | "/new-session" => Some(self.claude(arg).await),
             "/claude-resume" => Some(self.claude_resume(arg).await),
             "/pwd" => Some(self.pwd().await),
             "/ll" => Some(self.ll().await),
@@ -41,6 +41,8 @@ impl BuiltinCommands {
             "/show-thinking" => Some(self.show_thinking().await),
             "/hide-thinking" => Some(self.hide_thinking().await),
             "/claude-history" => Some(self.claude_history(arg).await),
+            "/list-sessions" => Some(self.list_sessions().await),
+            "/switch-session" => Some(self.switch_session(arg).await),
             _ => None,
         }
     }
@@ -121,26 +123,14 @@ impl BuiltinCommands {
             work_dir
         };
 
-        let force_new = args.trim() == "--new";
-        let extra_args: Vec<String> = if args.is_empty() || force_new {
+        let extra_args: Vec<String> = if args.is_empty() {
             vec![]
         } else {
             args.split_whitespace().map(|s| s.to_string()).collect()
         };
 
-        if force_new {
-            ctrl.set_claude_session_id(None).await;
-            ctrl.set_pending_resume_session_id(None).await;
-        }
-
         match ctrl.start_session(dir.clone(), extra_args).await {
-            Ok(()) => {
-                if force_new {
-                    t_fmt!("builtin.new_session_started", DIR = dir)
-                } else {
-                    t_fmt!("builtin.session_started", DIR = dir)
-                }
-            }
+            Ok(()) => t_fmt!("builtin.session_started", DIR = dir),
             Err(e) => t_fmt!("builtin.failed_start_claude", ERR = e),
         }
     }
@@ -342,6 +332,14 @@ impl BuiltinCommands {
         let ctrl = self.controller.lock().await;
         ctrl.set_pending_resume_session_id(Some(arg.to_string())).await;
         t_fmt!("builtin.resume_session_set", SID = &arg[..arg.len().min(8)])
+    }
+
+    async fn list_sessions(&self) -> String {
+        "Not implemented yet".to_string()
+    }
+
+    async fn switch_session(&self, _arg: &str) -> String {
+        "Not implemented yet".to_string()
     }
 
 }

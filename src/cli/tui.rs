@@ -573,6 +573,10 @@ fn handle_claude_event(event: &ControllerEvent, app: &mut App) -> bool {
             false
         }
         ControllerEvent::Done => true,
+        ControllerEvent::Dead => {
+            app.add_message(MsgRole::System, "Claude session ended unexpectedly.");
+            true
+        }
     }
 }
 
