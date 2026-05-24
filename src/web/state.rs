@@ -2,6 +2,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::sync::broadcast;
+use tracing::warn;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Event {
@@ -19,14 +20,16 @@ pub static EVENT_BUS: Lazy<broadcast::Sender<Event>> = Lazy::new(|| {
 });
 
 pub fn broadcast_event(session_id: &str, platform: &str, chat_id: &str, role: &str, content: &str) {
-    let _ = EVENT_BUS.send(Event {
+    if let Err(e) = EVENT_BUS.send(Event {
         session_id: session_id.to_string(),
         platform: platform.to_string(),
         chat_id: chat_id.to_string(),
         role: role.to_string(),
         content: content.to_string(),
         timestamp: Utc::now().to_rfc3339(),
-    });
+    }) {
+        warn!("EVENT_BUS send failed (lagging receivers): {} events dropped", e);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -47,9 +50,11 @@ pub static DELIVER_BUS: Lazy<broadcast::Sender<DeliverRequest>> = Lazy::new(|| {
 });
 
 pub fn broadcast_deliver(session_id: &str, path: &str, message: Option<&str>) {
-    let _ = DELIVER_BUS.send(DeliverRequest {
+    if let Err(e) = DELIVER_BUS.send(DeliverRequest {
         session_id: session_id.to_string(),
         path: path.to_string(),
         message: message.map(|s| s.to_string()),
-    });
+    }) {
+        warn!("DELIVER_BUS send failed (lagging receivers): {} events dropped", e);
+    }
 }
