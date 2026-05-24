@@ -1421,13 +1421,14 @@ impl FeishuPlatform {
     }
 
     /// Build an interactive session history card.
-    /// Feishu card schema v2.
+    /// Feishu card schema v2: three buttons per session (resume, start new, delete).
     pub fn build_session_history_card(
         &self,
         sessions: &[crate::session::model::Session],
         receive_id_type: &str,
         receive_id: &str,
     ) -> Value {
+        let china_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
         let mut elements: Vec<Value> = Vec::new();
         elements.push(json!({
             "tag": "div",
@@ -1439,7 +1440,10 @@ impl FeishuPlatform {
 
         for session in sessions {
             let status_dot = if session.active { "🟢" } else { "⚪" };
-            let time = session.created_at.format("%Y-%m-%d %H:%M").to_string();
+            let time = session.created_at
+                .with_timezone(&china_tz)
+                .format("%Y-%m-%d %H:%M")
+                .to_string();
             let mut info_parts = vec![
                 format!("**{}** {}", status_dot, session.title),
                 format!("📁 {}", session.work_dir),
@@ -1476,6 +1480,45 @@ impl FeishuPlatform {
                     }
                 ]
             }));
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.start_new_session")
+                },
+                "type": "default",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "resume",
+                            "session_id": "",
+                            "work_dir": session.work_dir,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.delete_session")
+                },
+                "type": "danger",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "delete_session",
+                            "session_id": session.id,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
             elements.push(json!({ "tag": "hr" }));
         }
 
@@ -1483,27 +1526,6 @@ impl FeishuPlatform {
         if elements.last().and_then(|e| e.get("tag")).and_then(|v| v.as_str()) == Some("hr") {
             elements.pop();
         }
-
-        // Add "Start New Session" button at the bottom
-        elements.push(json!({
-            "tag": "button",
-            "text": {
-                "tag": "plain_text",
-                "content": t!("feishu.start_new_session")
-            },
-            "type": "default",
-            "behaviors": [
-                {
-                    "type": "callback",
-                    "value": {
-                        "cmd": "resume",
-                        "session_id": "",
-                        "chat_id": receive_id,
-                        "receive_id_type": receive_id_type
-                    }
-                }
-            ]
-        }));
 
         json!({
             "schema": "2.0",
