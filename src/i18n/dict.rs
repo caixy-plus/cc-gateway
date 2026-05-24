@@ -579,6 +579,14 @@ pub fn t(key: &str) -> &str {
             Language::En => "Start New Session",
             Language::ZhCN => "开始新会话",
         },
+        "feishu.delete_session" => match lang {
+            Language::En => "Delete",
+            Language::ZhCN => "删除",
+        },
+        "feishu.session_deleted" => match lang {
+            Language::En => "Session deleted.",
+            Language::ZhCN => "会话已删除。",
+        },
         "feishu.session_resumed" => match lang {
             Language::En => "Session resumed: {TITLE}",
             Language::ZhCN => "会话已恢复: {TITLE}",
