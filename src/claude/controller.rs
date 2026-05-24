@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
+use crate::claude::mcp_server::McpContext;
 use crate::claude::protocol::{build_user_message, InputMessage, OutputEvent};
 use crate::claude::session::ClaudeSession;
 use crate::config::model::ClaudeConfig;
@@ -146,6 +147,7 @@ pub struct ClaudeController {
     message_buffer: Arc<Mutex<Vec<String>>>,
     claude_session_id: Arc<RwLock<Option<String>>>,
     pending_resume_session_id: Arc<RwLock<Option<String>>>,
+    mcp_context: Arc<RwLock<Option<McpContext>>>,
 }
 
 impl ClaudeController {
@@ -163,6 +165,7 @@ impl ClaudeController {
             message_buffer: Arc::new(Mutex::new(Vec::new())),
             claude_session_id: Arc::new(RwLock::new(None)),
             pending_resume_session_id: Arc::new(RwLock::new(None)),
+            mcp_context: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -439,6 +442,11 @@ impl ClaudeController {
     pub async fn set_pending_resume_session_id(&self, id: Option<String>) {
         let mut sid = self.pending_resume_session_id.write().await;
         *sid = id;
+    }
+
+    pub async fn set_mcp_context(&self, ctx: McpContext) {
+        let mut mc = self.mcp_context.write().await;
+        *mc = Some(ctx);
     }
 
     async fn process_claude_event(
