@@ -24,10 +24,13 @@ pub struct AppState {
     pub default_dir: String,
 }
 
-pub async fn handle_events() -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+pub async fn handle_events(Path(session_id): Path<String>) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let rx = EVENT_BUS.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|result| {
+    let stream = BroadcastStream::new(rx).filter_map(move |result| {
         if let Ok(event) = result {
+            if event.session_id != session_id {
+                return None;
+            }
             let json = match serde_json::to_string(&event) {
                 Ok(s) => s,
                 Err(_) => return None,
