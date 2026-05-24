@@ -376,11 +376,26 @@ pub fn update_claude_session_stopped_at(id: &str, stopped_at: Option<chrono::Dat
     }
 }
 
+pub fn update_claude_session_updated_at(id: &str, updated_at: Option<chrono::DateTime<chrono::Utc>>) {
+    if let Err(e) = try_update_claude_session_updated_at(id, updated_at) {
+        warn!("Failed to update updated_at for Claude session {}: {}", id, e);
+    }
+}
+
 fn try_update_claude_session_stopped_at(id: &str, stopped_at: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
     let conn = open_conn()?;
     conn.execute(
         "UPDATE claude_sessions SET stopped_at = ?1 WHERE id = ?2",
         params![stopped_at.map(|t| t.to_rfc3339()), id],
+    )?;
+    Ok(())
+}
+
+fn try_update_claude_session_updated_at(id: &str, updated_at: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "UPDATE claude_sessions SET updated_at = ?1 WHERE id = ?2",
+        params![updated_at.map(|t| t.to_rfc3339()), id],
     )?;
     Ok(())
 }
@@ -422,6 +437,7 @@ fn try_load_all_claude_sessions() -> Result<Vec<ClaudeSession>> {
             claude_session_id: row.get(6)?,
             created_at,
             stopped_at,
+            updated_at: None,
         })
     })?;
 
