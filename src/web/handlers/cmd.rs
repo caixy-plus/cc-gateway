@@ -2,6 +2,7 @@ use axum::{extract::Json, http::StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::claude::controller::ensure_under_home;
 use crate::session::manager::GLOBAL_SESSIONS;
 
 #[derive(Deserialize)]
@@ -21,25 +22,6 @@ pub struct LlRequest {
 pub struct SessionCmdRequest {
     session_id: Option<String>,
 }
-
-fn get_work_dir(session_id: Option<&str>) -> String {
-    if let Some(id) = session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
-            let _ctrl = runtime.controller.blocking_lock();
-            // Use a blocking lock here because this is called from sync context in handlers.
-            // Actually, handlers are async so we should use async. But since we're inside
-            // an async handler, we can use the async version. Let me restructure.
-            // For now, just return the session's work_dir field.
-            return runtime.session.work_dir.clone();
-        }
-    }
-    std::env::current_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "~".to_string())
-}
-
-// NOTE: handlers are async, so we can await locks.
-// get_work_dir above won't work well. Let me make it async.
 
 async fn get_work_dir_async(session_id: Option<&str>) -> String {
     if let Some(id) = session_id {
@@ -118,6 +100,10 @@ pub async fn handle_cd(Json(req): Json<CdRequest>) -> (StatusCode, String) {
         return (StatusCode::BAD_REQUEST, body.to_string());
     }
     let target_str = target.to_string_lossy().to_string();
+    if let Err(e) = ensure_under_home(&target_str) {
+        let body = json!({ "error": e.to_string() });
+        return (StatusCode::FORBIDDEN, body.to_string());
+    }
     set_session_work_dir(req.session_id.as_deref(), target_str.clone()).await;
     let body = json!({ "dir": target_str });
     (StatusCode::OK, body.to_string())
