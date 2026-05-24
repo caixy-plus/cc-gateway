@@ -30,12 +30,12 @@ impl CommandRouter {
         };
 
         if session_active {
-            // In Claude mode: /quit and /show-thinking-toggle are handled locally.
+            // In Claude mode: only /quit and thinking toggles are handled locally.
             // Everything else (including /help, /cd, /ll, /claude, raw text,
             // slash commands) is forwarded directly to Claude.
             match trimmed {
-                "/quit" | "/show-thinking-toggle" | "/show-thinking" | "/hide-thinking"
-                | "/claude-history" | "/claude-resume" => {
+                "/quit" | "/close-session"
+                | "/show-thinking-toggle" | "/show-thinking" | "/hide-thinking" => {
                     return self.builtin.handle(trimmed).await;
                 }
                 _ => {
@@ -44,13 +44,20 @@ impl CommandRouter {
             }
         }
 
-        // Session inactive: normal gateway command routing
-        if let Some(response) = self.builtin.handle(trimmed).await {
-            return Some(response);
+        // Session inactive: only specific gateway commands are handled locally.
+        // Regular text and unknown commands get "No active Claude session".
+        match trimmed {
+            "/help" | "/cd" | "/cd_default" | "/pwd" | "/ll"
+            | "/claude" | "/claude-resume" | "/new-session"
+            | "/list-sessions" | "/switch-session" | "/close-session"
+            | "/mkdir" | "/show-thinking-toggle" | "/show-thinking"
+            | "/hide-thinking" | "/claude-history" => {
+                return self.builtin.handle(trimmed).await;
+            }
+            _ => {
+                return self.forward.handle_regular(trimmed).await;
+            }
         }
-
-        // Regular message: no active session
-        self.forward.handle_regular(trimmed).await
     }
 }
 

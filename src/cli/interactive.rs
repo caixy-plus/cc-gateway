@@ -321,6 +321,11 @@ impl CliOutput {
                 ));
                 false
             }
+            ControllerEvent::Dead => {
+                self.flush_text();
+                self.lines.push("Claude session ended unexpectedly.".to_string());
+                true
+            }
         }
     }
 

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use tracing::{error, info};
 
-use crate::session::manager::GLOBAL_SESSIONS;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::web::state::Event;
 
 /// Start a background task that listens to the global event bus and records
@@ -31,9 +31,19 @@ pub fn start_recorder() {
 
 async fn record_event(event: &Event) -> anyhow::Result<()> {
     // Only record WebUI sessions
-    let is_webui = GLOBAL_SESSIONS
-        .get(&event.session_id)
-        .map(|s| matches!(s.source, crate::session::model::SessionSource::WebUI))
+    let is_webui = GLOBAL_CHANNEL_SESSIONS
+        .get_channel(&event.session_id)
+        .map(|c| matches!(c.source, crate::session::channel_model::SessionSource::WebUI))
+        .or_else(|| {
+            GLOBAL_CHANNEL_SESSIONS
+                .get_claude_session(&event.session_id)
+                .map(|s| {
+                    GLOBAL_CHANNEL_SESSIONS
+                        .get_channel(&s.channel_session_id)
+                        .map(|c| matches!(c.source, crate::session::channel_model::SessionSource::WebUI))
+                        .unwrap_or(false)
+                })
+        })
         .unwrap_or(false);
 
     if !is_webui {

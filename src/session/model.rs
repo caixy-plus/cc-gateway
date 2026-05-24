@@ -2,6 +2,14 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+// Re-export new types
+#[allow(unused_imports)]
+pub use crate::session::channel_model::{
+    ChannelSession, ClaudeSession, ClaudeSessionState, SessionSource,
+};
+
+// Legacy Session struct — kept for backward compatibility during migration.
+// TODO: Remove after all callers migrate to ChannelSession + ClaudeSession.
 #[derive(Clone, Debug, Serialize)]
 pub struct Session {
     pub id: String,
@@ -14,13 +22,6 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub enum SessionSource {
-    WebUI,
-    Feishu,
-    Telegram,
 }
 
 impl Session {

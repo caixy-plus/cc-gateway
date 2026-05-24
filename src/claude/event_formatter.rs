@@ -135,6 +135,11 @@ impl EventAccumulator {
                 self.flush_text();
                 true
             }
+            ControllerEvent::Dead => {
+                self.flush_text();
+                self.accumulated.push_str("Claude session ended unexpectedly.\n");
+                true
+            }
         }
     }
 

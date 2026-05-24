@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 mod interaction;
-mod cards;
 use anyhow::{Context, Result};
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -958,6 +957,821 @@ impl FeishuPlatform {
             content_type
         );
         Ok(Some((path_str, content_type)))
+    }
+
+    /// Build an interactive approval card for Claude tool permission requests.
+    /// Returns a Feishu card protocol v2 JSON object.
+    pub fn build_permission_card(
+        &self,
+        request_id: &str,
+        tool_name: &str,
+        tool_input: Option<&Value>,
+    ) -> Value {
+        let input_preview = tool_input
+            .and_then(|v| serde_json::to_string_pretty(v).ok())
+            .unwrap_or_else(|| "{}".to_string());
+        // Truncate if too long
+        let input_preview = if input_preview.len() > 500 {
+            format!("{}...", &input_preview[..500])
+        } else {
+            input_preview
+        };
+
+        json!({
+            "schema": "2.0",
+            "config": {
+                "style": {
+                    "text_size": {
+                        "level1": 17,
+                        "level2": 16,
+                        "level3": 14
+                    }
+                }
+            },
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.permission_title")
+                },
+                "subtitle": {
+                    "tag": "plain_text",
+                    "content": t_fmt!("feishu.permission_subtitle", NAME = tool_name)
+                },
+                "template": "indigo"
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": t_fmt!("feishu.request_id_label", ID = request_id)
+                        }
+                    },
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": t_fmt!("feishu.tool_input_label", INPUT = input_preview)
+                        }
+                    },
+                    {
+                        "tag": "hr"
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.approve_once")
+                        },
+                        "type": "primary",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "approve_once",
+                                    "request_id": request_id,
+                                    "tool_name": tool_name
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.approve_session")
+                        },
+                        "type": "primary",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "approve_session",
+                                    "request_id": request_id,
+                                    "tool_name": tool_name
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.approve_always")
+                        },
+                        "type": "primary",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "approve_always",
+                                    "request_id": request_id,
+                                    "tool_name": tool_name
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": t!("feishu.deny")
+                        },
+                        "type": "danger",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "deny",
+                                    "request_id": request_id,
+                                    "tool_name": tool_name
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        })
+    }
+
+    /// Build an interactive single-select card.
+    /// If options.len() > 5, uses select_static; otherwise uses primary buttons.
+    pub fn build_single_select_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        let elements = if options.len() > 5 {
+            let select_options: Vec<Value> = options
+                .iter()
+                .map(|opt| {
+                    json!({
+                        "text": {
+                            "tag": "plain_text",
+                            "content": opt
+                        },
+                        "value": opt
+                    })
+                })
+                .collect();
+            vec![
+                json!({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": title
+                    }
+                }),
+                json!({
+                    "tag": "select_static",
+                    "placeholder": {
+                        "tag": "plain_text",
+                        "content": "请选择..."
+                    },
+                    "options": select_options,
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {
+                                "action": "select",
+                                "request_id": request_id
+                            }
+                        }
+                    ]
+                }),
+            ]
+        } else {
+            let buttons: Vec<Value> = options
+                .iter()
+                .map(|opt| {
+                    json!({
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": opt
+                        },
+                        "type": "primary",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "select",
+                                    "request_id": request_id,
+                                    "answer": opt
+                                }
+                            }
+                        ]
+                    })
+                })
+                .collect();
+            let mut elements = vec![
+                json!({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": title
+                    }
+                }),
+            ];
+            elements.extend(buttons);
+            elements
+        };
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "请选择"
+                },
+                "template": "blue"
+            },
+            "body": {
+                "elements": elements
+            }
+        })
+    }
+
+    /// Build a multi-select card using buttons for each option.
+    /// Each click updates the selection state (stored in interaction_store externally).
+    pub fn build_multi_select_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+        selected: &[String],
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        let buttons: Vec<Value> = options
+            .iter()
+            .map(|opt| {
+                let is_selected = selected.contains(opt);
+                let label = if is_selected {
+                    format!("✅ {}", opt)
+                } else {
+                    opt.clone()
+                };
+                let btn_type = if is_selected { "default" } else { "primary" };
+                let mut new_selected = selected.to_vec();
+                if is_selected {
+                    new_selected.retain(|s| s != opt);
+                } else {
+                    new_selected.push(opt.clone());
+                }
+                json!({
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": label
+                    },
+                    "type": btn_type,
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {
+                                "action": "toggle_select",
+                                "request_id": request_id,
+                                "toggle": opt,
+                                "selected": new_selected
+                            }
+                        }
+                    ]
+                })
+            })
+            .collect();
+
+        let mut actions = buttons;
+        actions.push(json!({
+            "tag": "button",
+            "text": {
+                "tag": "plain_text",
+                "content": "提交"
+            },
+            "type": "primary",
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "action": "submit_multi",
+                        "request_id": request_id
+                    }
+                }
+            ]
+        }));
+        actions.push(json!({
+            "tag": "button",
+            "text": {
+                "tag": "plain_text",
+                "content": "取消"
+            },
+            "type": "danger",
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "action": "cancel_multi",
+                        "request_id": request_id
+                    }
+                }
+            ]
+        }));
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                },
+                "template": "blue"
+            },
+            "body": {
+                "elements": actions
+            }
+        })
+    }
+
+    /// Build a text-input hint card prompting the user to reply with a text message.
+    pub fn build_text_input_hint_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                },
+                "template": "wathet"
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": "请直接回复本条消息，输入你的回答。"
+                        }
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "取消"
+                        },
+                        "type": "danger",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "cancel_text_input",
+                                    "request_id": request_id
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        })
+    }
+
+    /// Build a confirm/deny card with two buttons.
+    pub fn build_confirm_card(
+        &self,
+        request_id: &str,
+        prompt: &str,
+    ) -> Value {
+        let title = if prompt.len() > 80 {
+            format!("{}...", &prompt[..80])
+        } else {
+            prompt.to_string()
+        };
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                },
+                "template": "orange"
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "确认"
+                        },
+                        "type": "primary",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "confirm",
+                                    "request_id": request_id,
+                                    "answer": true
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "取消"
+                        },
+                        "type": "danger",
+                        "behaviors": [
+                            {
+                                "type": "callback",
+                                "value": {
+                                    "action": "confirm",
+                                    "request_id": request_id,
+                                    "answer": false
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        })
+    }
+
+    /// Build an interactive session history card.
+    /// Feishu card schema v2: three buttons per session (resume, start new, delete).
+    pub fn build_session_history_card(
+        &self,
+        sessions: &[crate::session::model::Session],
+        receive_id_type: &str,
+        receive_id: &str,
+    ) -> Value {
+        let china_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let mut elements: Vec<Value> = Vec::new();
+        elements.push(json!({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": t!("feishu.session_history_subtitle")
+            }
+        }));
+
+        for session in sessions {
+            let status_dot = if session.active { "🟢" } else { "⚪" };
+            let time = session.created_at
+                .with_timezone(&china_tz)
+                .format("%Y-%m-%d %H:%M")
+                .to_string();
+            let mut info_parts = vec![
+                format!("**{}** {}", status_dot, session.title),
+                format!("📁 {}", session.work_dir),
+                format!("🕒 {}", time),
+            ];
+            if let Some(ref csid) = session.claude_session_id {
+                info_parts.push(format!("🔑 `{}`", csid));
+            }
+            let info_text = info_parts.join("\n");
+
+            elements.push(json!({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": info_text
+                }
+            }));
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.resume")
+                },
+                "type": "primary",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "resume",
+                            "session_id": session.id,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.start_new_session")
+                },
+                "type": "default",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "resume",
+                            "session_id": "",
+                            "work_dir": session.work_dir,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.delete_session")
+                },
+                "type": "danger",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "delete_session",
+                            "session_id": session.id,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+            elements.push(json!({ "tag": "hr" }));
+        }
+
+        // Remove trailing hr if present
+        if elements.last().and_then(|e| e.get("tag")).and_then(|v| v.as_str()) == Some("hr") {
+            elements.pop();
+        }
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.session_history_title")
+                },
+                "template": "indigo"
+            },
+            "body": {
+                "elements": elements
+            }
+        })
+    }
+
+    /// Build an interactive directory selection card.
+    /// Feishu card schema v2: buttons are placed directly in body.elements.
+    pub fn build_dir_select_card(
+        &self,
+        dirs: &[(String, String)],
+        page: usize,
+        dir: &str,
+        receive_id_type: &str,
+        receive_id: &str,
+    ) -> Value {
+        let mut elements: Vec<Value> = Vec::new();
+        elements.push(json!({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": t!("feishu.choose_dir")
+            }
+        }));
+
+        const MAX_DIRS: usize = 40;
+        let start = page * MAX_DIRS;
+        let end = ((page + 1) * MAX_DIRS).min(dirs.len());
+        let page_dirs = &dirs[start..end];
+
+        for (name, path) in page_dirs {
+            elements.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": name
+                },
+                "type": "primary",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "cd",
+                            "path": path,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+        }
+
+        // Pagination controls
+        let mut pagination_buttons: Vec<Value> = Vec::new();
+        if page > 0 {
+            pagination_buttons.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.prev_page")
+                },
+                "type": "default",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "ll_page",
+                            "page": page - 1,
+                            "dir": dir,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+        }
+        if end < dirs.len() {
+            pagination_buttons.push(json!({
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.next_page")
+                },
+                "type": "default",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "cmd": "ll_page",
+                            "page": page + 1,
+                            "dir": dir,
+                            "chat_id": receive_id,
+                            "receive_id_type": receive_id_type
+                        }
+                    }
+                ]
+            }));
+        }
+        if !pagination_buttons.is_empty() {
+            elements.push(json!({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": t_fmt!("feishu.page_info", PAGE = page + 1, TOTAL = (dirs.len() + MAX_DIRS - 1) / MAX_DIRS)
+                }
+            }));
+            elements.extend(pagination_buttons);
+        }
+
+        json!({
+            "schema": "2.0",
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": t!("feishu.select_dir_title")
+                },
+                "template": "indigo"
+            },
+            "body": {
+                "elements": elements
+            }
+        })
+    }
+
+    /// List directory names under the given path.
+    /// Store a pending permission context so card callbacks can be matched to requests.
+    pub fn store_pending_permission(&self, ctx: PendingPermissionContext) {
+        self.pending_permissions
+            .insert(ctx.request_id.clone(), ctx);
+    }
+
+    /// Retrieve and remove a pending permission context by request_id.
+    pub fn take_pending_permission(&self, request_id: &str) -> Option<PendingPermissionContext> {
+        self.pending_permissions.remove(request_id).map(|(_, v)| v)
+    }
+
+    /// Clean up expired pending permissions (older than 10 minutes).
+    pub fn cleanup_pending_permissions(&self) {
+        let now = Instant::now();
+        let max_age = Duration::from_secs(600);
+        self.pending_permissions
+            .retain(|_, v| now.duration_since(v.created_at) < max_age);
+    }
+
+    /// Normalize a raw Feishu event JSON into a structured message.
+    pub fn normalize_message(&self, event_json: &Value) -> Option<NormalizedMessage> {
+        let event = event_json.get("event")?;
+        let message = event.get("message")?;
+
+        let message_id = message
+            .get("message_id")?
+            .as_str()?
+            .to_string();
+
+        // Deduplicate by message_id
+        if self.dedup_cache.contains(&message_id) {
+            return None;
+        }
+        self.dedup_cache.insert(message_id.clone());
+
+        let message_type = message
+            .get("message_type")?
+            .as_str()?
+            .to_string();
+
+        let content = message
+            .get("content")?
+            .as_str()?
+            .to_string();
+
+        let sender = event.get("sender")?;
+        let sender_id = sender.get("sender_id")?;
+        let sender_open_id = sender_id
+            .get("open_id")?
+            .as_str()?
+            .to_string();
+        let sender_name = sender
+            .get("sender_type")?
+            .as_str()
+            .map(|s| s.to_string());
+
+        let chat_id = message
+            .get("chat_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let chat_type = message
+            .get("chat_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Extract mentions
+        let mut mentions = Vec::new();
+        if let Some(mentions_arr) = message.get("mentions").and_then(|v| v.as_array()) {
+            for m in mentions_arr {
+                let open_id = m
+                    .get("id")
+                    .and_then(|v| v.get("open_id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let name = m
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let key = m
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if let Some(oid) = open_id {
+                    mentions.push(MentionInfo {
+                        open_id: oid,
+                        name,
+                        key,
+                    });
+                }
+            }
+        }
+
+        let (receive_id_type, receive_id) = if chat_type.as_deref() == Some("p2p") {
+            ("open_id".to_string(), sender_open_id.clone())
+        } else {
+            ("chat_id".to_string(), chat_id.clone().unwrap_or_default())
+        };
+
+        Some(NormalizedMessage {
+            message_id,
+            message_type,
+            content,
+            sender_open_id,
+            sender_name,
+            chat_id,
+            chat_type,
+            mentions,
+            raw: event_json.clone(),
+            receive_id_type,
+            receive_id,
+        })
     }
 
     /// Handle an incoming Feishu event: normalize, route, and respond.
@@ -3044,5 +3858,151 @@ mod tests {
         let result = platform.handle_webhook_event(&body).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    // Card schema v2 compliance helpers
+    fn assert_no_action_tag(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(tag) = map.get("tag").and_then(|t| t.as_str()) {
+                    assert_ne!(tag, "action", "Found deprecated 'action' tag in card JSON");
+                }
+                for v in map.values() {
+                    assert_no_action_tag(v);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    assert_no_action_tag(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_interactive_uses_behaviors(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(tag) = map.get("tag").and_then(|t| t.as_str()) {
+                    if tag == "button" || tag == "select_static" {
+                        assert!(
+                            map.contains_key("behaviors"),
+                            "'{}' must use 'behaviors' instead of root 'value'",
+                            tag
+                        );
+                        assert!(
+                            !map.contains_key("value"),
+                            "'{}' should not have root 'value' when using 'behaviors'",
+                            tag
+                        );
+                    }
+                }
+                for v in map.values() {
+                    assert_interactive_uses_behaviors(v);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    assert_interactive_uses_behaviors(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_build_permission_card_schema_v2() {
+        let platform = test_platform();
+        let card = platform.build_permission_card("req-123", "test_tool", Some(&json!("some input")));
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_single_select_card_dropdown_schema_v2() {
+        let platform = test_platform();
+        let options: Vec<String> = (1..=10).map(|i| format!("option {}", i)).collect();
+        let card = platform.build_single_select_card("req-456", "Choose one:", &options);
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_single_select_card_buttons_schema_v2() {
+        let platform = test_platform();
+        let options = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let card = platform.build_single_select_card("req-789", "Choose one:", &options);
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_multi_select_card_schema_v2() {
+        let platform = test_platform();
+        let options = vec!["X".to_string(), "Y".to_string(), "Z".to_string()];
+        let selected = vec!["X".to_string()];
+        let card = platform.build_multi_select_card("req-abc", "Pick items:", &options, &selected);
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_text_input_hint_card_schema_v2() {
+        let platform = test_platform();
+        let card = platform.build_text_input_hint_card("req-def", "Enter your name");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_confirm_card_schema_v2() {
+        let platform = test_platform();
+        let card = platform.build_confirm_card("req-ghi", "Are you sure?");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_session_history_card_schema_v2() {
+        let platform = test_platform();
+        let sessions = vec![
+            crate::session::model::Session {
+                id: "sess-1".to_string(),
+                title: "Test Session".to_string(),
+                source: crate::session::model::SessionSource::Feishu,
+                platform: "feishu".to_string(),
+                chat_id: "chat-1".to_string(),
+                work_dir: "/tmp".to_string(),
+                active: true,
+                created_at: chrono::Utc::now(),
+                claude_session_id: Some("csid-1".to_string()),
+            },
+        ];
+        let card = platform.build_session_history_card(&sessions, "chat_id", "chat-1");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_dir_select_card_schema_v2() {
+        let platform = test_platform();
+        let dirs = vec![
+            ("workspace".to_string(), "/home/user/workspace".to_string()),
+            ("docs".to_string(), "/home/user/docs".to_string()),
+        ];
+        let card = platform.build_dir_select_card(&dirs, 0, "/home/user", "chat_id", "chat-1");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
+    }
+
+    #[test]
+    fn test_build_dir_select_card_with_pagination_schema_v2() {
+        let platform = test_platform();
+        let dirs: Vec<(String, String)> = (0..50)
+            .map(|i| (format!("dir{}", i), format!("/home/user/dir{}", i)))
+            .collect();
+        let card = platform.build_dir_select_card(&dirs, 0, "/home/user", "chat_id", "chat-1");
+        assert_no_action_tag(&card);
+        assert_interactive_uses_behaviors(&card);
     }
 }
