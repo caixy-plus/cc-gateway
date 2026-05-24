@@ -78,19 +78,29 @@ cargo build --release
 | `cc-gateway stop` | Stop the gateway daemon |
 | `cc-gateway restart` | Restart the gateway daemon |
 | `cc-gateway log [-f] [-n 100]` | View daemon logs |
+| `cc-gateway status` | Show daemon status (running/stopped) |
 | `cc-gateway config` | Edit configuration file |
-| `cc-gateway config --init` | Print default config |
+| `cc-gateway config --init` | Print default config to stdout |
+| `cc-gateway init` | Interactive configuration wizard |
+| `cc-gateway enable` | Enable auto-start on boot |
+| `cc-gateway disable` | Disable auto-start on boot |
+| `cc-gateway update [--check] [--force]` | Check for or install updates |
 
 ## Gateway Commands (available in chat)
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/quit` | Quit current Claude session (inactive = exit program) |
-| `/cd <path>` | Change working directory and restart Claude |
-| `/claude [args...]` | Start or restart Claude session (pass args to Claude CLI) |
+| `/quit` | Quit current Claude session |
+| `/cd <path>` | Change working directory |
+| `/cd_default` | Change working directory to the default directory |
+| `/claude [args...]` | Start a new Claude session (pass args to Claude CLI) |
 | `/pwd` | Show current working directory |
-| `/ll` | Open interactive directory picker |
+| `/ll [path]` | Open interactive directory picker |
+| `/mkdir <dirname>` | Create a new directory |
+| `/show-thinking` | Always show Claude Thinking content |
+| `/hide-thinking` | Hide Claude Thinking content (show placeholder only) |
+| `/claude-history` | Show recent Claude sessions and resume by index |
 
 ### Session Switching
 
