@@ -488,6 +488,7 @@ fn try_load_claude_sessions_by_channel_id(channel_id: &str) -> Result<Vec<Claude
             claude_session_id: row.get(6)?,
             created_at,
             stopped_at,
+            updated_at: None,
         })
     })?;
 
