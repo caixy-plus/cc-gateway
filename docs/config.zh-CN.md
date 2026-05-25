@@ -94,7 +94,7 @@ cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
 
 1. 在 Telegram 上联系 [@BotFather](https://t.me/BotFather) 创建新机器人
 2. 将 bot token 复制到配置中的 `telegram.bot_token`
-3. 将 `platform` 设为 `"telegram"`，并将 `telegram.enabled` 设为 `true`
+3. 将 `telegram.enabled` 设为 `true`
 4. 可选: 设置 `telegram.allow_from` 限制哪些用户可以与机器人交互
 
 ## 飞书设置

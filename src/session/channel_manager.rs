@@ -10,6 +10,7 @@ use tokio::task::AbortHandle;
 use tracing::info;
 
 use crate::claude::controller::ClaudeController;
+use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
 use crate::command::router::CommandRouter;
 use crate::config::model::ClaudeConfig;
 use crate::session::channel_model::{
@@ -287,6 +288,7 @@ impl ChannelManager {
         work_dir: &str,
         claude_session_id: Option<String>,
     ) -> Result<ClaudeSession> {
+        self.stop_active_session_records_for_channel(channel_id, None);
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = Utc::now();
         let session = ClaudeSession {
@@ -306,20 +308,40 @@ impl ChannelManager {
         Ok(session)
     }
 
+    pub async fn record_active_controller_session(
+        &self,
+        channel_id: &str,
+        title: &str,
+        controller: &Arc<Mutex<ClaudeController>>,
+    ) -> Result<Option<ClaudeSession>> {
+        let ctrl = controller.lock().await;
+        if !ctrl.is_session_active().await {
+            return Ok(None);
+        }
+        let work_dir = ctrl.get_work_dir().await;
+        let claude_session_id = ctrl.get_claude_session_id().await;
+        drop(ctrl);
+
+        self.record_active_claude_session(channel_id, title, &work_dir, claude_session_id)
+            .map(Some)
+    }
+
     pub async fn create_and_start_claude_session(
         &self,
         channel_id: &str,
         title: &str,
+        default_dir: &str,
         claude_config: ClaudeConfig,
         show_thinking: bool,
         args: Vec<String>,
         resume_session_id: Option<String>,
+        work_dir_override: Option<String>,
         mcp_context: Option<crate::claude::mcp_server::McpContext>,
     ) -> Result<(ClaudeSession, Arc<Mutex<ClaudeController>>)> {
-        let work_dir = self
-            .get_channel(channel_id)
-            .map(|c| c.work_dir)
-            .unwrap_or_else(|| "~".to_string());
+        self.stop_active_session_records_for_channel(channel_id, None);
+        let work_dir = work_dir_override
+            .or_else(|| self.get_channel(channel_id).map(|c| c.work_dir))
+            .unwrap_or_else(|| shellexpand::tilde(default_dir).to_string());
 
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             claude_config.clone(),
@@ -346,6 +368,8 @@ impl ChannelManager {
             let ctrl = controller.lock().await;
             ctrl.get_claude_session_id().await
         };
+
+        self.update_channel_work_dir(channel_id, &work_dir);
 
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = Utc::now();
@@ -386,17 +410,15 @@ impl ChannelManager {
             .create_and_start_claude_session(
                 channel_id,
                 title,
+                default_dir,
                 claude_config,
                 show_thinking,
                 args,
                 resume_session_id,
+                work_dir_override,
                 mcp_context,
             )
             .await?;
-        if let Some(ref dir) = work_dir_override {
-            let ctrl = controller.lock().await;
-            ctrl.init_work_dir(dir.clone()).await;
-        }
         let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
         Ok(ActiveClaudeRuntime {
             claude_session,
@@ -405,30 +427,63 @@ impl ChannelManager {
         })
     }
 
-    pub async fn resume_claude_session(
+    pub async fn resume_claude_session_runtime(
         &self,
         session_id: &str,
+        default_dir: &str,
         claude_config: ClaudeConfig,
         show_thinking: bool,
-    ) -> Result<(ClaudeSession, Arc<Mutex<ClaudeController>>)> {
+    ) -> Result<ActiveClaudeRuntime> {
+        self.resume_claude_session_for_platform(
+            session_id,
+            default_dir,
+            claude_config,
+            show_thinking,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn resume_claude_session_for_platform(
+        &self,
+        session_id: &str,
+        default_dir: &str,
+        claude_config: ClaudeConfig,
+        show_thinking: bool,
+        work_dir_override: Option<String>,
+        mcp_context: Option<crate::claude::mcp_server::McpContext>,
+    ) -> Result<ActiveClaudeRuntime> {
         let existing = self
             .get_claude_session(session_id)
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+        if let Some(ref override_dir) = work_dir_override {
+            if override_dir != &existing.work_dir {
+                tracing::info!(
+                    "Resume session {} switching work_dir from current {} to original {}",
+                    session_id,
+                    override_dir,
+                    existing.work_dir
+                );
+            }
+        }
+        let work_dir = existing.work_dir.clone();
 
         let controller = Arc::new(Mutex::new(ClaudeController::new(
             claude_config,
             show_thinking,
         )));
 
-        let resume_id = existing.claude_session_id.clone();
         {
             let ctrl = controller.lock().await;
-            if let Some(ref sid) = resume_id {
+            if let Some(ref sid) = existing.claude_session_id {
                 ctrl.set_pending_resume_session_id(Some(sid.clone())).await;
             }
-            ctrl.init_work_dir(existing.work_dir.clone()).await;
-            ctrl.start_session(existing.work_dir.clone(), vec![])
-                .await?;
+            if let Some(ref mcp_ctx) = mcp_context {
+                ctrl.set_mcp_context(mcp_ctx.clone()).await;
+            }
+            ctrl.init_work_dir(work_dir.clone()).await;
+            ctrl.start_session(work_dir.clone(), vec![]).await?;
         }
 
         let new_claude_id = {
@@ -437,17 +492,84 @@ impl ChannelManager {
         };
 
         let mut session = existing;
+        self.stop_active_session_records_for_channel(
+            &session.channel_session_id,
+            Some(&session.id),
+        );
         session.active = true;
         session.state = ClaudeSessionState::Active;
+        session.work_dir = work_dir.clone();
         session.claude_session_id = new_claude_id;
         session.updated_at = Some(Utc::now());
         session.stopped_at = None;
 
+        self.update_channel_work_dir(&session.channel_session_id, &work_dir);
         self.claude_sessions
             .insert(session.id.clone(), session.clone());
         crate::db::insert_claude_session(&session);
 
-        Ok((session, controller))
+        let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
+        Ok(ActiveClaudeRuntime {
+            claude_session: session,
+            controller,
+            router,
+        })
+    }
+
+    pub async fn send_and_poll_active_runtime(
+        &self,
+        active: &ActiveClaudeRuntime,
+        text: &str,
+        sink: &mut (dyn EventPollSink + Send),
+    ) -> Result<()> {
+        {
+            let ctrl = active.controller.lock().await;
+            ctrl.send_message(text).await?;
+        }
+        self.touch_claude_session(&active.claude_session.id);
+
+        let poller = {
+            let ctrl = active.controller.lock().await;
+            ClaudeEventPoller::from_controller(&ctrl)
+        };
+        poller.run(sink).await
+    }
+
+    fn stop_active_session_records_for_channel(&self, channel_id: &str, except_id: Option<&str>) {
+        let active_sessions: Vec<ClaudeSession> = self
+            .claude_sessions
+            .iter()
+            .filter_map(|entry| {
+                let session = entry.value();
+                if session.channel_session_id == channel_id
+                    && session.active
+                    && except_id != Some(session.id.as_str())
+                {
+                    Some(session.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for mut session in active_sessions {
+            session.active = false;
+            session.state = ClaudeSessionState::Stopped;
+            session.stopped_at = Some(Utc::now());
+            session.updated_at = Some(Utc::now());
+            self.claude_sessions
+                .insert(session.id.clone(), session.clone());
+            crate::db::insert_claude_session(&session);
+        }
+    }
+
+    pub async fn send_to_controller(
+        &self,
+        controller: &Arc<Mutex<ClaudeController>>,
+        text: &str,
+    ) -> Result<()> {
+        let ctrl = controller.lock().await;
+        ctrl.send_message(text).await
     }
 
     pub async fn stop_channel_session(&self, channel_id: &str) -> Result<()> {
@@ -486,6 +608,18 @@ impl ChannelManager {
             }
         }
         Ok(())
+    }
+
+    pub async fn stop_active_runtime_for_channel(
+        &self,
+        channel_id: &str,
+        active_runtime: Option<&ActiveClaudeRuntime>,
+    ) -> Result<()> {
+        if let Some(active) = active_runtime {
+            let ctrl = active.controller.lock().await;
+            let _ = ctrl.stop_session().await;
+        }
+        self.stop_channel_session(channel_id).await
     }
 
     pub async fn switch_work_dir(&self, channel_id: &str, dir: PathBuf) -> Result<()> {

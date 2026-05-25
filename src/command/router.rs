@@ -60,6 +60,7 @@ impl CommandRouter {
         }
     }
 
+    #[cfg(test)]
     pub async fn current_work_dir(&self) -> String {
         let ctrl = self.controller.lock().await;
         let work_dir = ctrl.get_work_dir().await;
@@ -91,52 +92,13 @@ impl CommandRouter {
         };
 
         if session_active {
-            // Active session: local gateway commands are still handled here;
-            // regular text and unknown commands go to Claude.
+            // Active session: Claude owns the conversation. Keep only gateway
+            // controls that affect the gateway process itself.
             match cmd {
-                "/quit" | "/close-session" => CommandAction::StopSession,
+                "/quit" => CommandAction::StopSession,
                 "/show-thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" => CommandAction::HideThinking,
-                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
-                    arg: arg.to_string(),
-                },
-                "/help" => CommandAction::Reply(self.builtin.help_text()),
-                "/cd" => {
-                    if arg.is_empty() {
-                        CommandAction::Reply(t!("builtin.cd_usage").to_string())
-                    } else {
-                        let expanded = shellexpand::tilde(arg).to_string();
-                        CommandAction::ChangeDir(PathBuf::from(expanded))
-                    }
-                }
-                "/cd_default" => CommandAction::ChangeDirDefault,
-                "/pwd" => CommandAction::PrintWorkingDir,
-                "/ll" => {
-                    let path = if arg.is_empty() {
-                        None
-                    } else {
-                        Some(PathBuf::from(shellexpand::tilde(arg).to_string()))
-                    };
-                    CommandAction::ListDir { path }
-                }
-                "/mkdir" => {
-                    if arg.is_empty() {
-                        CommandAction::Reply(t!("builtin.mkdir_usage").to_string())
-                    } else {
-                        let expanded = shellexpand::tilde(arg).to_string();
-                        CommandAction::MakeDir(PathBuf::from(expanded))
-                    }
-                }
-                "/claude" | "/new-session" => CommandAction::Reply(
-                    "A session is already active. Use /quit to stop it first.".to_string(),
-                ),
-                _ => {
-                    if trimmed.starts_with('/') {
-                        CommandAction::UnknownCommand(cmd.to_string())
-                    } else {
-                        CommandAction::ForwardToClaude(trimmed.to_string())
-                    }
-                }
+                _ => CommandAction::ForwardToClaude(trimmed.to_string()),
             }
         } else {
             // No active session: handle gateway commands locally

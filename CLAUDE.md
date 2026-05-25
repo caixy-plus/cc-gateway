@@ -37,6 +37,12 @@ cargo run                 # Run interactive CLI mode
 cargo run -- start        # Start daemon (spawns background process)
 ```
 
+## Development Principles
+
+- **Use TDD for feature work and bug fixes**: write or update a focused failing test first, implement the smallest change that makes it pass, then refactor with tests green.
+- **Run tests based on change scope**: after functional changes, choose the fastest relevant test set from the touched modules and risk area instead of defaulting to full `cargo test` every time. Run full tests when changes touch shared infrastructure, cross-platform behavior, persistence, command/session lifecycle, or before final verification of broad refactors.
+- **Document skipped verification**: if a change is docs-only or tests are intentionally not run, say so in the final response.
+
 ## Architecture
 
 ### Entry Points
@@ -47,7 +53,7 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Daemon Lifecycle (`src/daemon/`)
 
 - **`daemon/mod.rs`**: PID-file-based daemon management with triple singleton lock: port binding (configurable via `port`), `.daemon-starting.lock` for `start()` atomicity, and PID file `flock` held for daemon lifetime. `start()` spawns a detached child running `cc-gateway _daemon`. `stop()` sends SIGTERM (Unix) or `taskkill` (Windows). `run()` loads config, writes PID file, and starts `DaemonEngine`.
-- **`daemon/engine.rs`**: Core async engine. Starts the configured `Platform` (Feishu or Telegram) based on `config.platform`, then waits for shutdown signal (SIGTERM/SIGINT). On shutdown, calls `platform.shutdown()` to gracefully terminate all active chat sessions.
+- **`daemon/engine.rs`**: Core async engine. Starts all enabled `Platform` integrations (`feishu.enabled`, `telegram.enabled`) concurrently, then waits for shutdown signal (SIGTERM/SIGINT). On shutdown, calls `platform.shutdown()` on each enabled platform to gracefully terminate all active chat sessions.
 
 ### Claude Session (`src/claude/`)
 
@@ -85,7 +91,7 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Configuration (`src/config/`)
 
 - **`config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.
-- **`config/model.rs`**: `GatewayConfig` with `log`, `claude`, `feishu`, `telegram` sections, plus top-level fields: `platform`, `port`, `default_dir`, `show_thinking`, `media_retention_days`.
+- **`config/model.rs`**: `GatewayConfig` with `log`, `claude`, `feishu`, `telegram` sections, plus top-level fields: `port`, `default_dir`, `show_thinking`, `media_retention_days`.
 - **`config/wizard.rs`**: Interactive config editor invoked by `cc-gateway config`. Prompts for log, claude, and platform settings.
 
 ### Web Server (`src/web/`)

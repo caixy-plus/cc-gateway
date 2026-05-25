@@ -18,8 +18,6 @@ pub struct GatewayConfig {
     /// Local port bound by the daemon to enforce a single instance.
     /// If the port is already in use, the daemon refuses to start.
     pub port: u16,
-    /// Active platform integration (e.g. "feishu", "telegram").
-    pub platform: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +71,6 @@ impl Default for GatewayConfig {
             show_thinking: false,
             media_retention_days: 30,
             port: 17534,
-            platform: "feishu".to_string(),
         }
     }
 }

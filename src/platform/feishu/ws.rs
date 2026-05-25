@@ -4,11 +4,13 @@ use tokio::time::{sleep, Duration as TokioDuration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
 use tracing::{debug, error, info, warn};
 
-use crate::claude::event_poller::ClaudeEventPoller;
 use crate::command::router::CommandRouter;
 use crate::platform::feishu::{
     build_ack_frame, build_ping_frame, extract_post_content, FeishuPlatform, NormalizedMessage,
     METHOD_CONTROL, METHOD_DATA,
+};
+use crate::session::channel_command::{
+    ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
 };
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
@@ -402,169 +404,123 @@ impl FeishuPlatform {
         };
 
         let action = router.route(&msg.content).await;
+        let mcp_ctx = crate::claude::mcp_server::McpContext {
+            feishu_app_id: self.config.app_id.clone(),
+            feishu_app_secret: self.config.app_secret.clone(),
+            chat_id: receive_id.clone(),
+            receive_id_type: receive_id_type.clone(),
+        };
+        let channel_work_dir = GLOBAL_CHANNEL_SESSIONS
+            .get_channel(&runtime.channel_session.id)
+            .map(|c| c.work_dir)
+            .unwrap_or_else(|| runtime.channel_session.work_dir.clone());
+        let mut context = ChatCommandContext::new(
+            runtime.channel_session.id.clone(),
+            format!("Feishu {}", chat_id),
+            channel_work_dir,
+            runtime.active_claude.clone(),
+        )
+        .with_mcp_context(mcp_ctx);
+        let executor = ChatCommandExecutor::new(
+            &self.default_dir,
+            self.claude_config.clone(),
+            self.show_thinking
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let outcome = match executor.execute(&mut context, action).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                let _ = self
+                    .send_text_message(
+                        &receive_id_type,
+                        &receive_id,
+                        &crate::t_fmt!("feishu.error_generic", ERR = e),
+                    )
+                    .await;
+                self.on_processing_complete(&message_id, false).await;
+                return;
+            }
+        };
 
-        match action {
-            crate::command::CommandAction::Reply(text) => {
+        if let Some(mut entry) = self.channels.get_mut(&chat_id) {
+            entry.active_claude = context.active_claude.clone();
+            entry.set_work_dir(context.channel_work_dir.clone());
+        }
+
+        match outcome {
+            ChatCommandOutcome::Reply(text)
+            | ChatCommandOutcome::Stopped { message: text }
+            | ChatCommandOutcome::ThinkingShown { message: text }
+            | ChatCommandOutcome::ThinkingHidden { message: text } => {
                 let _ = self
                     .send_text_message(&receive_id_type, &receive_id, &text)
                     .await;
                 self.on_processing_complete(&message_id, true).await;
             }
-            crate::command::CommandAction::NoOp => {
-                self.on_processing_complete(&message_id, true).await;
-            }
-            crate::command::CommandAction::ListDir { path } => {
-                let current_dir = if let Some(ref active) = runtime.active_claude {
-                    let ctrl = active.controller.lock().await;
-                    crate::command::workdir::effective_work_dir(
-                        &ctrl.get_work_dir().await,
-                        &self.default_dir,
-                    )
-                } else {
-                    crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                        .get_channel(&runtime.channel_session.id)
-                        .map(|c| c.work_dir)
-                        .unwrap_or_else(|| shellexpand::tilde(&self.default_dir).to_string())
-                };
-                let requested = path.unwrap_or_else(|| std::path::PathBuf::from("."));
-                let dir_str = match crate::command::workdir::resolve_work_dir_target(
-                    &current_dir,
-                    &self.default_dir,
-                    &requested,
-                ) {
-                    Ok(dir) => dir,
-                    Err(e) => {
-                        let _ = self
-                            .send_text_message(&receive_id_type, &receive_id, &e.to_string())
-                            .await;
-                        self.on_processing_complete(&message_id, false).await;
-                        return;
-                    }
-                };
-                match crate::command::builtin::list_directory_paths(&dir_str) {
-                    Ok(dirs) => {
-                        if dirs.is_empty() {
-                            let _ = self
-                                .send_text_message(
-                                    &receive_id_type,
-                                    &receive_id,
-                                    crate::t!("builtin.no_subdirs"),
-                                )
-                                .await;
-                        } else {
-                            let card_dirs: Vec<(String, String)> = dirs
-                                .iter()
-                                .map(|(name, path)| (name.clone(), path.clone()))
-                                .collect();
-                            let card = crate::platform::feishu::cards::build_dir_picker_card(
-                                &card_dirs,
-                                0,
-                                &dir_str,
-                                &chat_id,
-                                &receive_id_type,
-                                &receive_id,
-                            );
-                            let _ = self
-                                .send_interactive_card(&receive_id_type, &receive_id, &card)
-                                .await;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = self
-                            .send_text_message(
-                                &receive_id_type,
-                                &receive_id,
-                                &crate::t_fmt!("feishu.error_generic", ERR = e),
-                            )
-                            .await;
-                    }
-                }
-                self.on_processing_complete(&message_id, true).await;
-            }
-            crate::command::CommandAction::StartSession { work_dir, args } => {
-                let effective_dir = work_dir
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| {
-                        let latest = crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                            .get_channel(&runtime.channel_session.id)
-                            .map(|c| c.work_dir)
-                            .unwrap_or_default();
-                        if latest.is_empty() {
-                            shellexpand::tilde(&self.default_dir).to_string()
-                        } else {
-                            latest
-                        }
-                    });
-                let mcp_ctx = crate::claude::mcp_server::McpContext {
-                    feishu_app_id: self.config.app_id.clone(),
-                    feishu_app_secret: self.config.app_secret.clone(),
-                    chat_id: receive_id.clone(),
-                    receive_id_type: receive_id_type.clone(),
-                };
-                match crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                    .start_claude_session_for_platform(
-                        &runtime.channel_session.id,
-                        &format!("Feishu {}", chat_id),
-                        &self.default_dir,
-                        self.claude_config.clone(),
-                        self.show_thinking
-                            .load(std::sync::atomic::Ordering::Relaxed),
-                        args,
-                        None,
-                        None,
-                        Some(mcp_ctx),
-                    )
-                    .await
-                {
-                    Ok(active) => {
-                        if let Some(mut entry) = self.channels.get_mut(&chat_id) {
-                            entry.active_claude = Some(active.clone());
-                        }
-                        let _ = self
-                            .send_text_message(
-                                &receive_id_type,
-                                &receive_id,
-                                &crate::t_fmt!("feishu.session_started", DIR = effective_dir),
-                            )
-                            .await;
-                        self.on_processing_complete(&message_id, true).await;
-                    }
-                    Err(e) => {
-                        let _ = self
-                            .send_text_message(
-                                &receive_id_type,
-                                &receive_id,
-                                &crate::t_fmt!("builtin.failed_start_claude", ERR = e),
-                            )
-                            .await;
-                        self.on_processing_complete(&message_id, false).await;
-                    }
-                }
-            }
-            crate::command::CommandAction::StopSession => {
-                if let Some(ref active) = runtime.active_claude {
-                    let ctrl = active.controller.lock().await;
-                    let _ = ctrl.stop_session().await;
-                }
-                let _ = GLOBAL_CHANNEL_SESSIONS
-                    .stop_channel_session(&runtime.channel_session.id)
+            ChatCommandOutcome::WorkDirChanged { work_dir, message }
+            | ChatCommandOutcome::CurrentDir { work_dir, message } => {
+                let _ = work_dir;
+                let _ = self
+                    .send_text_message(&receive_id_type, &receive_id, &message)
                     .await;
-                if let Some(mut entry) = self.channels.get_mut(&chat_id) {
-                    entry.active_claude = None;
+                self.on_processing_complete(&message_id, true).await;
+            }
+            ChatCommandOutcome::DirCreated { path, message } => {
+                let _ = path;
+                let _ = self
+                    .send_text_message(&receive_id_type, &receive_id, &message)
+                    .await;
+                self.on_processing_complete(&message_id, true).await;
+            }
+            ChatCommandOutcome::Error(text) => {
+                let _ = self
+                    .send_text_message(&receive_id_type, &receive_id, &text)
+                    .await;
+                self.on_processing_complete(&message_id, false).await;
+            }
+            ChatCommandOutcome::NoOp => {
+                self.on_processing_complete(&message_id, true).await;
+            }
+            ChatCommandOutcome::ListDir { dir, dirs } => {
+                if dirs.is_empty() {
+                    let _ = self
+                        .send_text_message(
+                            &receive_id_type,
+                            &receive_id,
+                            crate::t!("builtin.no_subdirs"),
+                        )
+                        .await;
+                } else {
+                    let card = crate::platform::feishu::cards::build_dir_picker_card(
+                        &dirs,
+                        0,
+                        &dir,
+                        &chat_id,
+                        &receive_id_type,
+                        &receive_id,
+                    );
+                    let _ = self
+                        .send_interactive_card(&receive_id_type, &receive_id, &card)
+                        .await;
                 }
+                self.on_processing_complete(&message_id, true).await;
+            }
+            ChatCommandOutcome::Started {
+                active,
+                work_dir,
+                message,
+            } => {
+                let _ = (active, message);
                 let _ = self
                     .send_text_message(
                         &receive_id_type,
                         &receive_id,
-                        crate::t!("builtin.session_stopped"),
+                        &crate::t_fmt!("feishu.session_started", DIR = work_dir),
                     )
                     .await;
                 self.on_processing_complete(&message_id, true).await;
             }
-            crate::command::CommandAction::ShowClaudeHistory { .. } => {
-                let sessions = crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                    .list_claude_sessions_by_channel(&runtime.channel_session.id, Some(10));
+            ChatCommandOutcome::History { sessions } => {
                 if sessions.is_empty() {
                     let _ = self
                         .send_text_message(
@@ -576,6 +532,7 @@ impl FeishuPlatform {
                 } else {
                     let card = crate::platform::feishu::cards::build_session_history_card(
                         &sessions,
+                        &chat_id,
                         &receive_id_type,
                         &receive_id,
                     );
@@ -585,112 +542,7 @@ impl FeishuPlatform {
                 }
                 self.on_processing_complete(&message_id, true).await;
             }
-            crate::command::CommandAction::ChangeDir(_)
-            | crate::command::CommandAction::ChangeDirDefault => {
-                let response = router.execute(action).await;
-                if let Some(text) = response {
-                    let _ = self
-                        .send_text_message(&receive_id_type, &receive_id, &text)
-                        .await;
-                }
-                let work_dir = router.current_work_dir().await;
-                let _ = crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                    .switch_work_dir(
-                        &runtime.channel_session.id,
-                        std::path::PathBuf::from(&work_dir),
-                    )
-                    .await;
-                if let Some(mut entry) = self.channels.get_mut(&chat_id) {
-                    entry.set_work_dir(work_dir);
-                }
-                self.on_processing_complete(&message_id, true).await;
-            }
-            crate::command::CommandAction::ForwardToClaude(text) => {
-                // Ensure we have an active Claude session
-                let active = match runtime.active_claude {
-                    Some(ref a) => {
-                        let ctrl = a.controller.lock().await;
-                        if ctrl.is_session_active().await {
-                            drop(ctrl);
-                            a.clone()
-                        } else {
-                            drop(ctrl);
-                            // Session died, clear it and create a new one
-                            if let Some(mut entry) = self.channels.get_mut(&chat_id) {
-                                entry.active_claude = None;
-                            }
-                            let mcp_ctx = crate::claude::mcp_server::McpContext {
-                                feishu_app_id: self.config.app_id.clone(),
-                                feishu_app_secret: self.config.app_secret.clone(),
-                                chat_id: receive_id.clone(),
-                                receive_id_type: receive_id_type.clone(),
-                            };
-                            match crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                                .start_claude_session_for_platform(
-                                    &runtime.channel_session.id,
-                                    &format!("Feishu {}", chat_id),
-                                    &self.default_dir,
-                                    self.claude_config.clone(),
-                                    self.show_thinking
-                                        .load(std::sync::atomic::Ordering::Relaxed),
-                                    vec![],
-                                    None,
-                                    None,
-                                    Some(mcp_ctx),
-                                )
-                                .await
-                            {
-                                Ok(active) => {
-                                    if let Some(mut entry) = self.channels.get_mut(&chat_id) {
-                                        entry.active_claude = Some(active.clone());
-                                    }
-                                    active
-                                }
-                                Err(e) => {
-                                    let _ = self
-                                        .send_text_message(
-                                            &receive_id_type,
-                                            &receive_id,
-                                            &crate::t_fmt!("builtin.failed_start_claude", ERR = e),
-                                        )
-                                        .await;
-                                    self.on_processing_complete(&message_id, false).await;
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        // No active session — prompt user to start one with /claude
-                        let _ = self
-                            .send_text_message(
-                                &receive_id_type,
-                                &receive_id,
-                                crate::t!("controller.no_active_session"),
-                            )
-                            .await;
-                        self.on_processing_complete(&message_id, false).await;
-                        return;
-                    }
-                };
-
-                // Send the message
-                {
-                    let ctrl = active.controller.lock().await;
-                    if let Err(e) = ctrl.send_message(&text).await {
-                        let _ = self
-                            .send_text_message(
-                                &receive_id_type,
-                                &receive_id,
-                                &crate::t_fmt!("feishu.failed_send", ERR = e),
-                            )
-                            .await;
-                        self.on_processing_complete(&message_id, false).await;
-                        return;
-                    }
-                }
-
-                // Poll for response
+            ChatCommandOutcome::ForwardToClaude { active, text } => {
                 let _guard = runtime.poll_lock.lock().await;
                 struct FeishuEventSink<'a> {
                     platform: &'a FeishuPlatform,
@@ -797,12 +649,10 @@ impl FeishuPlatform {
                     chat_id_str: chat_id,
                 };
 
-                let poller = {
-                    let ctrl = active.controller.lock().await;
-                    ClaudeEventPoller::from_controller(&*ctrl)
-                };
-
-                match poller.run(&mut sink).await {
+                match GLOBAL_CHANNEL_SESSIONS
+                    .send_and_poll_active_runtime(&active, &text, &mut sink)
+                    .await
+                {
                     Ok(()) => {
                         self.on_processing_complete(&message_id, true).await;
                     }
@@ -817,15 +667,6 @@ impl FeishuPlatform {
                         self.on_processing_complete(&message_id, false).await;
                     }
                 }
-            }
-            other => {
-                let response = router.execute(other).await;
-                if let Some(text) = response {
-                    let _ = self
-                        .send_text_message(&receive_id_type, &receive_id, &text)
-                        .await;
-                }
-                self.on_processing_complete(&message_id, true).await;
             }
         }
     }
@@ -1022,10 +863,6 @@ impl FeishuPlatform {
                             .and_then(|v| v.as_str())
                             .unwrap_or(&default_work_dir);
 
-                        let resume_id = crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                            .get_claude_session(&session_id)
-                            .and_then(|s| s.claude_session_id.clone());
-
                         let mcp_ctx = crate::claude::mcp_server::McpContext {
                             feishu_app_id: self.config.app_id.clone(),
                             feishu_app_secret: self.config.app_secret.clone(),
@@ -1033,15 +870,12 @@ impl FeishuPlatform {
                             receive_id_type: receive_id_type.clone(),
                         };
                         match crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
-                            .start_claude_session_for_platform(
-                                &runtime.channel_session.id,
-                                &format!("Feishu {}", receive_id),
+                            .resume_claude_session_for_platform(
+                                session_id,
                                 &self.default_dir,
                                 self.claude_config.clone(),
                                 self.show_thinking
                                     .load(std::sync::atomic::Ordering::Relaxed),
-                                vec![],
-                                resume_id,
                                 Some(effective_dir.to_string()),
                                 Some(mcp_ctx),
                             )
@@ -1050,6 +884,7 @@ impl FeishuPlatform {
                             Ok(active) => {
                                 if let Some(mut entry) = self.channels.get_mut(chat_id) {
                                     entry.active_claude = Some(active.clone());
+                                    entry.set_work_dir(active.claude_session.work_dir.clone());
                                 }
                                 let _ = self
                                     .send_text_message(
@@ -1057,7 +892,7 @@ impl FeishuPlatform {
                                         &receive_id,
                                         &crate::t_fmt!(
                                             "feishu.session_resumed",
-                                            DIR = effective_dir
+                                            DIR = active.claude_session.work_dir
                                         ),
                                     )
                                     .await;

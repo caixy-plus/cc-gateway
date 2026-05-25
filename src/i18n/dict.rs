@@ -222,6 +222,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Thinking...",
             Language::ZhCN => "思考中...",
         },
+        "claude.thinking_placeholder" => match lang {
+            Language::En => "💭 Thinking...",
+            Language::ZhCN => "💭 Thinking...",
+        },
         "cli.press_expand" => match lang {
             Language::En => "[press t to expand]",
             Language::ZhCN => "[按 t 展开]",
@@ -391,6 +395,10 @@ pub fn t(key: &str) -> &str {
         "builtin.selection_cancelled" => match lang {
             Language::En => "Selection cancelled.",
             Language::ZhCN => "选择已取消。",
+        },
+        "builtin.cannot_delete_active" => match lang {
+            Language::En => "Cannot delete an active session. Use /quit to stop it first.",
+            Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
         },
         "builtin.mkdir_usage" => match lang {
             Language::En => "Usage: /mkdir <dirname>",
@@ -723,6 +731,10 @@ pub fn t(key: &str) -> &str {
         "webui.session_not_found" => match lang {
             Language::En => "Session not found",
             Language::ZhCN => "未找到会话",
+        },
+        "webui.cannot_delete_active" => match lang {
+            Language::En => "Cannot delete an active session. Stop it first.",
+            Language::ZhCN => "无法删除活跃中的会话，请先停止它。",
         },
         "webui.home_dir_error" => match lang {
             Language::En => "Could not determine home directory",

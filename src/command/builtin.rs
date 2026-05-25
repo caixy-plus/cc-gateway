@@ -106,15 +106,18 @@ impl BuiltinCommands {
                 SelectAction::Deleted(idx) => {
                     if let Some(ref cc_id) = sorted[idx].cc_gateway_id {
                         // Delete from DB and memory
-                        GLOBAL_CHANNEL_SESSIONS.remove_claude_session(cc_id);
-                        // Delete history file
-                        let file_id = sorted[idx].session_id.clone();
-                        if let Some(home) = dirs::home_dir() {
-                            let history_file = home
-                                .join(".cc-gateway")
-                                .join("history")
-                                .join(format!("{}.jsonl", file_id));
-                            let _ = std::fs::remove_file(&history_file);
+                        if GLOBAL_CHANNEL_SESSIONS.remove_claude_session(cc_id) {
+                            // Delete history file only after the session record is deleted.
+                            let file_id = sorted[idx].session_id.clone();
+                            if let Some(home) = dirs::home_dir() {
+                                let history_file = home
+                                    .join(".cc-gateway")
+                                    .join("history")
+                                    .join(format!("{}.jsonl", file_id));
+                                let _ = std::fs::remove_file(&history_file);
+                            }
+                        } else {
+                            return t!("builtin.cannot_delete_active").to_string();
                         }
                     }
                     sorted.remove(idx);

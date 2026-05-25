@@ -1,6 +1,8 @@
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
-use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
+use crate::claude::event_poller::EventPollSink;
+use crate::config::model::ClaudeConfig;
 use crate::db;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::channel_model::ClaudeSessionState;
@@ -54,6 +56,158 @@ impl EventPollSink for CollectSink {
     }
 }
 
+struct ChunkSink {
+    chunks: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl EventPollSink for ChunkSink {
+    async fn flush(&mut self, text: &str, _is_done: bool) -> Result<()> {
+        self.chunks.push(text.to_string());
+        Ok(())
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        _request_id: &str,
+        _tool_name: &str,
+        _input: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn on_confirm_request(
+        &mut self,
+        _request_id: &str,
+        _prompt: &str,
+        _options: &[String],
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn on_select_request(
+        &mut self,
+        _request_id: &str,
+        _prompt: &str,
+        _options: &[String],
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn on_question_request(
+        &mut self,
+        _request_id: &str,
+        _questions: &[crate::claude::controller::QuestionItem],
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn create_thinking_fake_claude(home: &Path) -> PathBuf {
+    let script = home.join("fake-thinking-claude.sh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+session_id="fake-thinking-session"
+mkdir -p "$HOME/.claude/sessions"
+printf '{"sessionId":"%s"}\n' "$session_id" > "$HOME/.claude/sessions/$$.json"
+while IFS= read -r line; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private chain of thought"},{"type":"text","text":"visible answer"}]}}\n'
+  printf '{"type":"result","result":"visible answer","usage":{"input_tokens":1,"output_tokens":2}}\n'
+done
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+    }
+    script
+}
+
+fn create_cwd_fake_claude(home: &Path) -> PathBuf {
+    let script = home.join("fake-cwd-claude.sh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+mkdir -p "$HOME/.claude/sessions"
+pwd > "$HOME/claude-cwd.txt"
+printf '{"sessionId":"fake-cwd-session"}\n' > "$HOME/.claude/sessions/$$.json"
+while IFS= read -r line; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"cwd reply"}]}}\n'
+  printf '{"type":"result","result":"cwd reply","usage":{"input_tokens":1,"output_tokens":2}}\n'
+done
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+    }
+    script
+}
+
+async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join(if show_thinking {
+        "thinking-visible"
+    } else {
+        "thinking-hidden"
+    });
+    std::fs::create_dir_all(&work_dir)?;
+    let config = ClaudeConfig {
+        cli_path: create_thinking_fake_claude(env.home())
+            .to_string_lossy()
+            .to_string(),
+        default_args: String::new(),
+    };
+
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel(
+            if show_thinking {
+                "thinking-visible"
+            } else {
+                "thinking-hidden"
+            },
+            "core-thinking-flow",
+            work_dir.to_str().unwrap(),
+        )
+        .await;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_claude_session_for_platform(
+            &channel.id,
+            "Thinking Flow",
+            work_dir.to_str().unwrap(),
+            config,
+            show_thinking,
+            vec![],
+            None,
+            None,
+            None,
+        )
+        .await?;
+    let mut sink = ChunkSink { chunks: Vec::new() };
+    GLOBAL_CHANNEL_SESSIONS
+        .send_and_poll_active_runtime(&active, "hello", &mut sink)
+        .await?;
+    {
+        let ctrl = active.controller.lock().await;
+        ctrl.stop_session().await?;
+    }
+    GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel.id)
+        .await?;
+
+    Ok(sink.chunks)
+}
+
 #[tokio::test]
 async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Result<()> {
     let env = TestEnv::new();
@@ -84,18 +238,12 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
     assert_eq!(stored.len(), 1);
     assert!(stored[0].active);
 
-    {
-        let ctrl = active.controller.lock().await;
-        ctrl.send_message("hello").await?;
-    }
-    let poller = {
-        let ctrl = active.controller.lock().await;
-        ClaudeEventPoller::from_controller(&ctrl)
-    };
     let mut sink = CollectSink {
         text: String::new(),
     };
-    poller.run(&mut sink).await?;
+    GLOBAL_CHANNEL_SESSIONS
+        .send_and_poll_active_runtime(&active, "hello", &mut sink)
+        .await?;
     assert!(sink.text.contains("fake reply"));
 
     {
@@ -115,17 +263,177 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].work_dir, work_dir.to_string_lossy());
 
-    let (_resumed_session, resumed_controller) = GLOBAL_CHANNEL_SESSIONS
-        .resume_claude_session(&restored[0].id, fake_config, false)
+    let resumed = GLOBAL_CHANNEL_SESSIONS
+        .resume_claude_session_runtime(
+            &restored[0].id,
+            work_dir.to_str().unwrap(),
+            fake_config,
+            false,
+        )
         .await?;
     {
-        let ctrl = resumed_controller.lock().await;
+        let ctrl = resumed.controller.lock().await;
         assert!(ctrl.is_session_active().await);
         ctrl.stop_session().await?;
     }
     GLOBAL_CHANNEL_SESSIONS
         .stop_channel_session(&channel.id)
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn start_session_uses_work_dir_override_as_process_cwd_and_persisted_work_dir() -> Result<()>
+{
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let root = env.home().join("override-root");
+    let child = root.join("child");
+    std::fs::create_dir_all(&child)?;
+    let config = ClaudeConfig {
+        cli_path: create_cwd_fake_claude(env.home())
+            .to_string_lossy()
+            .to_string(),
+        default_args: String::new(),
+    };
+
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel("feishu", "override-flow", root.to_str().unwrap())
+        .await;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_claude_session_for_platform(
+            &channel.id,
+            "Override Flow",
+            root.to_str().unwrap(),
+            config,
+            false,
+            vec![],
+            None,
+            Some(child.to_string_lossy().to_string()),
+            None,
+        )
+        .await?;
+
+    let process_cwd = std::fs::read_to_string(env.home().join("claude-cwd.txt"))?;
+    assert_eq!(process_cwd.trim(), child.to_string_lossy());
+    assert_eq!(active.claude_session.work_dir, child.to_string_lossy());
+    assert_eq!(
+        GLOBAL_CHANNEL_SESSIONS
+            .get_active_claude_session(&channel.id)
+            .unwrap()
+            .work_dir,
+        child.to_string_lossy()
+    );
+
+    {
+        let ctrl = active.controller.lock().await;
+        ctrl.stop_session().await?;
+    }
+    GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel.id)
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_changed() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let original = env.home().join("resume-original");
+    let current = env.home().join("resume-current");
+    std::fs::create_dir_all(&original)?;
+    std::fs::create_dir_all(&current)?;
+    let config = ClaudeConfig {
+        cli_path: create_cwd_fake_claude(env.home())
+            .to_string_lossy()
+            .to_string(),
+        default_args: String::new(),
+    };
+
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel("feishu", "resume-workdir", current.to_str().unwrap())
+        .await;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_claude_session_for_platform(
+            &channel.id,
+            "Resume WorkDir",
+            current.to_str().unwrap(),
+            config.clone(),
+            false,
+            vec![],
+            None,
+            Some(original.to_string_lossy().to_string()),
+            None,
+        )
+        .await?;
+    let session_id = active.claude_session.id.clone();
+    {
+        let ctrl = active.controller.lock().await;
+        ctrl.stop_session().await?;
+    }
+    GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel.id)
+        .await?;
+    GLOBAL_CHANNEL_SESSIONS
+        .switch_work_dir(&channel.id, current.clone())
+        .await?;
+
+    let resumed = GLOBAL_CHANNEL_SESSIONS
+        .resume_claude_session_for_platform(
+            &session_id,
+            current.to_str().unwrap(),
+            config,
+            false,
+            Some(current.to_string_lossy().to_string()),
+            None,
+        )
+        .await?;
+
+    let process_cwd = std::fs::read_to_string(env.home().join("claude-cwd.txt"))?;
+    assert_eq!(process_cwd.trim(), original.to_string_lossy());
+    assert_eq!(resumed.claude_session.work_dir, original.to_string_lossy());
+    assert_eq!(
+        GLOBAL_CHANNEL_SESSIONS
+            .get_channel(&channel.id)
+            .unwrap()
+            .work_dir,
+        original.to_string_lossy()
+    );
+
+    {
+        let ctrl = resumed.controller.lock().await;
+        ctrl.stop_session().await?;
+    }
+    GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel.id)
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn hidden_thinking_shows_placeholder_without_private_content() -> Result<()> {
+    let chunks = collect_thinking_flow(false).await?;
+
+    assert!(chunks.iter().any(|chunk| chunk == "💭 Thinking..."));
+    assert!(!chunks
+        .iter()
+        .any(|chunk| chunk.contains("private chain of thought")));
+    assert!(chunks.iter().any(|chunk| chunk.contains("visible answer")));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn shown_thinking_includes_private_content() -> Result<()> {
+    let chunks = collect_thinking_flow(true).await?;
+
+    assert!(chunks
+        .iter()
+        .any(|chunk| chunk.contains("private chain of thought")));
+    assert!(chunks.iter().any(|chunk| chunk.contains("visible answer")));
 
     Ok(())
 }

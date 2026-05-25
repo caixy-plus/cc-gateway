@@ -48,6 +48,29 @@ async fn assert_webui_events(
     Ok(())
 }
 
+async fn assert_no_empty_assistant_event(
+    rx: &mut tokio::sync::broadcast::Receiver<crate::web::state::Event>,
+    session_id: &str,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(event)) if event.session_id == session_id => {
+                assert!(
+                    !(event.role == "assistant" && event.content.trim().is_empty()),
+                    "WebUI should not receive empty assistant events"
+                );
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Result<()> {
     let env = TestEnv::new();
@@ -172,6 +195,62 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-empty-assistant");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        claude_config: env.fake_claude_config(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+    };
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
+        .await?;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_claude_session_for_platform(
+            &runtime.channel_session.id,
+            "No empty assistant event",
+            work_dir.to_str().unwrap(),
+            state.claude_config.clone(),
+            state.show_thinking,
+            vec![],
+            None,
+            None,
+            None,
+        )
+        .await?;
+    let session_id = active.claude_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&runtime.channel_session.id, Some(active));
+
+    let mut rx = EVENT_BUS.subscribe();
+    let (status, body) = short_timeout(
+        "send",
+        handle_send_message(
+            State(state.clone()),
+            Path(session_id.clone()),
+            Json(SendMessageRequest {
+                message: "hello without empty bubble".to_string(),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body)?["status"],
+        "forwarded"
+    );
+
+    assert_webui_events(&mut rx, &session_id, "hello without empty bubble").await?;
+    assert_no_empty_assistant_event(&mut rx, &session_id).await?;
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -> Result<()> {
     let env = TestEnv::new();
@@ -220,6 +299,56 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
     assert!(GLOBAL_CHANNEL_SESSIONS
         .get_claude_session(&session_id)
         .is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-active-delete");
+    std::fs::create_dir_all(&work_dir)?;
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
+        .await?;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_claude_session_for_platform(
+            &runtime.channel_session.id,
+            "Active delete protection",
+            work_dir.to_str().unwrap(),
+            env.fake_claude_config(),
+            false,
+            vec![],
+            None,
+            None,
+            None,
+        )
+        .await?;
+    let session_id = active.claude_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&runtime.channel_session.id, Some(active));
+
+    let (status, body) = handle_delete_session(Path(session_id.clone())).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body)?["error"],
+        crate::t!("webui.cannot_delete_active")
+    );
+    assert!(
+        GLOBAL_CHANNEL_SESSIONS
+            .get_claude_session(&session_id)
+            .unwrap()
+            .active
+    );
+    assert!(GLOBAL_CHANNEL_SESSIONS
+        .get_webui_runtime(&runtime.channel_session.id)
+        .unwrap()
+        .active_claude
+        .is_some());
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
 
     Ok(())
 }

@@ -56,6 +56,26 @@ fn test_gateway_config_serde_roundtrip() {
 }
 
 #[test]
+fn gateway_config_serialization_does_not_emit_legacy_platform_selector() {
+    let value = serde_json::to_value(GatewayConfig::default()).unwrap();
+
+    assert!(value.get("platform").is_none());
+}
+
+#[test]
+fn gateway_config_ignores_legacy_platform_selector_when_loading() {
+    let config: GatewayConfig = serde_json::from_value(serde_json::json!({
+        "platform": "telegram",
+        "feishu": { "enabled": true },
+        "telegram": { "enabled": true },
+    }))
+    .unwrap();
+
+    assert!(config.feishu.enabled);
+    assert!(config.telegram.enabled);
+}
+
+#[test]
 fn test_log_config_serde_roundtrip() {
     let original = LogConfig::default();
     let json = serde_json::to_string(&original).unwrap();

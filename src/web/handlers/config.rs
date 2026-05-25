@@ -58,9 +58,6 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
     if let Some(v) = body.get("port").and_then(|v| v.as_u64()) {
         config.port = v as u16;
     }
-    if let Some(v) = body.get("platform").and_then(|v| v.as_str()) {
-        config.platform = v.to_string();
-    }
     if let Some(v) = body.get("claude") {
         if let Ok(c) = serde_json::from_value(v.clone()) {
             config.claude = c;

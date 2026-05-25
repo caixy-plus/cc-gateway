@@ -2,7 +2,6 @@ use anyhow::Result;
 use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -10,10 +9,13 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::claude::controller::ClaudeController;
-use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
-use crate::command::router::{CommandAction, CommandRouter};
+use crate::claude::event_poller::EventPollSink;
+use crate::command::router::CommandRouter;
 use crate::config::model::{ClaudeConfig, TelegramConfig};
 use crate::platform::Platform;
+use crate::session::channel_command::{
+    ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
+};
 use crate::session::channel_manager::{ActiveClaudeRuntime, GLOBAL_CHANNEL_SESSIONS};
 /// Per-channel runtime for Telegram.
 /// Each chat gets its own ChannelSession; active ClaudeSession is optional.
@@ -240,231 +242,71 @@ impl TelegramPlatform {
         };
 
         let action = router.route(&content).await;
+        let executor = ChatCommandExecutor::new(
+            &self.default_dir,
+            self.claude_config.clone(),
+            self.show_thinking,
+        );
+        let mut context = ChatCommandContext::new(
+            runtime.channel_session.id.clone(),
+            format!("Telegram {}", chat_id),
+            runtime.channel_session.work_dir.clone(),
+            runtime.active_claude.clone(),
+        );
+        let outcome = executor.execute(&mut context, action).await?;
 
-        match action {
-            CommandAction::Reply(text) => {
+        if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
+            rt.active_claude = context.active_claude.clone();
+            rt.channel_session.work_dir = context.channel_work_dir.clone();
+        }
+
+        match outcome {
+            ChatCommandOutcome::Reply(text)
+            | ChatCommandOutcome::Error(text)
+            | ChatCommandOutcome::Stopped { message: text }
+            | ChatCommandOutcome::ThinkingShown { message: text }
+            | ChatCommandOutcome::ThinkingHidden { message: text } => {
                 self.send_message(chat_id, &text).await?;
             }
-            CommandAction::UnknownCommand(_) => {
-                let text = crate::t!("feishu.unknown_command").to_string();
-                self.send_message(chat_id, &text).await?;
+            ChatCommandOutcome::WorkDirChanged { work_dir, message }
+            | ChatCommandOutcome::CurrentDir { work_dir, message } => {
+                let _ = work_dir;
+                self.send_message(chat_id, &message).await?;
             }
-            CommandAction::NoOp => {}
-            CommandAction::StopSession => {
-                if let Some(ref active) = runtime.active_claude {
-                    let ctrl = active.controller.lock().await;
-                    let _ = ctrl.stop_session().await;
-                }
-                let _ = GLOBAL_CHANNEL_SESSIONS
-                    .stop_channel_session(&runtime.channel_session.id)
-                    .await;
-                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                    rt.active_claude = None;
-                }
-                self.send_message(chat_id, crate::t!("builtin.session_stopped"))
-                    .await?;
+            ChatCommandOutcome::DirCreated { path, message } => {
+                let _ = path;
+                self.send_message(chat_id, &message).await?;
             }
-            CommandAction::ShowThinking => {
-                if let Some(ref active) = runtime.active_claude {
-                    let ctrl = active.controller.lock().await;
-                    ctrl.set_show_thinking(true);
-                }
-                self.send_message(chat_id, crate::t!("builtin.thinking_enabled"))
+            ChatCommandOutcome::NoOp => {}
+            ChatCommandOutcome::ListDir { dir, dirs } => {
+                if dirs.is_empty() {
+                    self.send_message(chat_id, crate::t!("builtin.no_subdirs"))
+                        .await?;
+                } else {
+                    let lines: Vec<String> = dirs
+                        .iter()
+                        .map(|(name, _)| format!("  {}/", name))
+                        .collect();
+                    self.send_message(
+                        chat_id,
+                        &format!("Directories in {}:\n{}", dir, lines.join("\n")),
+                    )
                     .await?;
+                }
             }
-            CommandAction::HideThinking => {
-                if let Some(ref active) = runtime.active_claude {
-                    let ctrl = active.controller.lock().await;
-                    ctrl.set_show_thinking(false);
-                }
-                self.send_message(chat_id, crate::t!("builtin.thinking_disabled"))
-                    .await?;
-            }
-            CommandAction::ChangeDir(path) => {
-                let path_str = match crate::command::workdir::resolve_work_dir_target(
-                    &runtime.channel_session.work_dir,
-                    &self.default_dir,
-                    &path,
-                ) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        self.send_message(chat_id, &e.to_string()).await?;
-                        return Ok(());
-                    }
-                };
-                GLOBAL_CHANNEL_SESSIONS
-                    .switch_work_dir(&runtime.channel_session.id, PathBuf::from(&path_str))
-                    .await?;
-                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                    rt.channel_session.work_dir = path_str.clone();
-                }
+            ChatCommandOutcome::Started {
+                active,
+                work_dir,
+                message,
+            } => {
+                let _ = (active, message);
                 self.send_message(
                     chat_id,
-                    &crate::t_fmt!("builtin.dir_changed", PATH = path_str),
+                    &crate::t_fmt!("telegram.session_started", DIR = work_dir),
                 )
                 .await?;
             }
-            CommandAction::ChangeDirDefault => {
-                let dir = match crate::command::workdir::resolve_work_dir_target(
-                    &runtime.channel_session.work_dir,
-                    &self.default_dir,
-                    std::path::Path::new(&self.default_dir),
-                ) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        self.send_message(chat_id, &e.to_string()).await?;
-                        return Ok(());
-                    }
-                };
-                GLOBAL_CHANNEL_SESSIONS
-                    .switch_work_dir(&runtime.channel_session.id, PathBuf::from(&dir))
-                    .await?;
-                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                    rt.channel_session.work_dir = dir.clone();
-                }
-                self.send_message(chat_id, &crate::t_fmt!("builtin.dir_changed", PATH = dir))
-                    .await?;
-            }
-            CommandAction::PrintWorkingDir => {
-                let dir = crate::command::workdir::effective_work_dir(
-                    &runtime.channel_session.work_dir,
-                    &self.default_dir,
-                );
-                self.send_message(chat_id, &crate::t_fmt!("builtin.current_dir", DIR = dir))
-                    .await?;
-            }
-            CommandAction::ListDir { path } => {
-                let requested = path.unwrap_or_else(|| PathBuf::from("."));
-                let dir = match crate::command::workdir::resolve_work_dir_target(
-                    &runtime.channel_session.work_dir,
-                    &self.default_dir,
-                    &requested,
-                ) {
-                    Ok(dir) => dir,
-                    Err(e) => {
-                        self.send_message(chat_id, &e.to_string()).await?;
-                        return Ok(());
-                    }
-                };
-                match crate::command::builtin::list_directory_paths(&dir) {
-                    Ok(dirs) => {
-                        if dirs.is_empty() {
-                            self.send_message(chat_id, crate::t!("builtin.no_subdirs"))
-                                .await?;
-                        } else {
-                            let lines: Vec<String> = dirs
-                                .iter()
-                                .map(|(name, _)| format!("  {}/", name))
-                                .collect();
-                            self.send_message(
-                                chat_id,
-                                &format!("Directories in {}:\n{}", dir, lines.join("\n")),
-                            )
-                            .await?;
-                        }
-                    }
-                    Err(e) => {
-                        self.send_message(
-                            chat_id,
-                            &crate::t_fmt!("builtin.failed_list_dir", ERR = e),
-                        )
-                        .await?;
-                    }
-                }
-            }
-            CommandAction::MakeDir(path) => {
-                let base = if runtime.channel_session.work_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    runtime.channel_session.work_dir.clone()
-                };
-                let target = PathBuf::from(&base).join(&path);
-                let target_str = target.to_string_lossy().to_string();
-                if let Err(e) = crate::claude::controller::ensure_under_home(&target_str) {
-                    self.send_message(chat_id, &e.to_string()).await?;
-                    return Ok(());
-                }
-                match std::fs::create_dir_all(&target) {
-                    Ok(()) => {
-                        self.send_message(
-                            chat_id,
-                            &crate::t_fmt!("builtin.dir_created", PATH = target_str),
-                        )
-                        .await?;
-                    }
-                    Err(e) => {
-                        self.send_message(
-                            chat_id,
-                            &crate::t_fmt!("builtin.failed_create_dir", ERR = e),
-                        )
-                        .await?;
-                    }
-                }
-            }
-            CommandAction::StartSession { work_dir, args } => {
-                let effective_dir = work_dir
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| {
-                        if runtime.channel_session.work_dir.is_empty() {
-                            shellexpand::tilde(&self.default_dir).to_string()
-                        } else {
-                            runtime.channel_session.work_dir.clone()
-                        }
-                    });
-
-                match GLOBAL_CHANNEL_SESSIONS
-                    .start_claude_session_for_platform(
-                        &runtime.channel_session.id,
-                        &format!("Telegram {}", chat_id),
-                        &self.default_dir,
-                        self.claude_config.clone(),
-                        self.show_thinking,
-                        args,
-                        None,
-                        Some(effective_dir.clone()),
-                        None,
-                    )
-                    .await
-                {
-                    Ok(active) => {
-                        if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                            rt.active_claude = Some(active.clone());
-                        }
-                        let work_dir = {
-                            let ctrl = active.controller.lock().await;
-                            ctrl.get_work_dir().await
-                        };
-                        self.send_message(
-                            chat_id,
-                            &crate::t_fmt!("telegram.session_started", DIR = work_dir),
-                        )
-                        .await?;
-
-                        let _guard = runtime.poll_lock.lock().await;
-                        let mut sink = TelegramEventSink {
-                            platform: self,
-                            chat_id,
-                            chat_id_str: chat_id_str.clone(),
-                        };
-                        let poller = {
-                            let ctrl = active.controller.lock().await;
-                            ClaudeEventPoller::from_controller(&*ctrl)
-                        };
-                        poller.run(&mut sink).await?;
-                    }
-                    Err(e) => {
-                        self.send_message(
-                            chat_id,
-                            &crate::t_fmt!("builtin.failed_start_claude", ERR = e),
-                        )
-                        .await?;
-                    }
-                }
-            }
-            CommandAction::ShowClaudeHistory { .. } => {
-                let sessions = GLOBAL_CHANNEL_SESSIONS
-                    .list_claude_sessions_by_channel(&runtime.channel_session.id, Some(10));
+            ChatCommandOutcome::History { sessions } => {
                 let text = if sessions.is_empty() {
                     crate::t!("feishu.no_sessions").to_string()
                 } else {
@@ -481,27 +323,16 @@ impl TelegramPlatform {
                 };
                 self.send_message(chat_id, &text).await?;
             }
-            CommandAction::ForwardToClaude(text) => {
-                if let Some(ref active) = runtime.active_claude {
-                    let ctrl = active.controller.lock().await;
-                    ctrl.send_message(&text).await?;
-                    drop(ctrl);
-
-                    let _guard = runtime.poll_lock.lock().await;
-                    let mut sink = TelegramEventSink {
-                        platform: self,
-                        chat_id,
-                        chat_id_str: chat_id_str.clone(),
-                    };
-                    let poller = {
-                        let ctrl = active.controller.lock().await;
-                        ClaudeEventPoller::from_controller(&*ctrl)
-                    };
-                    poller.run(&mut sink).await?;
-                } else {
-                    self.send_message(chat_id, crate::t!("controller.no_active_session"))
-                        .await?;
-                }
+            ChatCommandOutcome::ForwardToClaude { active, text } => {
+                let _guard = runtime.poll_lock.lock().await;
+                let mut sink = TelegramEventSink {
+                    platform: self,
+                    chat_id,
+                    chat_id_str: chat_id_str.clone(),
+                };
+                GLOBAL_CHANNEL_SESSIONS
+                    .send_and_poll_active_runtime(&active, &text, &mut sink)
+                    .await?;
             }
         }
 

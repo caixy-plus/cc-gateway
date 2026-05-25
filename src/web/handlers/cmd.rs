@@ -56,7 +56,9 @@ async fn set_session_work_dir(_session_id: Option<&str>, dir: String) {
                 let ctrl = active.controller.lock().await;
                 ctrl.init_work_dir(dir.clone()).await;
             }
-            GLOBAL_CHANNEL_SESSIONS.update_channel_work_dir(&channel_id, &dir);
+            let _ = GLOBAL_CHANNEL_SESSIONS
+                .switch_work_dir(&channel_id, std::path::PathBuf::from(&dir))
+                .await;
             return;
         }
     }

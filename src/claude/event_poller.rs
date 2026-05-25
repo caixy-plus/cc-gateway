@@ -63,6 +63,7 @@ impl ClaudeEventPoller {
     /// Run the poll loop: drain events from the controller and dispatch to `sink`.
     /// Returns when the session ends (Done event) or the event channel closes.
     pub async fn run(self, sink: &mut (dyn EventPollSink + Send)) -> Result<()> {
+        let mut hidden_thinking_placeholder_sent = false;
         loop {
             let event = {
                 let mut rx = self.event_rx.lock().await;
@@ -74,7 +75,13 @@ impl ClaudeEventPoller {
                     sink.flush(&text, false).await?;
                 }
                 Some(ControllerEvent::Thinking(text)) => {
-                    if !text.is_empty() {
+                    if text.trim().is_empty() {
+                        if !hidden_thinking_placeholder_sent {
+                            sink.flush(crate::t!("claude.thinking_placeholder"), false)
+                                .await?;
+                            hidden_thinking_placeholder_sent = true;
+                        }
+                    } else {
                         sink.flush(&text, false).await?;
                     }
                 }
@@ -137,7 +144,13 @@ impl ClaudeEventPoller {
                                 sink.flush(&text, false).await?;
                             }
                             Some(ControllerEvent::Thinking(text)) => {
-                                if !text.is_empty() {
+                                if text.trim().is_empty() {
+                                    if !hidden_thinking_placeholder_sent {
+                                        sink.flush(crate::t!("claude.thinking_placeholder"), false)
+                                            .await?;
+                                        hidden_thinking_placeholder_sent = true;
+                                    }
+                                } else {
                                     sink.flush(&text, false).await?;
                                 }
                             }

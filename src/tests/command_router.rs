@@ -84,3 +84,53 @@ async fn parses_core_commands_without_starting_claude() {
         CommandAction::Reply(_)
     ));
 }
+
+#[tokio::test]
+async fn active_claude_session_forwards_slash_commands_except_gateway_controls() {
+    let env = TestEnv::new();
+    let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
+    {
+        let ctrl = controller.lock().await;
+        ctrl.start_session(env.home().to_string_lossy().to_string(), Vec::new())
+            .await
+            .expect("fake Claude session should start");
+    }
+
+    assert!(matches!(
+        router.route("/quit").await,
+        CommandAction::StopSession
+    ));
+    assert!(matches!(
+        router.route("/show-thinking").await,
+        CommandAction::ShowThinking
+    ));
+    assert!(matches!(
+        router.route("/hide-thinking").await,
+        CommandAction::HideThinking
+    ));
+    assert!(matches!(
+        router.route("/pwd").await,
+        CommandAction::ForwardToClaude(text) if text == "/pwd"
+    ));
+    assert!(matches!(
+        router.route("/cd ..").await,
+        CommandAction::ForwardToClaude(text) if text == "/cd .."
+    ));
+    assert!(matches!(
+        router.route("/ll src").await,
+        CommandAction::ForwardToClaude(text) if text == "/ll src"
+    ));
+    assert!(matches!(
+        router.route("/claude-history").await,
+        CommandAction::ForwardToClaude(text) if text == "/claude-history"
+    ));
+    assert!(matches!(
+        router.route("/some-new-claude-command").await,
+        CommandAction::ForwardToClaude(text) if text == "/some-new-claude-command"
+    ));
+
+    {
+        let ctrl = controller.lock().await;
+        ctrl.stop_session().await.unwrap();
+    }
+}

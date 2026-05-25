@@ -1,4 +1,6 @@
+mod chat_command_executor;
 mod command_router;
+mod config_model;
 mod core_flow;
 mod feishu_cards;
 mod feishu_flow;

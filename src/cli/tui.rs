@@ -588,19 +588,13 @@ async fn process_submit(
             if let Some(ref reply) = result {
                 app.add_message(MsgRole::System, reply);
             }
-            let ctrl = controller.lock().await;
-            if ctrl.is_session_active().await {
+            if GLOBAL_CHANNEL_SESSIONS
+                .record_active_controller_session(&app.channel_id, "TUI Session", controller)
+                .await?
+                .is_some()
+            {
                 app.session_active = true;
                 app.poller_running = false;
-                let work_dir = ctrl.get_work_dir().await;
-                let claude_session_id = ctrl.get_claude_session_id().await;
-                drop(ctrl);
-                let _ = GLOBAL_CHANNEL_SESSIONS.record_active_claude_session(
-                    &app.channel_id,
-                    "TUI Session",
-                    &work_dir,
-                    claude_session_id,
-                );
             }
             Ok(SubmitResult { poll_claude: false })
         }
@@ -622,8 +616,10 @@ async fn process_submit(
         }
 
         CommandAction::ForwardToClaude(msg) => {
-            let ctrl = controller.lock().await;
-            match ctrl.send_message(&msg).await {
+            match GLOBAL_CHANNEL_SESSIONS
+                .send_to_controller(controller, &msg)
+                .await
+            {
                 Ok(()) => {
                     app.add_message(MsgRole::User, text);
                     app.needs_claude_response = true;

@@ -127,6 +127,7 @@ pub fn build_dir_picker_card(
 /// Matches main branch `build_session_history_card`.
 pub fn build_session_history_card(
     sessions: &[crate::session::channel_model::ClaudeSession],
+    chat_id: &str,
     receive_id_type: &str,
     receive_id: &str,
 ) -> Value {
@@ -181,8 +182,9 @@ pub fn build_session_history_card(
                     "value": {
                         "cmd": "resume",
                         "session_id": session.id,
-                        "chat_id": receive_id,
-                        "receive_id_type": receive_id_type
+                        "chat_id": chat_id,
+                        "receive_id_type": receive_id_type,
+                        "receive_id": receive_id
                     }
                 }
             ]
@@ -201,8 +203,9 @@ pub fn build_session_history_card(
                         "cmd": "resume",
                         "session_id": "",
                         "work_dir": session.work_dir,
-                        "chat_id": receive_id,
-                        "receive_id_type": receive_id_type
+                        "chat_id": chat_id,
+                        "receive_id_type": receive_id_type,
+                        "receive_id": receive_id
                     }
                 }
             ]
@@ -220,8 +223,9 @@ pub fn build_session_history_card(
                     "value": {
                         "cmd": "delete_session",
                         "session_id": session.id,
-                        "chat_id": receive_id,
-                        "receive_id_type": receive_id_type
+                        "chat_id": chat_id,
+                        "receive_id_type": receive_id_type,
+                        "receive_id": receive_id
                     }
                 }
             ]
