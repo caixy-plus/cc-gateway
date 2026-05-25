@@ -50,8 +50,8 @@ impl CursorAcpSession {
             cli_path, args, work_dir
         );
 
-        let mut child = Command::new(&cli_path)
-            .args(&args)
+        let mut command = cursor_command(&cli_path, &args);
+        let mut child = command
             .current_dir(&work_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -397,6 +397,22 @@ impl CursorAcpSession {
     }
 }
 
+fn cursor_command(cli_path: &str, args: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        let lower = cli_path.to_lowercase();
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(cli_path).args(args);
+            return command;
+        }
+    }
+
+    let mut command = Command::new(cli_path);
+    command.args(args);
+    command
+}
+
 fn extract_session_id(value: &Value) -> Option<String> {
     value
         .get("sessionId")
@@ -560,5 +576,43 @@ mod tests {
             AgentEvent::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text event, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn real_cursor_acp_smoke_test_when_enabled() {
+        if std::env::var("CC_GATEWAY_RUN_CURSOR_AGENT_TEST")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            return;
+        }
+
+        let cli_path = std::env::var("CC_GATEWAY_CURSOR_AGENT_PATH")
+            .unwrap_or_else(|_| r"C:\Users\volun\AppData\Local\cursor-agent\agent.cmd".to_string());
+        let config = AgentConfig {
+            provider: crate::config::model::AgentProvider::Cursor,
+            cli_path,
+            default_args: String::new(),
+            mode: "agent".to_string(),
+            permission: "prompt".to_string(),
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let work_dir = std::env::current_dir()
+            .expect("current dir should be available")
+            .to_string_lossy()
+            .to_string();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            CursorAcpSession::spawn(work_dir, Vec::new(), &config, tx, None),
+        )
+        .await
+        .expect("Cursor ACP smoke test timed out")
+        .expect("Cursor ACP session should start");
+
+        let (session, session_id) = result;
+        assert!(session_id.as_deref().unwrap_or("").len() > 8);
+        session.stop().await.expect("session should stop");
     }
 }
