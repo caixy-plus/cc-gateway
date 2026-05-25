@@ -62,7 +62,9 @@ async fn record_event(event: &Event) -> anyhow::Result<()> {
     };
 
     // Use the ClaudeSession's own id as the history file name.
-    let history_file_id = claude_session.claude_session_id.as_deref()
+    let history_file_id = claude_session
+        .claude_session_id
+        .as_deref()
         .unwrap_or(&claude_session.id);
 
     let history_dir = get_history_dir()?;
@@ -85,6 +87,7 @@ async fn record_event(event: &Event) -> anyhow::Result<()> {
 }
 
 fn get_history_dir() -> anyhow::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     Ok(home.join(".cc-gateway").join("history"))
 }

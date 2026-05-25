@@ -1,5 +1,5 @@
-use super::lang::Language;
 use super::current_language;
+use super::lang::Language;
 
 /// Lookup a translation by key. Returns the key itself if not found.
 pub fn t(key: &str) -> &str {
@@ -336,6 +336,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Claude session stopped.",
             Language::ZhCN => "Claude 会话已停止。",
         },
+        "builtin.shutdown_notice" => match lang {
+            Language::En => "cc-gateway is shutting down, session closed.",
+            Language::ZhCN => "机器人正在关闭，会话已退出。",
+        },
         "builtin.failed_stop_session" => match lang {
             Language::En => "Failed to stop session: {ERR}",
             Language::ZhCN => "停止会话失败: {ERR}",
@@ -578,13 +582,13 @@ pub fn t(key: &str) -> &str {
             Language::En => "Session deleted.",
             Language::ZhCN => "会话已删除。",
         },
-        "feishu.session_resumed" => match lang {
-            Language::En => "Session resumed: {TITLE}",
-            Language::ZhCN => "会话已恢复: {TITLE}",
+        "feishu.cannot_delete_active" => match lang {
+            Language::En => "Cannot delete an active session. Use /quit to stop it first.",
+            Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
         },
-        "feishu.session_started_new" => match lang {
-            Language::En => "New session started.",
-            Language::ZhCN => "新会话已启动。",
+        "feishu.session_resumed" => match lang {
+            Language::En => "Claude session resumed in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
+            Language::ZhCN => "Claude 会话已恢复于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
         },
         "feishu.status_active" => match lang {
             Language::En => "Active",
@@ -593,6 +597,140 @@ pub fn t(key: &str) -> &str {
         "feishu.status_inactive" => match lang {
             Language::En => "Inactive",
             Language::ZhCN => "非活跃",
+        },
+        "feishu.error_generic" => match lang {
+            Language::En => "Error: {ERR}",
+            Language::ZhCN => "错误: {ERR}",
+        },
+        "feishu.failed_send" => match lang {
+            Language::En => "Failed to send: {ERR}",
+            Language::ZhCN => "发送失败: {ERR}",
+        },
+        "feishu.select_button" => match lang {
+            Language::En => "Select",
+            Language::ZhCN => "选择",
+        },
+        "feishu.allow_button" => match lang {
+            Language::En => "Allow",
+            Language::ZhCN => "允许",
+        },
+        "feishu.deny_button" => match lang {
+            Language::En => "Deny",
+            Language::ZhCN => "拒绝",
+        },
+        "feishu.select_title" => match lang {
+            Language::En => "Please Select",
+            Language::ZhCN => "请选择",
+        },
+        "feishu.permission_request_text" => match lang {
+            Language::En => "Permission request: {NAME} ({ID})",
+            Language::ZhCN => "权限请求: {NAME} ({ID})",
+        },
+        "feishu.session_started" => match lang {
+            Language::En => "Claude session started in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
+            Language::ZhCN => "Claude 会话已启动于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
+        },
+
+        // platform/telegram
+        "telegram.private_chat_only" => match lang {
+            Language::En => "Please use in private chat.",
+            Language::ZhCN => "请在私聊中使用。",
+        },
+        "telegram.history_unavailable" => match lang {
+            Language::En => "Claude history is not available in Telegram.",
+            Language::ZhCN => "Telegram 中不可用 Claude 历史记录。",
+        },
+        "telegram.shutdown_notice" => match lang {
+            Language::En => "Bot is shutting down, sessions exited.",
+            Language::ZhCN => "机器人正在关闭，会话已退出。",
+        },
+        "telegram.session_started" => match lang {
+            Language::En => "Claude session started in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
+            Language::ZhCN => "Claude 会话已启动于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
+        },
+        "telegram.session_resumed" => match lang {
+            Language::En => "Claude session resumed in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
+            Language::ZhCN => "Claude 会话已恢复于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
+        },
+        "telegram.permission_request" => match lang {
+            Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
+            Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
+        },
+
+        // cli/tui.rs
+        "tui.permission_required" => match lang {
+            Language::En => "Permission Required: {NAME} (id: {ID})\n  /allow or /deny",
+            Language::ZhCN => "需要权限: {NAME} (id: {ID})\n  输入 /allow 或 /deny",
+        },
+        "tui.confirm_request" => match lang {
+            Language::En => "Confirm (id: {ID}): {PROMPT}\nOptions: {OPTIONS}",
+            Language::ZhCN => "确认 (id: {ID}): {PROMPT}\n选项: {OPTIONS}",
+        },
+        "tui.select_request" => match lang {
+            Language::En => "Select (id: {ID}): {PROMPT}\nOptions: {OPTIONS}",
+            Language::ZhCN => "选择 (id: {ID}): {PROMPT}\n选项: {OPTIONS}",
+        },
+        "tui.questions_title" => match lang {
+            Language::En => "Questions (id: {ID}):\n",
+            Language::ZhCN => "问题 (id: {ID}):\n",
+        },
+        "tui.question_item" => match lang {
+            Language::En => "  {HEADER}: {QUESTION}\n",
+            Language::ZhCN => "  {HEADER}: {QUESTION}\n",
+        },
+        "tui.question_option" => match lang {
+            Language::En => "    - {LABEL}: {DESCRIPTION}\n",
+            Language::ZhCN => "    - {LABEL}: {DESCRIPTION}\n",
+        },
+
+        // web/handlers/session.rs
+        "webui.permission_request" => match lang {
+            Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
+            Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
+        },
+        "webui.confirm_request" => match lang {
+            Language::En => "Confirm: {PROMPT} (id: {ID})\nOptions: {OPTIONS}\n",
+            Language::ZhCN => "确认: {PROMPT} (id: {ID})\n选项: {OPTIONS}\n",
+        },
+        "webui.select_request" => match lang {
+            Language::En => "Select: {PROMPT} (id: {ID})\nOptions: {OPTIONS}\n",
+            Language::ZhCN => "选择: {PROMPT} (id: {ID})\n选项: {OPTIONS}\n",
+        },
+        "webui.questions_title" => match lang {
+            Language::En => "Question (id: {ID})\n",
+            Language::ZhCN => "问题 (id: {ID})\n",
+        },
+        "webui.question_item" => match lang {
+            Language::En => "  {HEADER}: {QUESTION}\n",
+            Language::ZhCN => "  {HEADER}: {QUESTION}\n",
+        },
+        "webui.question_option" => match lang {
+            Language::En => "    - {LABEL}: {DESCRIPTION}\n",
+            Language::ZhCN => "    - {LABEL}: {DESCRIPTION}\n",
+        },
+        "webui.empty_message" => match lang {
+            Language::En => "Empty message",
+            Language::ZhCN => "空消息",
+        },
+        "webui.runtime_not_found" => match lang {
+            Language::En => "WebUI runtime not found",
+            Language::ZhCN => "未找到 WebUI 运行时",
+        },
+        "webui.no_active_session" => match lang {
+            Language::En => "No active session",
+            Language::ZhCN => "没有活动会话",
+        },
+        "webui.session_not_found" => match lang {
+            Language::En => "Session not found",
+            Language::ZhCN => "未找到会话",
+        },
+        "webui.home_dir_error" => match lang {
+            Language::En => "Could not determine home directory",
+            Language::ZhCN => "无法确定主目录",
+        },
+        "webui.failed_stop_session" => match lang {
+            Language::En => "Failed to stop session: {ERR}",
+            Language::ZhCN => "停止会话失败: {ERR}",
         },
 
         _ => key,

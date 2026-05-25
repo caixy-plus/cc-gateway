@@ -2,9 +2,7 @@ use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
-    terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-    },
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -26,8 +24,8 @@ use crate::command::builtin::TUI_EVENT_READER_PAUSED;
 
 use crate::claude::controller::{ClaudeController, QuestionItem};
 use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
-use crate::command::{CommandAction, CommandRouter};
 use crate::cli::interactive::format_banner;
+use crate::command::{CommandAction, CommandRouter};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::t_fmt;
 
@@ -62,6 +60,7 @@ enum TuiPollEvent {
     SelectRequest(String, String, Vec<String>),
     QuestionRequest(String, Vec<QuestionItem>),
     Done,
+    PollerStopped,
 }
 
 struct TuiEventSink {
@@ -81,9 +80,10 @@ impl EventPollSink for TuiEventSink {
         tool_name: &str,
         _input: Option<&serde_json::Value>,
     ) -> Result<()> {
-        let _ = self
-            .tx
-            .send(TuiPollEvent::PermissionRequest(request_id.to_string(), tool_name.to_string()));
+        let _ = self.tx.send(TuiPollEvent::PermissionRequest(
+            request_id.to_string(),
+            tool_name.to_string(),
+        ));
         Ok(())
     }
 
@@ -120,18 +120,19 @@ impl EventPollSink for TuiEventSink {
         request_id: &str,
         questions: &[QuestionItem],
     ) -> Result<()> {
-        let _ = self
-            .tx
-            .send(TuiPollEvent::QuestionRequest(request_id.to_string(), questions.to_vec()));
+        let _ = self.tx.send(TuiPollEvent::QuestionRequest(
+            request_id.to_string(),
+            questions.to_vec(),
+        ));
         Ok(())
     }
-
 }
 
-/// Spawn a background task that runs the ClaudeEventPoller and forwards
-/// events to the main TUI loop via `poll_tx`. The task loops as long as
-/// the session remains active, so multiple user messages within one session
-/// are all handled.
+/// Spawn one background poller for the active Claude session.
+///
+/// It stays alive across turns so multiple user messages in the same session
+/// share a single receiver. Starting more than one poller races on the
+/// controller's event channel and can make later Claude chunks disappear.
 fn spawn_poller_task(
     controller: Arc<Mutex<ClaudeController>>,
     poll_tx: mpsc::UnboundedSender<TuiPollEvent>,
@@ -146,7 +147,9 @@ fn spawn_poller_task(
                 ClaudeEventPoller::from_controller(&*ctrl)
             };
 
-            let mut sink = TuiEventSink { tx: poll_tx.clone() };
+            let mut sink = TuiEventSink {
+                tx: poll_tx.clone(),
+            };
             if let Err(e) = poller.run(&mut sink).await {
                 tracing::warn!("[TUI] Poller error: {}", e);
             }
@@ -163,6 +166,7 @@ fn spawn_poller_task(
                 break;
             }
         }
+        let _ = poll_tx.send(TuiPollEvent::PollerStopped);
     });
 }
 
@@ -185,19 +189,27 @@ pub(crate) struct ChatMessage {
 
 impl ChatMessage {
     pub(crate) fn new(role: MsgRole, text: &str) -> Self {
-        Self { role, lines: to_lines(&strip_ansi(text)) }
+        Self {
+            role,
+            lines: to_lines(&strip_ansi(text)),
+        }
     }
 
     pub(crate) fn append(&mut self, text: &str) {
         let clean = strip_ansi(text);
-        if let Some(last) = self.lines.last_mut() {
-            last.push_str(&clean);
-        } else {
-            self.lines.push(clean);
+        let mut parts = clean.split('\n');
+        let first = parts.next().unwrap_or("");
+
+        match self.lines.last_mut() {
+            Some(last) => last.push_str(first),
+            None => self.lines.push(first.to_string()),
+        }
+
+        for part in parts {
+            self.lines.push(part.to_string());
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -223,6 +235,8 @@ pub(crate) struct App {
     pub(crate) last_input_for_completion: String,
     /// ID of the implicit TUI ChannelSession.
     pub(crate) channel_id: String,
+    /// Whether a Claude event poller is already attached to this session.
+    pub(crate) poller_running: bool,
 }
 
 impl App {
@@ -254,6 +268,7 @@ impl App {
             completion_index: 0,
             last_input_for_completion: String::new(),
             channel_id,
+            poller_running: false,
         }
     }
 
@@ -419,12 +434,8 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
     }
 
     match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            KeyAction::Quit
-        }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            KeyAction::Quit
-        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => KeyAction::Quit,
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => KeyAction::Quit,
         KeyCode::Enter => {
             let text = std::mem::take(&mut app.input);
             app.input_cursor = 0;
@@ -497,9 +508,7 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
                     app.completion_matches = app
                         .commands
                         .iter()
-                        .filter(|cmd| {
-                            cmd.starts_with(&app.input) && cmd.len() > app.input.len()
-                        })
+                        .filter(|cmd| cmd.starts_with(&app.input) && cmd.len() > app.input.len())
                         .cloned()
                         .collect();
                     app.completion_index = 0;
@@ -562,7 +571,9 @@ async fn process_submit(
             if let Some(reply) = router.execute(CommandAction::StopSession).await {
                 app.add_message(MsgRole::System, &reply);
             }
-            let _ = GLOBAL_CHANNEL_SESSIONS.stop_channel_session(&app.channel_id).await;
+            let _ = GLOBAL_CHANNEL_SESSIONS
+                .stop_channel_session(&app.channel_id)
+                .await;
             app.session_active = false;
             Ok(SubmitResult { poll_claude: false })
         }
@@ -580,6 +591,16 @@ async fn process_submit(
             let ctrl = controller.lock().await;
             if ctrl.is_session_active().await {
                 app.session_active = true;
+                app.poller_running = false;
+                let work_dir = ctrl.get_work_dir().await;
+                let claude_session_id = ctrl.get_claude_session_id().await;
+                drop(ctrl);
+                let _ = GLOBAL_CHANNEL_SESSIONS.record_active_claude_session(
+                    &app.channel_id,
+                    "TUI Session",
+                    &work_dir,
+                    claude_session_id,
+                );
             }
             Ok(SubmitResult { poll_claude: false })
         }
@@ -634,41 +655,54 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
             false
         }
         TuiPollEvent::PermissionRequest(request_id, tool_name) => {
-            let text = format!(
-                "Permission Required: {} (id: {})\n  /allow or /deny",
-                tool_name, request_id
-            );
+            let text = crate::t_fmt!("tui.permission_required", NAME = tool_name, ID = request_id);
             app.add_message(MsgRole::System, &text);
             false
         }
         TuiPollEvent::ConfirmRequest(request_id, prompt, options) => {
-            let text = format!(
-                "Confirm (id: {}): {}\nOptions: {:?}",
-                request_id, prompt, options
+            let text = crate::t_fmt!(
+                "tui.confirm_request",
+                ID = request_id,
+                PROMPT = prompt,
+                OPTIONS = format!("{:?}", options)
             );
             app.add_message(MsgRole::System, &text);
             false
         }
         TuiPollEvent::SelectRequest(request_id, prompt, options) => {
-            let text = format!(
-                "Select (id: {}): {}\nOptions: {:?}",
-                request_id, prompt, options
+            let text = crate::t_fmt!(
+                "tui.select_request",
+                ID = request_id,
+                PROMPT = prompt,
+                OPTIONS = format!("{:?}", options)
             );
             app.add_message(MsgRole::System, &text);
             false
         }
         TuiPollEvent::QuestionRequest(request_id, questions) => {
-            let mut text = format!("Questions (id: {}):\n", request_id);
+            let mut text = crate::t_fmt!("tui.questions_title", ID = request_id);
             for q in questions {
-                text.push_str(&format!("  {}: {}\n", q.header, q.question));
+                text.push_str(&crate::t_fmt!(
+                    "tui.question_item",
+                    HEADER = q.header,
+                    QUESTION = q.question
+                ));
                 for opt in &q.options {
-                    text.push_str(&format!("    - {}: {}\n", opt.label, opt.description));
+                    text.push_str(&crate::t_fmt!(
+                        "tui.question_option",
+                        LABEL = opt.label,
+                        DESCRIPTION = opt.description
+                    ));
                 }
             }
             app.add_message(MsgRole::System, &text);
             false
         }
         TuiPollEvent::Done => true,
+        TuiPollEvent::PollerStopped => {
+            app.poller_running = false;
+            false
+        }
     }
 }
 
@@ -750,6 +784,10 @@ pub async fn run_tui(
                                         ).await?;
                                         if submit.poll_claude {
                                             app.claude_busy = true;
+                                            if !app.poller_running {
+                                                app.poller_running = true;
+                                                spawn_poller_task(controller.clone(), poll_tx.clone());
+                                            }
                                         }
                                         ensure_raw();
                                         let _ = terminal.clear();
@@ -782,36 +820,58 @@ pub async fn run_tui(
                     }
                 }
             } else {
-                // Only poll keyboard events when Claude is idle
-                match key_rx.recv().await {
-                    Some(key) => {
-                        match handle_key(&key, &mut app) {
-                            KeyAction::Submit(text) => {
-                                let was_active = app.session_active;
-                                let submit = process_submit(
-                                    &text, &mut app, &router, &controller,
-                                ).await?;
+                tokio::select! {
+                    key_opt = key_rx.recv() => {
+                        match key_opt {
+                            Some(key) => {
+                                match handle_key(&key, &mut app) {
+                                    KeyAction::Submit(text) => {
+                                        let was_active = app.session_active;
+                                        let submit = process_submit(
+                                            &text, &mut app, &router, &controller,
+                                        ).await?;
 
-                                if submit.poll_claude {
-                                    app.claude_busy = true;
-                                    // Spawn the poller background task now that
-                                    // we expect a Claude response.
-                                    spawn_poller_task(controller.clone(), poll_tx.clone());
+                                        if submit.poll_claude {
+                                            app.claude_busy = true;
+                                            if !app.poller_running {
+                                                app.poller_running = true;
+                                                spawn_poller_task(controller.clone(), poll_tx.clone());
+                                            }
+                                        }
+
+                                        // /quit when inactive exits
+                                        if text == "/quit" && !was_active {
+                                            return Ok(());
+                                        }
+
+                                        ensure_raw();
+                                        let _ = terminal.clear();
+                                    }
+                                    KeyAction::Quit => return Ok(()),
+                                    KeyAction::Continue => {}
                                 }
-
-                                // /quit when inactive exits
-                                if text == "/quit" && !was_active {
-                                    return Ok(());
-                                }
-
-                                ensure_raw();
-                                let _ = terminal.clear();
                             }
-                            KeyAction::Quit => return Ok(()),
-                            KeyAction::Continue => {}
+                            None => return Ok(()),
                         }
                     }
-                    None => return Ok(()),
+                    poll_opt = poll_rx.recv() => {
+                        match poll_opt {
+                            Some(event) => {
+                                let done = handle_poll_event(&event, &mut app);
+                                if done {
+                                    app.claude_busy = false;
+                                    app.needs_claude_response = false;
+                                    app.last_was_thinking = false;
+                                }
+                            }
+                            None => {
+                                app.claude_busy = false;
+                                app.needs_claude_response = false;
+                                app.last_was_thinking = false;
+                                app.poller_running = false;
+                            }
+                        }
+                    }
                 }
             }
 

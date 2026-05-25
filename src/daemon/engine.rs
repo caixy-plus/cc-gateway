@@ -5,9 +5,9 @@ use tokio::sync::Notify;
 use tracing::{error, info};
 
 use crate::config::model::GatewayConfig;
-use crate::platform::Platform;
 use crate::platform::feishu::FeishuPlatform;
 use crate::platform::telegram::TelegramPlatform;
+use crate::platform::Platform;
 
 pub struct DaemonEngine {
     config: GatewayConfig,
@@ -84,12 +84,18 @@ impl DaemonEngine {
                 shutdown_for_server.notify_one();
             }
         });
-        info!("HTTP server listening on http://127.0.0.1:{}", self.config.port);
+        info!(
+            "HTTP server listening on http://127.0.0.1:{}",
+            self.config.port
+        );
 
         if platforms.is_empty() {
             info!("No platform enabled. Daemon is idle.");
         } else {
-            info!("cc-gateway daemon is running ({} platform(s))", platforms.len());
+            info!(
+                "cc-gateway daemon is running ({} platform(s))",
+                platforms.len()
+            );
         }
 
         // Wait for shutdown signal (OS signal or HTTP server failure)
@@ -114,7 +120,8 @@ impl DaemonEngine {
 
     #[cfg(unix)]
     async fn wait_shutdown_signal(&self, shutdown_notify: Arc<Notify>) -> Result<()> {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
         tokio::select! {

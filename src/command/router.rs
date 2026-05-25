@@ -36,7 +36,7 @@ pub enum CommandAction {
     /// Disable showing thinking content
     HideThinking,
     /// Show recent Claude sessions and allow resuming
-    ShowClaudeHistory,
+    ShowClaudeHistory { arg: String },
     /// Forward regular text to the active Claude session
     ForwardToClaude(String),
     /// Unknown slash command when no session is active
@@ -57,6 +57,16 @@ impl CommandRouter {
             builtin: BuiltinCommands::new(controller.clone(), default_dir),
             controller,
             default_dir: default_dir.to_string(),
+        }
+    }
+
+    pub async fn current_work_dir(&self) -> String {
+        let ctrl = self.controller.lock().await;
+        let work_dir = ctrl.get_work_dir().await;
+        if work_dir.is_empty() {
+            shellexpand::tilde(&self.default_dir).to_string()
+        } else {
+            work_dir
         }
     }
 
@@ -87,7 +97,9 @@ impl CommandRouter {
                 "/quit" | "/close-session" => CommandAction::StopSession,
                 "/show-thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" => CommandAction::HideThinking,
-                "/claude-history" => CommandAction::ShowClaudeHistory,
+                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                    arg: arg.to_string(),
+                },
                 "/help" => CommandAction::Reply(self.builtin.help_text()),
                 "/cd" => {
                     if arg.is_empty() {
@@ -115,9 +127,9 @@ impl CommandRouter {
                         CommandAction::MakeDir(PathBuf::from(expanded))
                     }
                 }
-                "/claude" | "/new-session" => {
-                    CommandAction::Reply("A session is already active. Use /quit to stop it first.".to_string())
-                }
+                "/claude" | "/new-session" => CommandAction::Reply(
+                    "A session is already active. Use /quit to stop it first.".to_string(),
+                ),
                 _ => {
                     if trimmed.starts_with('/') {
                         CommandAction::UnknownCommand(cmd.to_string())
@@ -170,12 +182,14 @@ impl CommandRouter {
                 }
                 "/show-thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" => CommandAction::HideThinking,
-                "/claude-history" => CommandAction::ShowClaudeHistory,
+                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                    arg: arg.to_string(),
+                },
                 _ => {
                     if trimmed.starts_with('/') {
                         CommandAction::UnknownCommand(cmd.to_string())
                     } else {
-                        CommandAction::ForwardToClaude(trimmed.to_string())
+                        CommandAction::Reply(t_fmt!("forward.no_session", MSG = trimmed))
                     }
                 }
             }
@@ -199,28 +213,33 @@ impl CommandRouter {
             CommandAction::ChangeDir(path) => {
                 let ctrl = self.controller.lock().await;
                 let current_dir = ctrl.get_work_dir().await;
-                let base = if current_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    current_dir
-                };
                 drop(ctrl);
 
-                let target = PathBuf::from(&base).join(&path);
-                let canonical = target.canonicalize().unwrap_or(target);
-                if !canonical.is_dir() {
-                    return Some(t_fmt!("builtin.invalid_path", PATH = canonical.display()));
-                }
-                let path_str = canonical.to_string_lossy().to_string();
-                if let Err(e) = crate::claude::controller::ensure_under_home(&path_str) {
-                    return Some(e.to_string());
-                }
+                let path_str = match crate::command::workdir::resolve_work_dir_target(
+                    &current_dir,
+                    &self.default_dir,
+                    &path,
+                ) {
+                    Ok(path) => path,
+                    Err(e) => return Some(e.to_string()),
+                };
                 let ctrl = self.controller.lock().await;
                 ctrl.init_work_dir(path_str.clone()).await;
                 Some(t_fmt!("builtin.dir_changed", PATH = path_str))
             }
             CommandAction::ChangeDirDefault => {
-                let dir = shellexpand::tilde(&self.default_dir).to_string();
+                let current_dir = {
+                    let ctrl = self.controller.lock().await;
+                    ctrl.get_work_dir().await
+                };
+                let dir = match crate::command::workdir::resolve_work_dir_target(
+                    &current_dir,
+                    &self.default_dir,
+                    std::path::Path::new(&self.default_dir),
+                ) {
+                    Ok(path) => path,
+                    Err(e) => return Some(e.to_string()),
+                };
                 let ctrl = self.controller.lock().await;
                 ctrl.init_work_dir(dir.clone()).await;
                 Some(t_fmt!("builtin.dir_changed", PATH = dir))
@@ -238,22 +257,21 @@ impl CommandRouter {
             CommandAction::ListDir { path } => {
                 let ctrl = self.controller.lock().await;
                 let work_dir = ctrl.get_work_dir().await;
-                let dir = if work_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    work_dir
-                };
+                let dir = crate::command::workdir::effective_work_dir(&work_dir, &self.default_dir);
                 drop(ctrl);
 
-                let target = path.unwrap_or_else(|| PathBuf::from(&dir));
-                if let Err(e) = crate::claude::controller::ensure_under_home(
-                    &target.to_string_lossy(),
+                let requested = path.unwrap_or_else(|| PathBuf::from("."));
+                let target = match crate::command::workdir::resolve_work_dir_target(
+                    &dir,
+                    &self.default_dir,
+                    &requested,
                 ) {
-                    return Some(t_fmt!("builtin.access_denied", ERR = e));
-                }
+                    Ok(path) => path,
+                    Err(e) => return Some(e.to_string()),
+                };
 
                 let items = match crate::command::builtin::list_directory_items(
-                    &target.to_string_lossy(),
+                    &target,
                 ) {
                     Ok(items) => items,
                     Err(e) => return Some(t_fmt!("builtin.failed_list_dir", ERR = e)),
@@ -279,8 +297,15 @@ impl CommandRouter {
                 match selected {
                     crate::command::builtin::SelectAction::Selected(idx) => {
                         let name = &dirs[idx].0;
-                        let path = PathBuf::from(&dir).join(name);
-                        let path_str = path.to_string_lossy().to_string();
+                        let path = PathBuf::from(&target).join(name);
+                        let path_str = match crate::command::workdir::resolve_work_dir_target(
+                            &target,
+                            &self.default_dir,
+                            &path,
+                        ) {
+                            Ok(path) => path,
+                            Err(e) => return Some(e.to_string()),
+                        };
                         let ctrl = self.controller.lock().await;
                         ctrl.init_work_dir(path_str.clone()).await;
                         Some(t_fmt!("builtin.changed_dir", PATH = path_str))
@@ -335,9 +360,8 @@ impl CommandRouter {
                 ctrl.set_show_thinking(false);
                 Some(t!("builtin.thinking_disabled").to_string())
             }
-            CommandAction::ShowClaudeHistory => {
-                let arg = ""; // TODO: pass arg through CommandAction if needed
-                Some(self.builtin.claude_history(arg).await)
+            CommandAction::ShowClaudeHistory { arg } => {
+                Some(self.builtin.claude_history(&arg).await)
             }
             CommandAction::UnknownCommand(cmd) => {
                 Some(format!("Unknown command: {}. Available commands: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))

@@ -27,9 +27,7 @@ pub struct BuiltinCommands {
 
 impl BuiltinCommands {
     pub fn new(controller: Arc<Mutex<ClaudeController>>, _default_dir: &str) -> Self {
-        Self {
-            controller,
-        }
+        Self { controller }
     }
 
     pub fn help_text(&self) -> String {
@@ -49,8 +47,12 @@ impl BuiltinCommands {
             }
             let target_sid = sorted[idx - 1].session_id.clone();
             let ctrl = self.controller.lock().await;
-            ctrl.set_pending_resume_session_id(Some(target_sid.clone())).await;
-            return t_fmt!("builtin.resume_session_set", SID = &target_sid[..target_sid.len().min(8)]);
+            ctrl.set_pending_resume_session_id(Some(target_sid.clone()))
+                .await;
+            return t_fmt!(
+                "builtin.resume_session_set",
+                SID = &target_sid[..target_sid.len().min(8)]
+            );
         }
 
         let china_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
@@ -61,9 +63,14 @@ impl BuiltinCommands {
                 .enumerate()
                 .map(|(i, info)| {
                     let short_sid = &info.session_id[..info.session_id.len().min(8)];
-                    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(info.last_timestamp, 0)
-                        .map(|d| d.with_timezone(&china_tz).format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let dt =
+                        chrono::DateTime::<chrono::Utc>::from_timestamp(info.last_timestamp, 0)
+                            .map(|d| {
+                                d.with_timezone(&china_tz)
+                                    .format("%Y-%m-%d %H:%M")
+                                    .to_string()
+                            })
+                            .unwrap_or_else(|| "unknown".to_string());
                     let label = format!(
                         "{}. {}... (project: {}, {} messages, last: {})",
                         i + 1,
@@ -89,8 +96,12 @@ impl BuiltinCommands {
                 SelectAction::Selected(idx) => {
                     let target_sid = sorted[idx].session_id.clone();
                     let ctrl = self.controller.lock().await;
-                    ctrl.set_pending_resume_session_id(Some(target_sid.clone())).await;
-                    return t_fmt!("builtin.resume_session_set", SID = &target_sid[..target_sid.len().min(8)]);
+                    ctrl.set_pending_resume_session_id(Some(target_sid.clone()))
+                        .await;
+                    return t_fmt!(
+                        "builtin.resume_session_set",
+                        SID = &target_sid[..target_sid.len().min(8)]
+                    );
                 }
                 SelectAction::Deleted(idx) => {
                     if let Some(ref cc_id) = sorted[idx].cc_gateway_id {
@@ -114,7 +125,6 @@ impl BuiltinCommands {
             }
         }
     }
-
 }
 
 pub fn list_directory_items(dir: &str) -> Result<Vec<(String, bool)>, std::io::Error> {
@@ -128,12 +138,10 @@ pub fn list_directory_items(dir: &str) -> Result<Vec<(String, bool)>, std::io::E
         items.push((name, is_dir));
     }
     // Sort: directories first, then files
-    items.sort_by(|a, b| {
-        match (a.1, b.1) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.0.cmp(&b.0),
-        }
+    items.sort_by(|a, b| match (a.1, b.1) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.0.cmp(&b.0),
     });
     Ok(items)
 }
@@ -258,10 +266,14 @@ pub(crate) fn interactive_select_with_backend(
 
         match backend.read_key() {
             Some(crossterm::event::KeyCode::Up) => {
-                if selected > 0 { selected -= 1; }
+                if selected > 0 {
+                    selected -= 1;
+                }
             }
             Some(crossterm::event::KeyCode::Down) => {
-                if selected < items.len().saturating_sub(1) { selected += 1; }
+                if selected < items.len().saturating_sub(1) {
+                    selected += 1;
+                }
             }
             Some(crossterm::event::KeyCode::PageUp) => {
                 selected = selected.saturating_sub(lines.len());
@@ -275,8 +287,7 @@ pub(crate) fn interactive_select_with_backend(
             Some(crossterm::event::KeyCode::Char('x')) => {
                 return SelectAction::Deleted(selected);
             }
-            Some(crossterm::event::KeyCode::Char('q'))
-            | Some(crossterm::event::KeyCode::Esc) => {
+            Some(crossterm::event::KeyCode::Char('q')) | Some(crossterm::event::KeyCode::Esc) => {
                 return SelectAction::Cancelled;
             }
             _ => {}
@@ -308,10 +319,7 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
                 session_id: s.claude_session_id.unwrap_or_else(|| s.id.clone()),
                 cc_gateway_id: Some(s.id),
                 project: s.work_dir,
-                last_timestamp: s
-                    .updated_at
-                    .unwrap_or(s.created_at)
-                    .timestamp(),
+                last_timestamp: s.updated_at.unwrap_or(s.created_at).timestamp(),
                 message_count: 0,
             });
         }

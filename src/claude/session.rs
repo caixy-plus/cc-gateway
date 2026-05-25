@@ -79,7 +79,9 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     }
 
     // Try common fallback paths
-    let home = dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     let fallbacks = [
         format!("{}/.local/bin/{}", home, config_path),
         format!("/usr/local/bin/{}", config_path),
@@ -131,8 +133,8 @@ impl ClaudeSession {
 
         // Generate MCP config file if context is provided
         let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
-            let config_path = std::env::temp_dir()
-                .join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
+            let config_path =
+                std::env::temp_dir().join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
             let config_json = serde_json::json!({
                 "mcpServers": {
                     "cc-gateway": {
@@ -192,14 +194,8 @@ impl ClaudeSession {
 
         let pid = child.id();
 
-        let stdin = child
-            .stdin
-            .take()
-            .context("Failed to open stdin pipe")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("Failed to open stdout pipe")?;
+        let stdin = child.stdin.take().context("Failed to open stdin pipe")?;
+        let stdout = child.stdout.take().context("Failed to open stdout pipe")?;
         let stderr = child.stderr.take().context("Failed to open stderr pipe")?;
 
         // Spawn stderr reader
@@ -228,8 +224,11 @@ impl ClaudeSession {
     }
 
     async fn extract_session_id_with_retry(pid: u32) -> Option<String> {
-        let session_path = dirs::home_dir()
-            .map(|h| h.join(".claude").join("sessions").join(format!("{}.json", pid)))?;
+        let session_path = dirs::home_dir().map(|h| {
+            h.join(".claude")
+                .join("sessions")
+                .join(format!("{}.json", pid))
+        })?;
 
         // Initial delay before first attempt — Claude needs time to create the session file
         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
@@ -238,13 +237,21 @@ impl ClaudeSession {
             if session_path.exists() {
                 match tokio::fs::read_to_string(&session_path).await {
                     Ok(content) => {
-                        if let Ok(session_file) = serde_json::from_str::<ClaudeSessionFile>(&content) {
-                            info!("Extracted Claude session id: {} from pid {}", session_file.session_id, pid);
+                        if let Ok(session_file) =
+                            serde_json::from_str::<ClaudeSessionFile>(&content)
+                        {
+                            info!(
+                                "Extracted Claude session id: {} from pid {}",
+                                session_file.session_id, pid
+                            );
                             return Some(session_file.session_id);
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to read Claude session file {:?}: {}", session_path, e);
+                        warn!(
+                            "Failed to read Claude session file {:?}: {}",
+                            session_path, e
+                        );
                     }
                 }
             }
@@ -253,7 +260,10 @@ impl ClaudeSession {
             }
         }
 
-        warn!("Could not extract Claude session id for pid {} after retries", pid);
+        warn!(
+            "Could not extract Claude session id for pid {} after retries",
+            pid
+        );
         None
     }
 
@@ -268,11 +278,6 @@ impl ClaudeSession {
 
     pub async fn stop(mut self) -> Result<()> {
         let _ = self.child.kill().await;
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            self.child.wait(),
-        )
-        .await;
 
         // Clean up MCP config file
         if let Some(ref path) = self.mcp_config_path {
@@ -337,31 +342,5 @@ impl ClaudeSession {
                 debug!("Claude stderr: {}", line);
             }
         }
-    }
-}
-
-#[cfg(test)]
-impl ClaudeSession {
-    /// Create a dummy session for testing that keeps a sleep process alive.
-    pub async fn dummy_for_test() -> Result<Self> {
-        let mut child = Command::new("sleep")
-            .arg("3600")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to spawn dummy sleep process for test")?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .context("Failed to open stdin pipe for dummy session")?;
-
-        Ok(Self {
-            child,
-            stdin,
-            work_dir: ".".to_string(),
-            mcp_config_path: None,
-        })
     }
 }

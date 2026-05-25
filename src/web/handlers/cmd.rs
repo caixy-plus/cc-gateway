@@ -6,21 +6,21 @@ use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 #[derive(Deserialize)]
 pub struct CdRequest {
-    session_id: Option<String>,
-    path: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) path: String,
 }
 
 #[derive(Deserialize)]
 pub struct LlRequest {
     #[allow(dead_code)]
-    session_id: Option<String>,
-    path: Option<String>,
-    show_hidden: Option<bool>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) show_hidden: Option<bool>,
 }
 
 #[derive(Deserialize)]
 pub struct SessionCmdRequest {
-    session_id: Option<String>,
+    pub(crate) session_id: Option<String>,
 }
 
 fn webui_channel_id() -> Option<String> {
@@ -63,10 +63,28 @@ async fn set_session_work_dir(_session_id: Option<&str>, dir: String) {
     let _ = std::env::set_current_dir(&dir);
 }
 
+async fn resolve_requested_dir(
+    session_id: Option<&str>,
+    requested: &str,
+) -> anyhow::Result<String> {
+    let current_dir = get_work_dir_async(session_id).await;
+    crate::command::workdir::resolve_work_dir_target(
+        &current_dir,
+        "~",
+        std::path::Path::new(requested),
+    )
+}
+
 pub async fn handle_ll(Json(req): Json<LlRequest>) -> (StatusCode, String) {
-    let path = req.path.unwrap_or_else(|| "~".to_string());
+    let path = req.path.unwrap_or_else(|| ".".to_string());
     let show_hidden = req.show_hidden.unwrap_or(false);
-    let expanded = shellexpand::tilde(&path).to_string();
+    let expanded = match resolve_requested_dir(req.session_id.as_deref(), &path).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let body = json!({ "error": e.to_string() });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
     match std::fs::read_dir(&expanded) {
         Ok(entries) => {
             let mut items: Vec<String> = entries
@@ -104,13 +122,13 @@ pub async fn handle_pwd(Json(req): Json<SessionCmdRequest>) -> (StatusCode, Stri
 }
 
 pub async fn handle_cd(Json(req): Json<CdRequest>) -> (StatusCode, String) {
-    let path = shellexpand::tilde(&req.path).to_string();
-    let target = std::path::Path::new(&path).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(&path));
-    if !target.is_dir() {
-        let body = json!({ "error": format!("Not a directory: {}", path) });
-        return (StatusCode::BAD_REQUEST, body.to_string());
-    }
-    let target_str = target.to_string_lossy().to_string();
+    let target_str = match resolve_requested_dir(req.session_id.as_deref(), &req.path).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let body = json!({ "error": e.to_string() });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
     set_session_work_dir(req.session_id.as_deref(), target_str.clone()).await;
     let body = json!({ "dir": target_str });
     (StatusCode::OK, body.to_string())

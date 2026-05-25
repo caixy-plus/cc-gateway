@@ -1,5 +1,5 @@
-pub mod engine;
 pub mod cleaner;
+pub mod engine;
 pub mod server;
 pub mod state;
 
@@ -43,10 +43,7 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
     {
         if file.try_lock_exclusive().is_err() {
             if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-                println!(
-                    "{}",
-                    t_fmt!("daemon.already_running", PID = pid_str.trim())
-                );
+                println!("{}", t_fmt!("daemon.already_running", PID = pid_str.trim()));
             } else {
                 println!("Daemon is already running.");
             }
@@ -91,7 +88,9 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
             // process.  Fall back to checking whether the singleton port is
             // already bound (run() binds it before writing the PID file).
             let port = if let Some(ref path) = config_path {
-                ConfigLoader::load_from(path).map(|c| c.port).unwrap_or(17534)
+                ConfigLoader::load_from(path)
+                    .map(|c| c.port)
+                    .unwrap_or(17534)
             } else {
                 ConfigLoader::load().map(|c| c.port).unwrap_or(17534)
             };
@@ -141,9 +140,14 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
 
     // --- Singleton guard 1: bind to a fixed local port (will be used as HTTP server) ---
     let bind_addr = format!("127.0.0.1:{}", config.port);
-    let std_listener = std::net::TcpListener::bind(&bind_addr)
-        .with_context(|| format!("Another cc-gateway daemon is already running (port {} in use)", config.port))?;
-    std_listener.set_nonblocking(true)
+    let std_listener = std::net::TcpListener::bind(&bind_addr).with_context(|| {
+        format!(
+            "Another cc-gateway daemon is already running (port {} in use)",
+            config.port
+        )
+    })?;
+    std_listener
+        .set_nonblocking(true)
         .context("Failed to set listener to non-blocking")?;
     let tokio_listener = tokio::net::TcpListener::from_std(std_listener)
         .context("Failed to convert std listener to tokio listener")?;
@@ -246,9 +250,9 @@ pub async fn stop() -> Result<()> {
                 .and_then(|output| {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     stdout.lines().next().and_then(|line| {
-                        line.split(',').nth(1).and_then(|s| {
-                            s.trim_matches('"').parse::<u32>().ok()
-                        })
+                        line.split(',')
+                            .nth(1)
+                            .and_then(|s| s.trim_matches('"').parse::<u32>().ok())
                     })
                 });
         }
@@ -276,9 +280,10 @@ pub async fn stop() -> Result<()> {
             .context("Failed to send SIGTERM to daemon")?;
         println!("{}", t_fmt!("daemon.stop_signal", PID = pid));
 
-        // Wait up to 5 seconds for graceful exit
+        // Give platform shutdown enough time to notify active bot chats and
+        // stop Claude child processes before falling back to SIGKILL.
         let mut died = false;
-        for _ in 0..10 {
+        for _ in 0..30 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             if !is_process_alive(pid) {
                 died = true;
@@ -351,9 +356,9 @@ pub async fn status() -> Result<()> {
                 .and_then(|output| {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     stdout.lines().next().and_then(|line| {
-                        line.split(',').nth(1).and_then(|s| {
-                            s.trim_matches('"').parse::<u32>().ok()
-                        })
+                        line.split(',')
+                            .nth(1)
+                            .and_then(|s| s.trim_matches('"').parse::<u32>().ok())
                     })
                 });
         }
@@ -377,8 +382,7 @@ pub async fn restart(config_path: Option<PathBuf>) -> Result<()> {
 }
 
 pub async fn enable() -> Result<()> {
-    let exe = std::env::current_exe()
-        .context("Failed to determine cc-gateway executable path")?;
+    let exe = std::env::current_exe().context("Failed to determine cc-gateway executable path")?;
     let exe_str = exe.to_string_lossy();
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let config_dir_str = config_dir.to_string_lossy();
@@ -424,7 +428,10 @@ pub async fn enable() -> Result<()> {
             anyhow::bail!("{}", t!("daemon.launchctl_load_failed"));
         }
         println!("{}", t!("daemon.auto_start_enabled_macos"));
-        println!("{}", t_fmt!("daemon.plist_path", PATH = plist_path.display()));
+        println!(
+            "{}",
+            t_fmt!("daemon.plist_path", PATH = plist_path.display())
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -463,7 +470,10 @@ WantedBy=default.target
             anyhow::bail!("{}", t!("daemon.systemctl_enable_failed"));
         }
         println!("{}", t!("daemon.auto_start_enabled_linux"));
-        println!("{}", t_fmt!("daemon.service_path", PATH = service_path.display()));
+        println!(
+            "{}",
+            t_fmt!("daemon.service_path", PATH = service_path.display())
+        );
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]

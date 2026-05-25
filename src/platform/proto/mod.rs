@@ -249,6 +249,26 @@ pub(crate) fn decode_tag(buf: &[u8]) -> Option<(u32, u32, usize)> {
     Some((field_number, wire_type, consumed))
 }
 
+/// Encode a Frame into a byte vector for WebSocket transmission.
+pub(crate) fn encode_frame(frame: &Frame) -> Vec<u8> {
+    let mut buf = Vec::new();
+    frame.encode(&mut buf);
+    buf
+}
+
+/// Try to decode a Frame from the beginning of a BytesMut buffer.
+/// On success, advances the buffer past the decoded frame.
+pub(crate) fn decode_frame(buf: &mut bytes::BytesMut) -> Option<Frame> {
+    if buf.is_empty() {
+        return None;
+    }
+    let frame = Frame::decode(&buf[..])?;
+    // pbbp2 sends one frame per WebSocket binary message.
+    let len = buf.len();
+    buf.advance(len);
+    Some(frame)
+}
+
 pub(crate) fn decode_header(buf: &[u8]) -> Option<Header> {
     if buf.len() < 2 {
         return None;

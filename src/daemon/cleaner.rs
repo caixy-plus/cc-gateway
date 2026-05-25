@@ -1,9 +1,9 @@
+use anyhow::Result;
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
-use anyhow::Result;
 use tracing::{error, info, warn};
 
 /// Trim log file to retain at most `max_lines` lines.
@@ -109,7 +109,10 @@ pub fn clean_old_media_files(retention_days: u64) -> Result<usize> {
     }
 
     if removed > 0 {
-        info!("Cleaned {} media files older than {} days", removed, retention_days);
+        info!(
+            "Cleaned {} media files older than {} days",
+            removed, retention_days
+        );
     }
 
     Ok(removed)
@@ -197,8 +200,7 @@ pub fn clean_tui_sessions() -> usize {
         }
 
         // TUI is not running — clean up this channel's sessions
-        let claude_sessions =
-            crate::db::load_claude_sessions_by_channel_id(&channel.id);
+        let claude_sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
 
         // Delete history files and claude_sessions first (FK constraint)
         for cs in &claude_sessions {
@@ -233,8 +235,7 @@ pub fn clean_excess_sessions() -> usize {
             continue;
         }
 
-        let mut sessions =
-            crate::db::load_claude_sessions_by_channel_id(&channel.id);
+        let mut sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
         if sessions.len() <= MAX_PER_CHANNEL {
             continue;
         }
@@ -272,12 +273,19 @@ pub fn start_background_task(
     max_size_mb: usize,
     media_retention_days: u64,
 ) {
-    let max_lines = if max_lines == 0 { usize::MAX } else { max_lines };
-    let max_size_mb = if max_size_mb == 0 { usize::MAX } else { max_size_mb };
+    let max_lines = if max_lines == 0 {
+        usize::MAX
+    } else {
+        max_lines
+    };
+    let max_size_mb = if max_size_mb == 0 {
+        usize::MAX
+    } else {
+        max_size_mb
+    };
 
     tokio::spawn(async move {
-        let mut ticker =
-            tokio::time::interval(tokio::time::Duration::from_secs(8 * 60 * 60));
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(8 * 60 * 60));
         ticker.tick().await; // skip the immediate tick
 
         loop {
@@ -296,7 +304,11 @@ pub fn start_background_task(
 
             // Clean old media files
             if media_retention_days > 0 {
-                match tokio::task::spawn_blocking(move || clean_old_media_files(media_retention_days)).await {
+                match tokio::task::spawn_blocking(move || {
+                    clean_old_media_files(media_retention_days)
+                })
+                .await
+                {
                     Ok(Ok(n)) => {
                         if n > 0 {
                             info!("Background media cleanup removed {} files", n);

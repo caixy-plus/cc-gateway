@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
 use crate::claude::mcp_server::McpContext;
-use crate::claude::protocol::{build_permission_allow, build_user_message, InputMessage, OutputEvent};
+use crate::claude::protocol::{
+    build_permission_allow, build_user_message, InputMessage, OutputEvent,
+};
 use crate::claude::session::ClaudeSession;
 use crate::config::model::ClaudeConfig;
 use crate::{t, t_fmt};
@@ -67,21 +69,18 @@ pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
 
 #[cfg(windows)]
 fn get_system_drive() -> Option<String> {
-    std::env::var("SystemRoot")
-        .ok()
-        .and_then(|root| {
-            let lower = root.to_lowercase();
-            // Extract drive letter like "c:" from "C:\Windows"
-            lower.get(..2).map(|s| s.to_string())
-        })
+    std::env::var("SystemRoot").ok().and_then(|root| {
+        let lower = root.to_lowercase();
+        // Extract drive letter like "c:" from "C:\Windows"
+        lower.get(..2).map(|s| s.to_string())
+    })
 }
 
 #[cfg(windows)]
 fn is_on_drive(path: &std::path::Path, drive: &str) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
     let drive_lower = drive.to_lowercase();
-    path_str.starts_with(&drive_lower)
-        || path_str.starts_with(&format!(r"\\?\{}", drive_lower))
+    path_str.starts_with(&drive_lower) || path_str.starts_with(&format!(r"\\?\{}", drive_lower))
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +117,7 @@ pub struct QuestionItem {
     pub question: String,
     pub header: String,
     pub options: Vec<QuestionOption>,
+    #[allow(dead_code)]
     pub multi_select: bool,
 }
 
@@ -189,13 +189,23 @@ impl ClaudeController {
             ctx.clone()
         };
         let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
-        let (mut session, claude_session_id) = ClaudeSession::spawn(validated.clone(), extra_args, &self.config, claude_tx, resume_id, mcp_ctx).await?;
+        let (mut session, claude_session_id) = ClaudeSession::spawn(
+            validated.clone(),
+            extra_args,
+            &self.config,
+            claude_tx,
+            resume_id,
+            mcp_ctx,
+        )
+        .await?;
 
         // Brief delay to let the child stabilize; if it exits immediately (e.g. invalid --resume)
         // we fail fast instead of pretending the session is active.
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         if !session.is_alive() {
-            return Err(anyhow::anyhow!("Claude process exited immediately after spawn; check stderr logs for details"));
+            return Err(anyhow::anyhow!(
+                "Claude process exited immediately after spawn; check stderr logs for details"
+            ));
         }
 
         {
@@ -251,7 +261,10 @@ impl ClaudeController {
             // Auto-cleanup: stdout closed means the child process exited
             {
                 let mut state = session_state.write().await;
-                info!("SessionState: {:?} -> Inactive (event processor ended)", *state);
+                info!(
+                    "SessionState: {:?} -> Inactive (event processor ended)",
+                    *state
+                );
                 *state = SessionState::Inactive;
             }
             {
@@ -361,35 +374,16 @@ impl ClaudeController {
     pub async fn is_session_active(&self) -> bool {
         let state = self.session_state.read().await;
         let active = *state != SessionState::Inactive;
-        info!("is_session_active called, state={:?}, result={}", *state, active);
+        info!(
+            "is_session_active called, state={:?}, result={}",
+            *state, active
+        );
         active
-    }
-
-    #[cfg(test)]
-    pub async fn inject_dummy_session(&self) -> Result<()> {
-        let session = crate::claude::session::ClaudeSession::dummy_for_test().await?;
-        let mut s = self.session.write().await;
-        *s = Some(session);
-        let mut state = self.session_state.write().await;
-        *state = SessionState::Active;
-        Ok(())
     }
 
     pub async fn get_work_dir(&self) -> String {
         let wd = self.work_dir.read().await;
         wd.clone()
-    }
-
-    #[allow(dead_code)]
-    pub async fn set_work_dir(&self, dir: String) -> Result<()> {
-        let validated = ensure_under_home(&dir)?;
-        {
-            let mut wd = self.work_dir.write().await;
-            *wd = validated.clone();
-        }
-        // Restart session with new work dir
-        self.start_session(validated, vec![]).await?;
-        Ok(())
     }
 
     /// Clone the internal event receiver Arc so consumers can poll events
@@ -405,11 +399,6 @@ impl ClaudeController {
     pub async fn get_claude_session_id(&self) -> Option<String> {
         let sid = self.claude_session_id.read().await;
         sid.clone()
-    }
-
-    pub async fn set_claude_session_id(&self, id: Option<String>) {
-        let mut sid = self.claude_session_id.write().await;
-        *sid = id;
     }
 
     pub async fn set_pending_resume_session_id(&self, id: Option<String>) {
@@ -452,7 +441,8 @@ impl ClaudeController {
                         }
                         crate::claude::protocol::ContentBlock::ToolUse { name, input } => {
                             let input_str = serde_json::to_string(input).unwrap_or_default();
-                            let _ = event_tx.send(ControllerEvent::ToolUse(name.clone(), input_str));
+                            let _ =
+                                event_tx.send(ControllerEvent::ToolUse(name.clone(), input_str));
                         }
                         crate::claude::protocol::ContentBlock::ToolResult { content, is_error } => {
                             let text = content.clone().unwrap_or_default();
@@ -461,14 +451,19 @@ impl ClaudeController {
                         crate::claude::protocol::ContentBlock::Image { source } => {
                             let text = format!(
                                 "[Image: {} {} ({} bytes)]",
-                                source.source_type, source.media_type, source.data.len()
+                                source.source_type,
+                                source.media_type,
+                                source.data.len()
                             );
                             let _ = event_tx.send(ControllerEvent::Text(text));
                         }
                     }
                 }
             }
-            OutputEvent::Result { result: _result, usage } => {
+            OutputEvent::Result {
+                result: _result,
+                usage,
+            } => {
                 // The result text is the complete assembled response, but we already
                 // streamed it via Assistant::Text blocks. Emitting it again here would
                 // duplicate the content in the accumulator, causing Feishu users to
@@ -488,19 +483,24 @@ impl ClaudeController {
 
                     let dispatched = if tool_name == "AskUserQuestion" {
                         if let Some(ref val) = input {
-                            if let Some(questions) = val.get("questions").and_then(|q| q.as_array()) {
+                            if let Some(questions) = val.get("questions").and_then(|q| q.as_array())
+                            {
                                 let parsed: Vec<QuestionItem> = questions
                                     .iter()
                                     .filter_map(|q| {
                                         let question = q.get("question")?.as_str()?.to_string();
                                         let header = q.get("header")?.as_str()?.to_string();
-                                        let multi_select = q.get("multi_select").and_then(|m| m.as_bool()).unwrap_or(false);
+                                        let multi_select = q
+                                            .get("multi_select")
+                                            .and_then(|m| m.as_bool())
+                                            .unwrap_or(false);
                                         let options = q.get("options")?.as_array()?;
                                         let parsed_options: Vec<QuestionOption> = options
                                             .iter()
                                             .filter_map(|o| {
                                                 let label = o.get("label")?.as_str()?.to_string();
-                                                let description = o.get("description")?.as_str()?.to_string();
+                                                let description =
+                                                    o.get("description")?.as_str()?.to_string();
                                                 Some(QuestionOption { label, description })
                                             })
                                             .collect();
@@ -528,11 +528,19 @@ impl ClaudeController {
                         }
                     } else if subtype == "confirm" {
                         if let Some(ref val) = input {
-                            let prompt = val.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let prompt = val
+                                .get("prompt")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let options: Vec<String> = val
                                 .get("options")
                                 .and_then(|o| o.as_array())
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             Some(ControllerEvent::ConfirmRequest {
                                 request_id: req_id.clone(),
@@ -544,11 +552,19 @@ impl ClaudeController {
                         }
                     } else if subtype == "select_option" {
                         if let Some(ref val) = input {
-                            let prompt = val.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let prompt = val
+                                .get("prompt")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let options: Vec<String> = val
                                 .get("options")
                                 .and_then(|o| o.as_array())
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             Some(ControllerEvent::SelectRequest {
                                 request_id: req_id.clone(),

@@ -18,20 +18,25 @@ use crate::session::channel_manager::{ActiveClaudeRuntime, GLOBAL_CHANNEL_SESSIO
 /// Per-channel runtime for Telegram.
 /// Each chat gets its own ChannelSession; active ClaudeSession is optional.
 #[derive(Clone)]
-struct TelegramChannelRuntime {
-    channel_session: crate::session::channel_model::ChannelSession,
-    active_claude: Option<ActiveClaudeRuntime>,
+pub(crate) struct TelegramChannelRuntime {
+    pub(crate) channel_session: crate::session::channel_model::ChannelSession,
+    pub(crate) active_claude: Option<ActiveClaudeRuntime>,
     /// Ensures only one poll loop runs per chat at a time.
     poll_lock: Arc<Mutex<()>>,
 }
 
 impl TelegramChannelRuntime {
-    fn new(channel_session: crate::session::channel_model::ChannelSession) -> Self {
+    pub(crate) fn new(channel_session: crate::session::channel_model::ChannelSession) -> Self {
         Self {
             channel_session,
             active_claude: None,
             poll_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    pub(crate) fn shutdown_notice_chat_id(&self) -> Option<i64> {
+        self.active_claude.as_ref()?;
+        self.channel_session.channel_id.parse::<i64>().ok()
     }
 }
 
@@ -64,7 +69,11 @@ impl<'a> EventPollSink for TelegramEventSink<'a> {
         tool_name: &str,
         _input: Option<&serde_json::Value>,
     ) -> Result<()> {
-        let card = format!("Permission request: `{}`\nID: `{}`", tool_name, request_id);
+        let card = crate::t_fmt!(
+            "telegram.permission_request",
+            NAME = tool_name,
+            ID = request_id
+        );
         self.platform.send_message(self.chat_id, &card).await?;
         crate::web::state::broadcast_event(
             &self.chat_id_str,
@@ -104,7 +113,6 @@ impl<'a> EventPollSink for TelegramEventSink<'a> {
         // Telegram does not support interactive questions yet; just acknowledge.
         Ok(())
     }
-
 }
 
 #[derive(Clone)]
@@ -136,8 +144,11 @@ impl TelegramPlatform {
         }
     }
 
-    fn api_url(&self, method: &str) -> String {
-        format!("https://api.telegram.org/bot{}/{}", self.config.bot_token, method)
+    pub(crate) fn api_url(&self, method: &str) -> String {
+        format!(
+            "https://api.telegram.org/bot{}/{}",
+            self.config.bot_token, method
+        )
     }
 
     async fn get_updates(&self) -> Result<Vec<Update>> {
@@ -150,13 +161,15 @@ impl TelegramPlatform {
         let body: Value = resp.json().await?;
 
         if !body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-            let desc = body.get("description").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let desc = body
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             anyhow::bail!("Telegram API error: {}", desc);
         }
 
-        let updates: Vec<Update> = serde_json::from_value(
-            body.get("result").cloned().unwrap_or(json!([]))
-        )?;
+        let updates: Vec<Update> =
+            serde_json::from_value(body.get("result").cloned().unwrap_or(json!([])))?;
         Ok(updates)
     }
 
@@ -167,11 +180,7 @@ impl TelegramPlatform {
             "text": text,
         });
 
-        let resp = self.http_client
-            .post(&url)
-            .json(&payload)
-            .send()
-            .await?;
+        let resp = self.http_client.post(&url).json(&payload).send().await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await?;
@@ -188,10 +197,17 @@ impl TelegramPlatform {
 
         let chat_id = msg.chat.id;
         let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
-        let username = msg.from.as_ref().and_then(|u| u.username.clone()).unwrap_or_default();
+        let username = msg
+            .from
+            .as_ref()
+            .and_then(|u| u.username.clone())
+            .unwrap_or_default();
 
         if !self.is_allowed_sender(user_id, &username) {
-            debug!("Telegram message from unauthorized user: {} (@{})", user_id, username);
+            debug!(
+                "Telegram message from unauthorized user: {} (@{})",
+                user_id, username
+            );
             return Ok(());
         }
 
@@ -202,7 +218,8 @@ impl TelegramPlatform {
 
         // Only allow private chats. Group chats are not supported.
         if msg.chat.chat_type != "private" {
-            self.send_message(chat_id, "Please use in private chat.").await?;
+            self.send_message(chat_id, crate::t!("telegram.private_chat_only"))
+                .await?;
             return Ok(());
         }
 
@@ -229,94 +246,116 @@ impl TelegramPlatform {
                 self.send_message(chat_id, &text).await?;
             }
             CommandAction::UnknownCommand(_) => {
-                let text = "Unknown command. Available: /help, /cd, /claude, /ll, /list-sessions, /switch-session, /quit, /pwd".to_string();
+                let text = crate::t!("feishu.unknown_command").to_string();
                 self.send_message(chat_id, &text).await?;
             }
             CommandAction::NoOp => {}
             CommandAction::StopSession => {
+                if let Some(ref active) = runtime.active_claude {
+                    let ctrl = active.controller.lock().await;
+                    let _ = ctrl.stop_session().await;
+                }
                 let _ = GLOBAL_CHANNEL_SESSIONS
                     .stop_channel_session(&runtime.channel_session.id)
                     .await;
                 if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
                     rt.active_claude = None;
                 }
-                self.send_message(chat_id, "Session stopped.").await?;
+                self.send_message(chat_id, crate::t!("builtin.session_stopped"))
+                    .await?;
             }
             CommandAction::ShowThinking => {
                 if let Some(ref active) = runtime.active_claude {
                     let ctrl = active.controller.lock().await;
                     ctrl.set_show_thinking(true);
                 }
-                self.send_message(chat_id, "Thinking enabled").await?;
+                self.send_message(chat_id, crate::t!("builtin.thinking_enabled"))
+                    .await?;
             }
             CommandAction::HideThinking => {
                 if let Some(ref active) = runtime.active_claude {
                     let ctrl = active.controller.lock().await;
                     ctrl.set_show_thinking(false);
                 }
-                self.send_message(chat_id, "Thinking disabled").await?;
+                self.send_message(chat_id, crate::t!("builtin.thinking_disabled"))
+                    .await?;
             }
             CommandAction::ChangeDir(path) => {
-                let base = if runtime.channel_session.work_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    runtime.channel_session.work_dir.clone()
+                let path_str = match crate::command::workdir::resolve_work_dir_target(
+                    &runtime.channel_session.work_dir,
+                    &self.default_dir,
+                    &path,
+                ) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        self.send_message(chat_id, &e.to_string()).await?;
+                        return Ok(());
+                    }
                 };
-                let target = PathBuf::from(&base).join(&path);
-                let canonical = target.canonicalize().unwrap_or(target);
-                if !canonical.is_dir() {
-                    self.send_message(chat_id, &format!("Invalid path: {}", canonical.display()))
-                        .await?;
-                    return Ok(());
-                }
-                let path_str = canonical.to_string_lossy().to_string();
-                if let Err(e) = crate::claude::controller::ensure_under_home(&path_str) {
-                    self.send_message(chat_id, &e.to_string()).await?;
-                    return Ok(());
-                }
                 GLOBAL_CHANNEL_SESSIONS
-                    .switch_work_dir(&runtime.channel_session.id, canonical)
+                    .switch_work_dir(&runtime.channel_session.id, PathBuf::from(&path_str))
                     .await?;
                 if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
                     rt.channel_session.work_dir = path_str.clone();
                 }
-                self.send_message(chat_id, &format!("Working directory changed to: {}", path_str))
-                    .await?;
+                self.send_message(
+                    chat_id,
+                    &crate::t_fmt!("builtin.dir_changed", PATH = path_str),
+                )
+                .await?;
             }
             CommandAction::ChangeDirDefault => {
-                let dir = shellexpand::tilde(&self.default_dir).to_string();
+                let dir = match crate::command::workdir::resolve_work_dir_target(
+                    &runtime.channel_session.work_dir,
+                    &self.default_dir,
+                    std::path::Path::new(&self.default_dir),
+                ) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        self.send_message(chat_id, &e.to_string()).await?;
+                        return Ok(());
+                    }
+                };
                 GLOBAL_CHANNEL_SESSIONS
                     .switch_work_dir(&runtime.channel_session.id, PathBuf::from(&dir))
                     .await?;
                 if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
                     rt.channel_session.work_dir = dir.clone();
                 }
-                self.send_message(chat_id, &format!("Working directory changed to: {}", dir))
+                self.send_message(chat_id, &crate::t_fmt!("builtin.dir_changed", PATH = dir))
                     .await?;
             }
             CommandAction::PrintWorkingDir => {
-                let dir = if runtime.channel_session.work_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    runtime.channel_session.work_dir.clone()
-                };
-                self.send_message(chat_id, &format!("Current directory: {}", dir))
+                let dir = crate::command::workdir::effective_work_dir(
+                    &runtime.channel_session.work_dir,
+                    &self.default_dir,
+                );
+                self.send_message(chat_id, &crate::t_fmt!("builtin.current_dir", DIR = dir))
                     .await?;
             }
             CommandAction::ListDir { path } => {
-                let dir = if runtime.channel_session.work_dir.is_empty() {
-                    shellexpand::tilde(&self.default_dir).to_string()
-                } else {
-                    runtime.channel_session.work_dir.clone()
+                let requested = path.unwrap_or_else(|| PathBuf::from("."));
+                let dir = match crate::command::workdir::resolve_work_dir_target(
+                    &runtime.channel_session.work_dir,
+                    &self.default_dir,
+                    &requested,
+                ) {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        self.send_message(chat_id, &e.to_string()).await?;
+                        return Ok(());
+                    }
                 };
-                let target = path.unwrap_or_else(|| PathBuf::from(&dir));
-                match crate::command::builtin::list_directory_paths(&target.to_string_lossy()) {
+                match crate::command::builtin::list_directory_paths(&dir) {
                     Ok(dirs) => {
                         if dirs.is_empty() {
-                            self.send_message(chat_id, "No subdirectories found.").await?;
+                            self.send_message(chat_id, crate::t!("builtin.no_subdirs"))
+                                .await?;
                         } else {
-                            let lines: Vec<String> =
-                                dirs.iter().map(|(name, _)| format!("  {}/", name)).collect();
+                            let lines: Vec<String> = dirs
+                                .iter()
+                                .map(|(name, _)| format!("  {}/", name))
+                                .collect();
                             self.send_message(
                                 chat_id,
                                 &format!("Directories in {}:\n{}", dir, lines.join("\n")),
@@ -325,8 +364,11 @@ impl TelegramPlatform {
                         }
                     }
                     Err(e) => {
-                        self.send_message(chat_id, &format!("Failed to list directory: {}", e))
-                            .await?;
+                        self.send_message(
+                            chat_id,
+                            &crate::t_fmt!("builtin.failed_list_dir", ERR = e),
+                        )
+                        .await?;
                     }
                 }
             }
@@ -346,14 +388,14 @@ impl TelegramPlatform {
                     Ok(()) => {
                         self.send_message(
                             chat_id,
-                            &format!("Directory created: {}", target_str),
+                            &crate::t_fmt!("builtin.dir_created", PATH = target_str),
                         )
                         .await?;
                     }
                     Err(e) => {
                         self.send_message(
                             chat_id,
-                            &format!("Failed to create directory: {}", e),
+                            &crate::t_fmt!("builtin.failed_create_dir", ERR = e),
                         )
                         .await?;
                     }
@@ -372,36 +414,30 @@ impl TelegramPlatform {
                     });
 
                 match GLOBAL_CHANNEL_SESSIONS
-                    .create_and_start_claude_session(
+                    .start_claude_session_for_platform(
                         &runtime.channel_session.id,
                         &format!("Telegram {}", chat_id),
+                        &self.default_dir,
                         self.claude_config.clone(),
                         self.show_thinking,
                         args,
                         None,
+                        Some(effective_dir.clone()),
                         None,
                     )
                     .await
                 {
-                    Ok((claude_session, controller)) => {
-                        // Sync work_dir if different
-                        if effective_dir != claude_session.work_dir {
-                            let ctrl = controller.lock().await;
-                            ctrl.init_work_dir(effective_dir.clone()).await;
-                        }
-                        let router =
-                            Arc::new(CommandRouter::new(controller.clone(), &self.default_dir));
-                        let active = ActiveClaudeRuntime {
-                            claude_session: claude_session.clone(),
-                            controller: controller.clone(),
-                            router,
-                        };
+                    Ok(active) => {
                         if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
                             rt.active_claude = Some(active.clone());
                         }
+                        let work_dir = {
+                            let ctrl = active.controller.lock().await;
+                            ctrl.get_work_dir().await
+                        };
                         self.send_message(
                             chat_id,
-                            &format!("Session started in {}", claude_session.work_dir),
+                            &crate::t_fmt!("telegram.session_started", DIR = work_dir),
                         )
                         .await?;
 
@@ -412,21 +448,38 @@ impl TelegramPlatform {
                             chat_id_str: chat_id_str.clone(),
                         };
                         let poller = {
-                            let ctrl = controller.lock().await;
+                            let ctrl = active.controller.lock().await;
                             ClaudeEventPoller::from_controller(&*ctrl)
                         };
                         poller.run(&mut sink).await?;
                     }
                     Err(e) => {
-                        self.send_message(chat_id, &format!("Failed to start session: {}", e))
-                            .await?;
+                        self.send_message(
+                            chat_id,
+                            &crate::t_fmt!("builtin.failed_start_claude", ERR = e),
+                        )
+                        .await?;
                     }
                 }
             }
-            CommandAction::ShowClaudeHistory => {
-                // Not implemented for Telegram
-                self.send_message(chat_id, "Claude history is not available in Telegram.")
-                    .await?;
+            CommandAction::ShowClaudeHistory { .. } => {
+                let sessions = GLOBAL_CHANNEL_SESSIONS
+                    .list_claude_sessions_by_channel(&runtime.channel_session.id, Some(10));
+                let text = if sessions.is_empty() {
+                    crate::t!("feishu.no_sessions").to_string()
+                } else {
+                    let mut lines = vec![crate::t!("feishu.session_history_title").to_string()];
+                    for (i, s) in sessions.iter().enumerate() {
+                        let status = if s.active {
+                            crate::t!("feishu.status_active")
+                        } else {
+                            crate::t!("feishu.status_inactive")
+                        };
+                        lines.push(format!("{}. {} ({})", i + 1, s.title, status));
+                    }
+                    lines.join("\n")
+                };
+                self.send_message(chat_id, &text).await?;
             }
             CommandAction::ForwardToClaude(text) => {
                 if let Some(ref active) = runtime.active_claude {
@@ -446,11 +499,8 @@ impl TelegramPlatform {
                     };
                     poller.run(&mut sink).await?;
                 } else {
-                    self.send_message(
-                        chat_id,
-                        "No active Claude session. Use /claude to start one.",
-                    )
-                    .await?;
+                    self.send_message(chat_id, crate::t!("controller.no_active_session"))
+                        .await?;
                 }
             }
         }
@@ -458,31 +508,26 @@ impl TelegramPlatform {
         Ok(())
     }
 
-    async fn get_channel(&self, chat_id: &str) -> TelegramChannelRuntime {
+    pub(crate) async fn get_channel(&self, chat_id: &str) -> TelegramChannelRuntime {
         if let Some(runtime) = self.channels.get(chat_id) {
             return runtime.clone();
         }
-        let channel = GLOBAL_CHANNEL_SESSIONS.get_or_create_platform_channel(
-            "telegram",
-            chat_id,
-            &self.default_dir,
-        ).await;
+        let channel = GLOBAL_CHANNEL_SESSIONS
+            .get_or_create_platform_channel("telegram", chat_id, &self.default_dir)
+            .await;
         let runtime = TelegramChannelRuntime::new(channel);
         self.channels.insert(chat_id.to_string(), runtime.clone());
         runtime
     }
 
-    fn is_allowed_sender(&self, user_id: i64, username: &str) -> bool {
+    pub(crate) fn is_allowed_sender(&self, user_id: i64, username: &str) -> bool {
         if self.config.allow_from == "*" {
             return true;
         }
-        self.config
-            .allow_from
-            .split(',')
-            .any(|s| {
-                let s = s.trim();
-                s == user_id.to_string() || s == username
-            })
+        self.config.allow_from.split(',').any(|s| {
+            let s = s.trim();
+            s == user_id.to_string() || s == username
+        })
     }
 
     pub async fn shutdown_all_sessions(&self) {
@@ -491,16 +536,15 @@ impl TelegramPlatform {
             let runtime = entry.value().clone();
             drop(entry);
 
-            if let Ok(chat_id_i64) = chat_id.parse::<i64>() {
-                let _ = self.send_message(chat_id_i64, "机器人正在关闭，会话已退出").await;
+            if let Some(chat_id_i64) = runtime.shutdown_notice_chat_id() {
+                let _ = self
+                    .send_message(chat_id_i64, crate::t!("telegram.shutdown_notice"))
+                    .await;
             }
 
             if let Some(ref active) = runtime.active_claude {
                 let ctrl = active.controller.lock().await;
-                match tokio::time::timeout(
-                    Duration::from_millis(500),
-                    ctrl.stop_session(),
-                ).await {
+                match tokio::time::timeout(Duration::from_millis(500), ctrl.stop_session()).await {
                     Ok(Ok(())) => info!("[Telegram] Session {} stopped gracefully", chat_id),
                     Ok(Err(e)) => warn!("[Telegram] Session {} stop error: {}", chat_id, e),
                     Err(_) => warn!("[Telegram] Session {} stop timed out, killing", chat_id),
@@ -551,7 +595,6 @@ impl Platform for TelegramPlatform {
         self.shutdown_all_sessions().await;
     }
 }
-
 // ---------------------------------------------------------------------------
 // Telegram API types
 // ---------------------------------------------------------------------------

@@ -1,0 +1,132 @@
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use crate::config::model::{ClaudeConfig, FeishuConfig};
+use crate::platform::feishu::FeishuPlatform;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+
+static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub(crate) struct TestEnv {
+    _lock: MutexGuard<'static, ()>,
+    previous_home: Option<String>,
+    root: tempfile::TempDir,
+}
+
+impl TestEnv {
+    pub(crate) fn new() -> Self {
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap())
+            .expect("test temp dir should be created in workspace");
+        let previous_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", root.path());
+        std::fs::create_dir_all(root.path().join(".cc-gateway")).unwrap();
+        GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+        Self {
+            _lock: lock,
+            previous_home,
+            root,
+        }
+    }
+
+    pub(crate) fn home(&self) -> &Path {
+        self.root.path()
+    }
+
+    pub(crate) fn fake_claude_config(&self) -> ClaudeConfig {
+        ClaudeConfig {
+            cli_path: create_fake_claude(self.home())
+                .to_string_lossy()
+                .to_string(),
+            default_args: String::new(),
+        }
+    }
+}
+
+impl Drop for TestEnv {
+    fn drop(&mut self) {
+        GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+        if let Some(home) = self.previous_home.as_deref() {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+}
+
+pub(crate) fn create_fake_claude(home: &Path) -> PathBuf {
+    let script = home.join("fake-claude.sh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+session_id="fake-session"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--resume" ]; then
+    shift
+    session_id="$1"
+  fi
+  shift || true
+done
+mkdir -p "$HOME/.claude/sessions"
+printf '{"sessionId":"%s"}\n' "$session_id" > "$HOME/.claude/sessions/$$.json"
+while IFS= read -r line; do
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fake reply"}]}}\n'
+  printf '{"type":"result","result":"fake reply","usage":{"input_tokens":1,"output_tokens":2}}\n'
+done
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+    }
+    script
+}
+
+pub(crate) fn feishu_platform(default_dir: &str) -> FeishuPlatform {
+    FeishuPlatform::new(
+        FeishuConfig {
+            enabled: true,
+            app_id: "app-id".to_string(),
+            app_secret: "app-secret".to_string(),
+            allow_from: "*".to_string(),
+            encrypt_key: String::new(),
+            mode: "websocket".to_string(),
+            webhook_bind: "127.0.0.1:0".to_string(),
+        },
+        default_dir,
+        ClaudeConfig::default(),
+        false,
+    )
+}
+
+pub(crate) fn feishu_text_event(
+    message_id: &str,
+    chat_id: &str,
+    chat_type: &str,
+    sender_open_id: &str,
+    text: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "header": {
+            "event_type": "im.message.receive_v1"
+        },
+        "event": {
+            "sender": {
+                "sender_id": {
+                    "open_id": sender_open_id
+                }
+            },
+            "message": {
+                "message_id": message_id,
+                "message_type": "text",
+                "chat_id": chat_id,
+                "chat_type": chat_type,
+                "content": serde_json::json!({"text": text}).to_string()
+            }
+        }
+    })
+}

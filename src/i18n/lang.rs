@@ -9,31 +9,80 @@ impl Language {
         if let Ok(lang) = std::env::var("CC_GATEWAY_LANG") {
             return Self::from_str(&lang);
         }
-        if let Ok(lang) = std::env::var("LANG") {
-            return Self::from_str(&lang);
-        }
         if let Ok(lang) = std::env::var("LC_ALL") {
-            return Self::from_str(&lang);
+            if let Some(lang) = Self::from_locale(&lang) {
+                return lang;
+            }
+        }
+        if let Ok(lang) = std::env::var("LANG") {
+            if let Some(lang) = Self::from_locale(&lang) {
+                return lang;
+            }
         }
         if let Some(lang) = detect_system_locale() {
-            return Self::from_str(&lang);
+            if let Some(lang) = Self::from_locale(&lang) {
+                return lang;
+            }
         }
         Self::En
     }
 
     pub(crate) fn from_str(s: &str) -> Self {
+        Self::from_locale(s).unwrap_or(Self::En)
+    }
+
+    fn from_locale(s: &str) -> Option<Self> {
         let s = s.to_lowercase();
         if s.starts_with("zh") {
-            Self::ZhCN
+            Some(Self::ZhCN)
+        } else if s.starts_with("en") {
+            Some(Self::En)
         } else {
-            Self::En
+            None
         }
     }
 }
 
 #[cfg(unix)]
 fn detect_system_locale() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLocale"])
+            .output()
+        {
+            if output.status.success() {
+                let locale = String::from_utf8_lossy(&output.stdout);
+                let locale = locale.trim();
+                if !locale.is_empty() {
+                    return Some(locale.to_string());
+                }
+            }
+        }
+        if let Ok(output) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLanguages"])
+            .output()
+        {
+            if output.status.success() {
+                let languages = String::from_utf8_lossy(&output.stdout);
+                if let Some(locale) = first_apple_language(&languages) {
+                    return Some(locale);
+                }
+            }
+        }
+    }
     None
+}
+
+pub(crate) fn first_apple_language(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let lang = line.trim().trim_end_matches(',').trim_matches('"').trim();
+        if lang.is_empty() || lang == "(" || lang == ")" {
+            None
+        } else {
+            Some(lang.to_string())
+        }
+    })
 }
 
 #[cfg(windows)]

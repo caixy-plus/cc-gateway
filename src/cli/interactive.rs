@@ -24,9 +24,13 @@ pub async fn run_interactive() -> Result<()> {
     let config = ConfigLoader::load()?;
     let default_dir = config.default_dir.clone();
 
+    crate::db::init_schema()?;
+    GLOBAL_CHANNEL_SESSIONS.load_from_db();
+
     // Get or create the implicit TUI channel
     let channel = GLOBAL_CHANNEL_SESSIONS
-        .get_or_create_platform_channel("tui", "tui", &default_dir).await;
+        .get_or_create_platform_channel("tui", "tui", &default_dir)
+        .await;
     let channel_id = channel.id.clone();
 
     // Create a controller without auto-starting a Claude session.

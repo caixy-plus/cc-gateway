@@ -26,13 +26,9 @@ pub enum InteractionType {
         selected: Vec<String>,
     },
     /// Free-text input question.
-    TextInput {
-        prompt: String,
-    },
+    TextInput { prompt: String },
     /// Yes/No confirmation.
-    Confirm {
-        prompt: String,
-    },
+    Confirm { prompt: String },
     /// Structured multi-question form (AskUserQuestion).
     Question {
         questions: Vec<QuestionDef>,

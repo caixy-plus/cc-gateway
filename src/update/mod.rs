@@ -81,7 +81,11 @@ pub fn detect_platform() -> String {
     } else {
         "unknown"
     };
-    let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     format!("{}-{}{}", os, arch, ext)
 }
 
@@ -108,7 +112,10 @@ pub async fn fetch_latest_release(client: &reqwest::Client, repo: &str) -> Resul
         anyhow::bail!("GitHub API returned status: {}", resp.status());
     }
 
-    let json = resp.text().await.context("failed to read GitHub response")?;
+    let json = resp
+        .text()
+        .await
+        .context("failed to read GitHub response")?;
     parse_release_json(&json)
 }
 

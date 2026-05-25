@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod cli;
 mod claude;
+mod cli;
 mod command;
 mod config;
 mod daemon;
@@ -16,6 +16,9 @@ mod session;
 mod update;
 mod utils;
 mod web;
+
+#[cfg(test)]
+mod tests;
 
 use cli::interactive::run_interactive;
 
@@ -143,6 +146,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

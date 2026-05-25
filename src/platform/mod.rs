@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 pub mod feishu;
-pub mod telegram;
 pub mod proto;
+pub mod telegram;
 
 /// Platform abstraction for chat bot integrations (Feishu, Telegram, Discord, etc.).
 /// Each platform manages its own connection lifecycle and message handling,
@@ -24,7 +24,10 @@ pub trait Platform: Send + Sync {
 ///
 /// The `sender` is a synchronous callback that should internally spawn any
 /// async work (e.g. `tokio::spawn`) so that the listener loop never blocks.
-pub fn spawn_deliver_listener<F>(platform_name: &'static str, sender: F) -> tokio::task::JoinHandle<()>
+pub fn spawn_deliver_listener<F>(
+    platform_name: &'static str,
+    sender: F,
+) -> tokio::task::JoinHandle<()>
 where
     F: Fn(String, String) + Send + Sync + 'static,
 {
@@ -40,7 +43,9 @@ where
                             crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
                                 .list_channels()
                                 .into_iter()
-                                .find(|c| c.platform == platform_name && c.channel_id == req.session_id)
+                                .find(|c| {
+                                    c.platform == platform_name && c.channel_id == req.session_id
+                                })
                         });
                     if let Some(channel) = channel {
                         let text = if let Some(ref msg) = req.message {

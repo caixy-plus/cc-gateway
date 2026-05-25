@@ -6,14 +6,10 @@ use serde_json::Value;
 #[serde(tag = "type")]
 pub enum InputMessage {
     #[serde(rename = "user")]
-    User {
-        message: UserMessage,
-    },
+    User { message: UserMessage },
     #[serde(rename = "control_response")]
     #[allow(dead_code)]
-    ControlResponse {
-        response: ControlResponseBody,
-    },
+    ControlResponse { response: ControlResponseBody },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,9 +45,7 @@ pub enum OutputEvent {
         session_id: Option<String>,
     },
     #[serde(rename = "assistant")]
-    Assistant {
-        message: AssistantMessage,
-    },
+    Assistant { message: AssistantMessage },
     #[serde(rename = "user")]
     User {
         #[allow(dead_code)]
@@ -69,9 +63,7 @@ pub enum OutputEvent {
         request: ControlRequestBody,
     },
     #[serde(rename = "error")]
-    Error {
-        error: String,
-    },
+    Error { error: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,10 +89,7 @@ pub enum ContentBlock {
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
     #[serde(rename = "tool_use")]
-    ToolUse {
-        name: String,
-        input: Value,
-    },
+    ToolUse { name: String, input: Value },
     #[serde(rename = "tool_result")]
     ToolResult {
         content: Option<String>,
@@ -108,9 +97,7 @@ pub enum ContentBlock {
         is_error: bool,
     },
     #[serde(rename = "image")]
-    Image {
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -258,4 +245,3 @@ pub fn build_permission_deny(request_id: &str, message: &str) -> InputMessage {
         },
     }
 }
-
