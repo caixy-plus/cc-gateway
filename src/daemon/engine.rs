@@ -140,14 +140,37 @@ impl DaemonEngine {
 
     #[cfg(windows)]
     async fn wait_shutdown_signal(&self, shutdown_notify: Arc<Notify>) -> Result<()> {
-        let mut ctrl_c = tokio::signal::windows::ctrl_c()?;
-        let mut ctrl_break = tokio::signal::windows::ctrl_break()?;
+        // On Windows, when the daemon is spawned with DETACHED_PROCESS, there is
+        // no console and SetConsoleCtrlHandler fails.  Fall back to listening
+        // only for the internal shutdown signal (triggered by HTTP server failure
+        // or the shutdown API).
+        let ctrl_c = tokio::signal::windows::ctrl_c().ok();
+        let ctrl_break = tokio::signal::windows::ctrl_break().ok();
+
+        if ctrl_c.is_none() && ctrl_break.is_none() {
+            info!("No console attached – shutdown only via stop command or HTTP API");
+            shutdown_notify.notified().await;
+            info!("Internal shutdown triggered, shutting down...");
+            return Ok(());
+        }
 
         tokio::select! {
-            _ = ctrl_c.recv() => {
+            _ = async {
+                if let Some(mut c) = ctrl_c {
+                    let _ = c.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
                 info!("Received Ctrl+C, shutting down...");
             }
-            _ = ctrl_break.recv() => {
+            _ = async {
+                if let Some(mut b) = ctrl_break {
+                    let _ = b.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
                 info!("Received Ctrl+Break, shutting down...");
             }
             _ = shutdown_notify.notified() => {
