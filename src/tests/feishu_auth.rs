@@ -5,8 +5,8 @@
 // (get_tenant_access_token, refresh_token) are skipped here; they exist
 // in src/tests/platform_feishu.rs with #[ignore] attributes.
 
-use crate::platform::feishu::auth_middleware::{TokenManager, FeishuAuthMiddleware};
 use crate::config::model::FeishuConfig;
+use crate::platform::feishu::auth_middleware::{FeishuAuthMiddleware, TokenManager};
 
 fn make_token_manager() -> TokenManager {
     let config = FeishuConfig {
@@ -129,7 +129,10 @@ fn test_is_auth_error_partial_code_match_no_false_positive() {
 
     // "A99991663" has the code as substring but not as a standalone token
     let err = anyhow::anyhow!("code A99991663");
-    assert!(TokenManager::is_auth_error(&err), "A99991663 contains 99991663");
+    assert!(
+        TokenManager::is_auth_error(&err),
+        "A99991663 contains 99991663"
+    );
 
     // "8888888" is completely unrelated
     let err = anyhow::anyhow!("error code 8888888");

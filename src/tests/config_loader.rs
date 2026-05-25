@@ -16,7 +16,9 @@ fn with_fake_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
     let result = f(&fake_home);
     match original {
         Some(v) => env::set_var("HOME", v),
-        None => { let _ = env::remove_var("HOME"); }
+        None => {
+            let _ = env::remove_var("HOME");
+        }
     }
     let _ = fs::remove_dir_all(&fake_home);
     result
@@ -80,7 +82,8 @@ fn test_load_from_env_var_substitution() {
     env::set_var("CCG_TEST_KEY", "my-secret-key");
     env::set_var("CCG_TEST_DIR", "/substituted/dir");
 
-    let tmp_path = std::env::temp_dir().join(format!("cc-gateway-cfg-env-{}.json", std::process::id()));
+    let tmp_path =
+        std::env::temp_dir().join(format!("cc-gateway-cfg-env-{}.json", std::process::id()));
     let json = r#"{
         "log": {
             "level": "info",

@@ -20,17 +20,7 @@ Workflow: edit frontend → `npm run build` in `cc-gateway-webui` → copy `dist
 Platform-specific scripts that build from source (including the frontend) and install locally:
 
 - **macOS / Linux**: `./install_local.sh`
-  - Builds frontend (`npm ci && npm run build` in `../cc-gateway-webui`)
-  - `cargo build --release`
-  - Copies binary to `~/.local/bin/cc-gateway`
-  - macOS: re-signs with `codesign -s - -f`
-  - Restarts the daemon (`cc-gateway restart`)
 - **Windows**: `powershell -ExecutionPolicy Bypass -File .\install_local.ps1`
-  - Builds frontend (`npm ci && npm run build` in `..\cc-gateway-webui`)
-  - `cargo build --release`
-  - Installs to `$env:LOCALAPPDATA\cc-gateway\cc-gateway.exe`
-  - Adds install dir to user PATH
-  - Starts the daemon (`cc-gateway start`)
 
 Production install scripts (download pre-built binaries from GitHub Releases):
 - **macOS / Linux**: `./install.sh`
@@ -82,15 +72,21 @@ cargo run -- start        # Start daemon (spawns background process)
 - **`platform/telegram/mod.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Each chat gets its own `TgChatSession` (isolated Claude subprocess). Routes messages through `CommandRouter` and streams Claude responses back via `sendMessage`.
 - **`platform/proto/mod.rs`**: Protobuf frame codec for Feishu pbbp2 (METHOD_CONTROL / METHOD_DATA, SERVICE_IM / SERVICE_CARD).
 
+### Platform Reference Docs
+
+- **Feishu / Lark Open Platform**: https://open.feishu.cn/document/home/index
+  - Card JSON v2.0 breaking changes: https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes
+  - Button component (V2): https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button
+  - WebSocket real-time messaging (pbbp2): https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes (search "pbbp2")
+- **Telegram Bot API**: https://core.telegram.org/bots/api
+  - `getUpdates` long-polling reference: https://core.telegram.org/bots/api#getupdates
+  - `sendMessage` reference: https://core.telegram.org/bots/api#sendmessage
+
 ### Configuration (`src/config/`)
 
 - **`config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.
 - **`config/model.rs`**: `GatewayConfig` with `log`, `claude`, `feishu`, `telegram` sections, plus top-level fields: `platform`, `port`, `default_dir`, `show_thinking`, `media_retention_days`.
 - **`config/wizard.rs`**: Interactive config editor invoked by `cc-gateway config`. Prompts for log, claude, and platform settings.
-
-### Skills (`src/skill/`)
-
-- **`skill/mod.rs`**: Scans `~/.cc-gateway/skills/` and `.claude/skills/` for `.md` files with optional YAML frontmatter. Loaded skills can be injected as the system prompt via `/skill <name>`.
 
 ### Web Server (`src/web/`)
 
@@ -146,3 +142,18 @@ This pattern lets unit tests verify layout math, scroll behavior, selection stat
 - **Event channels**: `ClaudeController` uses an `mpsc::unbounded_channel` to decouple the stdout reader from the consumer (CLI or platform). Consumers poll `recv_event()`.
 - **Detached daemon**: The daemon is a separate OS process. `start()` spawns `cc-gateway _daemon` with stdin/stdout/stderr nulled and a new process group (Unix).
 - **Config dir**: `~/.cc-gateway/` holds `config.json`, `daemon.pid`, `logs/`, and `skills/`.
+
+## Internationalization (i18n)
+
+All user-facing strings must go through the translation macros in `src/i18n/dict.rs`:
+
+- **Static text**: `crate::t!("module.key")` returns `&str`
+- **Formatted text**: `crate::t_fmt!("module.key", NAME = value, ID = id)` returns `String`
+
+### Rules
+1. Never hard-code Chinese or English user-visible messages — always add a translation key.
+2. Key naming: `{module}.{descriptor}` (e.g. `feishu.permission_title`, `builtin.session_started`, `telegram.shutdown_notice`).
+3. Platform-specific keys use the platform prefix (`feishu.`, `telegram.`, `webui.`, `tui.`).
+4. Shared / builtin keys use the `builtin.` prefix (`builtin.help`, `builtin.session_stopped`, `builtin.dir_changed`).
+5. When adding a new key, provide both English and Chinese (`Language::En` / `Language::ZhCN`) entries in `dict.rs`.
+6. Internal debug / tracing messages do not need translation.

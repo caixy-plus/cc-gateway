@@ -20,20 +20,50 @@ pub fn create_app(config: &GatewayConfig) -> Router {
         .route("/api/cmd/ll", post(handlers::cmd::handle_ll))
         .route("/api/cmd/pwd", post(handlers::cmd::handle_pwd))
         .route("/api/cmd/cd", post(handlers::cmd::handle_cd))
-        .route("/api/cmd/cd_default", post(handlers::cmd::handle_cd_default))
+        .route(
+            "/api/cmd/cd_default",
+            post(handlers::cmd::handle_cd_default),
+        )
         .route("/api/cmd/help", post(handlers::cmd::handle_help))
-        .route("/api/cmd/show-thinking-toggle", post(handlers::cmd::handle_show_thinking_toggle))
         .route("/api/deliver", post(handlers::deliver::handle_deliver))
-        .route("/api/sessions", get(handlers::session::handle_list_sessions))
-        .route("/api/sessions", post(handlers::session::handle_create_session))
-        .route("/api/sessions/{id}/messages", post(handlers::session::handle_send_message))
-        .route("/api/sessions/{id}", post(handlers::session::handle_stop_session))
-        .route("/api/sessions/{id}", delete(handlers::session::handle_delete_session))
-        .route("/api/sessions/{id}/history", get(handlers::session::handle_get_history))
-        .route("/api/sessions/{id}/events", get(handlers::session::handle_events))
+        .route(
+            "/api/sessions",
+            get(handlers::session::handle_list_sessions),
+        )
+        .route(
+            "/api/sessions",
+            post(handlers::session::handle_create_session),
+        )
+        .route(
+            "/api/sessions/{id}/start",
+            post(handlers::session::handle_start_session),
+        )
+        .route(
+            "/api/sessions/{id}/messages",
+            post(handlers::session::handle_send_message),
+        )
+        .route(
+            "/api/sessions/{id}",
+            post(handlers::session::handle_stop_session),
+        )
+        .route(
+            "/api/sessions/{id}",
+            delete(handlers::session::handle_delete_session),
+        )
+        .route(
+            "/api/sessions/{id}/history",
+            get(handlers::session::handle_get_history),
+        )
+        .route(
+            "/api/sessions/{id}/events",
+            get(handlers::session::handle_events),
+        )
         .route("/api/config", get(handlers::config::handle_get_config))
         .route("/api/config", post(handlers::config::handle_save_config))
-        .route("/api/platforms", get(handlers::config::handle_get_platforms))
+        .route(
+            "/api/platforms",
+            get(handlers::config::handle_get_platforms),
+        )
         .route("/api/version", get(handlers::system::handle_version))
         .route("/api/restart", post(handlers::system::handle_restart))
         // WebUI static files

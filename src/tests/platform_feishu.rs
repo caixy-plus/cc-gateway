@@ -1,5 +1,5 @@
-use crate::platform::feishu::FeishuPlatform;
 use crate::config::model::{FeishuConfig, GatewayConfig};
+use crate::platform::feishu::FeishuPlatform;
 use serde_json::json;
 
 fn test_platform() -> FeishuPlatform {
@@ -14,7 +14,12 @@ fn test_platform() -> FeishuPlatform {
     };
     let gateway_config = GatewayConfig::default();
     let default_dir = &gateway_config.default_dir;
-    FeishuPlatform::new(config, default_dir, gateway_config.claude.clone(), gateway_config.show_thinking)
+    FeishuPlatform::new(
+        config,
+        default_dir,
+        gateway_config.claude.clone(),
+        gateway_config.show_thinking,
+    )
 }
 
 #[tokio::test]
@@ -68,7 +73,9 @@ async fn test_list_chats_and_send_message() {
 
     // If there are chats, try sending a message to the first one
     if let Some(chat) = chats.first() {
-        let result = platform.send_text_message("chat_id", &chat.chat_id, "Hello from cc-gateway test!").await;
+        let result = platform
+            .send_text_message("chat_id", &chat.chat_id, "Hello from cc-gateway test!")
+            .await;
         assert!(result.is_ok(), "Failed to send message: {:?}", result.err());
         println!("Sent message to chat: {} ({})", chat.name, chat.chat_id);
     }

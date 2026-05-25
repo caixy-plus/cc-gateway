@@ -110,7 +110,9 @@ async fn test_list_sessions_includes_created() {
 
     assert_eq!(body["_status"], 200);
     let sessions = body["sessions"].as_array().expect("sessions array");
-    let found = sessions.iter().any(|s| s["id"] == session_id && s["title"] == "List Test");
+    let found = sessions
+        .iter()
+        .any(|s| s["id"] == session_id && s["title"] == "List Test");
     assert!(found, "created session should appear in list");
 
     cleanup_webui().await;

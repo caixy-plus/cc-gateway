@@ -1,6 +1,4 @@
-use crate::update::{
-    build_download_url, detect_platform, parse_release_json, Version,
-};
+use crate::update::{build_download_url, detect_platform, parse_release_json, Version};
 
 #[test]
 fn test_version_parse_basic() {
@@ -40,11 +38,18 @@ fn test_parse_release_json() {
         "tag_name": "v1.1.0",
         "body": "## What is new\n- feature A\n- bugfix B",
         "html_url": "https://github.com/caixy-plus/cc-gateway/releases/tag/v1.1.0"
-    }).to_string();
+    })
+    .to_string();
     let release = parse_release_json(&json).unwrap();
     assert_eq!(release.tag_name, "v1.1.0");
-    assert_eq!(release.body.as_deref().unwrap(), "## What is new\n- feature A\n- bugfix B");
-    assert_eq!(release.html_url.as_deref(), Some("https://github.com/caixy-plus/cc-gateway/releases/tag/v1.1.0"));
+    assert_eq!(
+        release.body.as_deref().unwrap(),
+        "## What is new\n- feature A\n- bugfix B"
+    );
+    assert_eq!(
+        release.html_url.as_deref(),
+        Some("https://github.com/caixy-plus/cc-gateway/releases/tag/v1.1.0")
+    );
 }
 
 #[test]

@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod cli;
 mod claude;
+mod cli;
 mod command;
 mod config;
 mod daemon;
@@ -16,6 +16,9 @@ mod session;
 mod update;
 mod utils;
 mod web;
+
+#[cfg(test)]
+mod tests;
 
 use cli::interactive::run_interactive;
 
@@ -83,6 +86,9 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Internal: run MCP server for Claude Code (do not use directly)
+    #[command(hide = true, name = "_mcp-server")]
+    McpServer,
 }
 
 #[tokio::main]
@@ -132,6 +138,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Update { check, force }) => {
             update::run(check, force).await?;
+        }
+        Some(Commands::McpServer) => {
+            claude::mcp_server::run_mcp_server().await?;
         }
     }
 

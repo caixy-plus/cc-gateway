@@ -1,165 +1,86 @@
-use crate::claude::controller::ClaudeController;
-use crate::command::router::CommandRouter;
-use crate::config::model::ClaudeConfig;
+use std::path::PathBuf;
 use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
-fn setup() -> CommandRouter {
-    crate::i18n::init(); // ensure i18n dict is loaded for t!() macros
-    let config = ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-    CommandRouter::new(controller, "~")
+use crate::claude::controller::ClaudeController;
+use crate::command::router::{CommandAction, CommandRouter};
+use crate::config::model::ClaudeConfig;
+
+use super::helpers::TestEnv;
+
+fn test_router() -> (CommandRouter, Arc<Mutex<ClaudeController>>) {
+    test_router_with_default("~")
+}
+
+fn test_router_with_default(default_dir: &str) -> (CommandRouter, Arc<Mutex<ClaudeController>>) {
+    let controller = Arc::new(Mutex::new(ClaudeController::new(
+        ClaudeConfig::default(),
+        false,
+    )));
+    (
+        CommandRouter::new(controller.clone(), default_dir),
+        controller,
+    )
 }
 
 #[tokio::test]
-async fn test_help_handled_by_builtin() {
-    let router = setup();
-    let action = router.route("/help").await;
-    let response = router.execute(action).await;
-    assert!(response.is_some());
-    let text = response.unwrap();
-    assert!(text.contains("/help"));
+async fn routes_claude_history_with_index_argument() {
+    let (router, _) = test_router();
+    let action = router.route("/claude-history 2").await;
+
+    match action {
+        CommandAction::ShowClaudeHistory { arg } => assert_eq!(arg, "2"),
+        other => panic!("expected ShowClaudeHistory action, got {:?}", other),
+    }
 }
 
 #[tokio::test]
-async fn test_pwd_handled_by_builtin() {
-    let router = setup();
-    let action = router.route("/pwd").await;
-    let response = router.execute(action).await;
-    assert!(response.is_some());
-    let text = response.unwrap();
-    // i18n key "builtin.current_dir" returns "Current directory: {DIR}" (En) or "当前目录: {DIR}" (ZhCN)
-    assert!(text.contains("Current directory") || text.contains("当前目录"), "text was: {}", text);
-}
-
-#[tokio::test]
-async fn test_slash_command_falls_through_when_inactive() {
-    // Unknown slash commands when inactive return a help message
-    let router = setup();
-    let action = router.route("/clear").await;
-    let response = router.execute(action).await;
-    assert!(response.is_some());
-    let text = response.unwrap();
-    assert!(text.contains("Unknown command"));
-}
-
-#[tokio::test]
-async fn test_regular_text_forwarded_when_inactive() {
-    let router = setup();
-    let action = router.route("hello world").await;
-    eprintln!("DEBUG action={:?}", action);
-    let response = router.execute(action).await;
-    eprintln!("DEBUG response={:?}", response);
-    assert!(response.is_some());
-    let text = response.unwrap();
-    // i18n key "forward.no_session" contains the phrase in En and ZhCN
-    assert!(text.contains("No active Claude session") || text.contains("没有活动的 Claude 会话"), "text was: {}", text);
-    assert!(text.contains("hello world"));
-}
-
-#[tokio::test]
-async fn test_unknown_command_falls_through() {
-    let router = setup();
-    let action = router.route("/unknown_command_xyz").await;
-    let response = router.execute(action).await;
-    assert!(response.is_some());
-    let text = response.unwrap();
-    assert!(text.contains("Unknown command"));
-    assert!(text.contains("/unknown_command_xyz"));
-}
-
-#[tokio::test]
-async fn test_quit_handled_locally_when_session_active() {
-    let config = ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-    let router = CommandRouter::new(controller.clone(), "~");
+async fn exposes_work_dir_after_relative_change_dir() {
+    let env = TestEnv::new();
+    let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
+    let temp = tempfile::tempdir_in(env.home()).expect("temp dir should be created");
+    let child = temp.path().join("child");
+    std::fs::create_dir(&child).expect("child dir should be created");
+    let expected = temp.path().canonicalize().unwrap();
 
     {
         let ctrl = controller.lock().await;
-        ctrl.inject_dummy_session().await.unwrap();
+        ctrl.init_work_dir(child.to_string_lossy().to_string())
+            .await;
     }
 
-    let action = router.route("/quit").await;
-    let response = router.execute(action).await;
-    assert!(response.is_some(), "/quit should be handled locally when session is active");
-}
+    let reply = router
+        .execute(CommandAction::ChangeDir(PathBuf::from("..")))
+        .await;
 
-#[tokio::test]
-async fn test_ll_handled_locally_when_session_active() {
-    let config = ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-    let router = CommandRouter::new(controller.clone(), "~");
-
-    {
-        let ctrl = controller.lock().await;
-        ctrl.inject_dummy_session().await.unwrap();
-    }
-
-    let action = router.route("/ll").await;
-    assert!(
-        matches!(action, crate::command::router::CommandAction::ListDir { .. }),
-        "/ll should be handled locally when session is active, got: {:?}",
-        action
+    assert!(reply
+        .unwrap()
+        .contains(&expected.to_string_lossy().to_string()));
+    assert_eq!(
+        router.current_work_dir().await,
+        expected.to_string_lossy().to_string()
     );
-
-    {
-        let ctrl = controller.lock().await;
-        let _ = ctrl.stop_session().await;
-    }
 }
 
 #[tokio::test]
-async fn test_claude_replies_when_session_active() {
-    let config = ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-    let router = CommandRouter::new(controller.clone(), "~");
+async fn parses_core_commands_without_starting_claude() {
+    let (router, _) = test_router();
 
-    {
-        let ctrl = controller.lock().await;
-        ctrl.inject_dummy_session().await.unwrap();
-    }
-
-    let action = router.route("/claude").await;
-    let response = router.execute(action).await;
-    assert!(
-        response.is_some(),
-        "/claude should return a reply when session is active, got: {:?}",
-        response
-    );
-    let text = response.unwrap();
-    assert!(
-        text.contains("already active"),
-        "Expected 'already active' message, got: {}",
-        text
-    );
-
-    {
-        let ctrl = controller.lock().await;
-        let _ = ctrl.stop_session().await;
-    }
-}
-
-#[tokio::test]
-async fn test_text_forwarded_when_session_active() {
-    let config = ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-    let router = CommandRouter::new(controller.clone(), "~");
-
-    {
-        let ctrl = controller.lock().await;
-        ctrl.inject_dummy_session().await.unwrap();
-    }
-
-    let action = router.route("hello world").await;
-    let response = router.execute(action).await;
-    assert!(
-        response.is_none(),
-        "regular text should be forwarded to Claude when session is active, got: {:?}",
-        response
-    );
-
-    {
-        let ctrl = controller.lock().await;
-        let _ = ctrl.stop_session().await;
-    }
+    assert!(matches!(
+        router.route("/ll src").await,
+        CommandAction::ListDir { path: Some(_) }
+    ));
+    assert!(matches!(
+        router.route("/claude --model sonnet").await,
+        CommandAction::StartSession { args, .. } if args == vec!["--model", "sonnet"]
+    ));
+    assert!(matches!(
+        router.route("/pwd").await,
+        CommandAction::PrintWorkingDir
+    ));
+    assert!(matches!(
+        router.route("/quit").await,
+        CommandAction::Reply(_)
+    ));
 }

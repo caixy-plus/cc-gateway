@@ -1,6 +1,5 @@
 use crate::claude::protocol::{
-    build_permission_allow, build_permission_deny, build_user_message, ContentBlock,
-    OutputEvent,
+    build_permission_allow, build_permission_deny, build_user_message, ContentBlock, OutputEvent,
 };
 use serde_json::json;
 
@@ -37,8 +36,12 @@ fn test_extract_text_from_assistant() {
         message: crate::claude::protocol::AssistantMessage {
             role: "assistant".to_string(),
             content: vec![
-                ContentBlock::Text { text: "Hello ".to_string() },
-                ContentBlock::Text { text: "world".to_string() },
+                ContentBlock::Text {
+                    text: "Hello ".to_string(),
+                },
+                ContentBlock::Text {
+                    text: "world".to_string(),
+                },
             ],
         },
     };
@@ -68,8 +71,12 @@ fn test_extract_thinking() {
         message: crate::claude::protocol::AssistantMessage {
             role: "assistant".to_string(),
             content: vec![
-                ContentBlock::Thinking { thinking: "think1".to_string() },
-                ContentBlock::Thinking { thinking: "think2".to_string() },
+                ContentBlock::Thinking {
+                    thinking: "think1".to_string(),
+                },
+                ContentBlock::Thinking {
+                    thinking: "think2".to_string(),
+                },
             ],
         },
     };
@@ -81,9 +88,10 @@ fn test_extract_tool_use() {
     let event = OutputEvent::Assistant {
         message: crate::claude::protocol::AssistantMessage {
             role: "assistant".to_string(),
-            content: vec![
-                ContentBlock::ToolUse { name: "Bash".to_string(), input: json!({"cmd":"ls"}) },
-            ],
+            content: vec![ContentBlock::ToolUse {
+                name: "Bash".to_string(),
+                input: json!({"cmd":"ls"}),
+            }],
         },
     };
     let (name, input) = event.extract_tool_use().unwrap();
@@ -136,7 +144,10 @@ fn test_is_permission_request_select_options() {
     let (req_id, label, input) = event.is_permission_request().unwrap();
     assert_eq!(req_id, "req-select");
     assert_eq!(label, "select_option");
-    assert_eq!(input, Some(json!({"options": ["A", "B", "C"], "prompt": "Choose one"})));
+    assert_eq!(
+        input,
+        Some(json!({"options": ["A", "B", "C"], "prompt": "Choose one"}))
+    );
 }
 
 #[test]

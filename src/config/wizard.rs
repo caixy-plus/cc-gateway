@@ -8,7 +8,10 @@ use crate::{t, t_fmt};
 pub fn run_interactive_config() -> Result<()> {
     let mut config = match ConfigLoader::load() {
         Ok(c) => {
-            println!("Loaded existing config from: {}", ConfigLoader::config_path()?.display());
+            println!(
+                "Loaded existing config from: {}",
+                ConfigLoader::config_path()?.display()
+            );
             c
         }
         Err(_) => {
@@ -131,7 +134,8 @@ fn save_config(config: &GatewayConfig) -> Result<()> {
     let path = ConfigLoader::config_path()?;
     ConfigLoader::ensure_config_dir()?;
     let content = serde_json::to_string_pretty(config)?;
-    std::fs::write(&path, content).with_context(|| format!("Failed to write config to {}", path.display()))?;
+    std::fs::write(&path, content)
+        .with_context(|| format!("Failed to write config to {}", path.display()))?;
     Ok(())
 }
 
@@ -140,7 +144,10 @@ pub fn run_init_config() -> Result<()> {
 
     println!("{}\n", t!("wizard.init_title"));
     println!("{}", t!("wizard.welcome"));
-    println!("{}", t_fmt!("wizard.location", PATH = config_path.display()));
+    println!(
+        "{}",
+        t_fmt!("wizard.location", PATH = config_path.display())
+    );
     println!("{}\n", t!("wizard.rerun"));
 
     let mut config = match ConfigLoader::load() {
@@ -181,7 +188,10 @@ pub fn run_init_config() -> Result<()> {
     save_config(&config)?;
 
     println!("\n{}", t!("wizard.setup_complete"));
-    println!("{}", t_fmt!("wizard.config_saved_to", PATH = config_path.display()));
+    println!(
+        "{}",
+        t_fmt!("wizard.config_saved_to", PATH = config_path.display())
+    );
     println!("\n{}", t!("wizard.modify_later"));
     println!("{}", t!("wizard.run_init"));
     println!("{}", t_fmt!("wizard.or_edit", PATH = config_path.display()));

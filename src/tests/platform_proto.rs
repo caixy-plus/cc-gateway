@@ -1,4 +1,6 @@
-use crate::platform::proto::{encode_varint, decode_varint, decode_tag, decode_header, Header, Frame};
+use crate::platform::proto::{
+    decode_header, decode_tag, decode_varint, encode_varint, Frame, Header,
+};
 
 #[test]
 fn test_encode_decode_varint() {
@@ -84,8 +86,14 @@ fn test_frame_encode_decode_roundtrip() {
         service: 1,
         method: 2,
         headers: vec![
-            Header { key: "k1".to_string(), value: "v1".to_string() },
-            Header { key: "k2".to_string(), value: "v2".to_string() },
+            Header {
+                key: "k1".to_string(),
+                value: "v1".to_string(),
+            },
+            Header {
+                key: "k2".to_string(),
+                value: "v2".to_string(),
+            },
         ],
         payload_encoding: Some("json".to_string()),
         payload_type: Some("event".to_string()),
@@ -228,7 +236,10 @@ fn test_decode_python_data_frame() {
     assert_eq!(frame.headers[0].value, "event");
     assert_eq!(frame.headers[1].key, "message_id");
     assert_eq!(frame.headers[1].value, "test-msg-123");
-    let payload = frame.payload.as_ref().map(|v| String::from_utf8_lossy(v).to_string());
+    let payload = frame
+        .payload
+        .as_ref()
+        .map(|v| String::from_utf8_lossy(v).to_string());
     assert_eq!(payload, Some("{\"test\": \"data\"}".to_string()));
     println!("DATA frame decoded OK");
 }
@@ -246,14 +257,24 @@ fn test_ack_frame_matches_official_sdk() {
 
     // Modify frame like official SDKs do: set Response payload and add biz_rt header.
     frame.payload = Some(br#"{"code":200,"headers":{},"data":null}"#.to_vec());
-    frame.headers.push(Header { key: "biz_rt".to_string(), value: "5".to_string() });
+    frame.headers.push(Header {
+        key: "biz_rt".to_string(),
+        value: "5".to_string(),
+    });
 
     // Encode
     let mut buf = bytes::BytesMut::new();
     frame.encode(&mut buf);
     let ack_bytes = buf.freeze();
 
-    println!("ACK frame hex: {}", ack_bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""));
+    println!(
+        "ACK frame hex: {}",
+        ack_bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join("")
+    );
     println!("ACK frame length: {}", ack_bytes.len());
 
     // Verify it can be decoded back

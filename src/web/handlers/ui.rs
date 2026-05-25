@@ -18,7 +18,8 @@ pub async fn serve_index() -> Html<String> {
 <p>Frontend build artifacts not embedded.</p>
 <p>Build the frontend first:</p>
 <pre>cd cc-gateway-webui && npm run build:embed</pre>
-</body></html>"#.to_string()
+</body></html>"#
+                .to_string()
         });
     Html(html)
 }

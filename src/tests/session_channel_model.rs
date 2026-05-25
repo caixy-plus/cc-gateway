@@ -118,5 +118,9 @@ fn test_session_source_equality() {
 #[test]
 fn test_session_source_serializes_to_string() {
     let json = serde_json::to_string(&SessionSource::WebUI).unwrap();
-    assert_eq!(json, "\"WebUI\"", "SessionSource must serialize as string, got {}", json);
+    assert_eq!(
+        json, "\"WebUI\"",
+        "SessionSource must serialize as string, got {}",
+        json
+    );
 }

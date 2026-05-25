@@ -1,7 +1,7 @@
 use crate::claude::controller::ControllerEvent;
 use crate::claude::event_formatter::{
-    format_error, format_permission_request, format_thinking, format_tool_result,
-    format_tool_use, EventAccumulator,
+    format_error, format_permission_request, format_thinking, format_tool_result, format_tool_use,
+    EventAccumulator,
 };
 
 #[test]
@@ -67,7 +67,10 @@ fn test_accumulator_text_only() {
 fn test_accumulator_mixed_events() {
     let mut acc = EventAccumulator::new();
     acc.process_event(&ControllerEvent::Text("Hello".to_string()));
-    acc.process_event(&ControllerEvent::ToolUse("Bash".to_string(), "{\"cmd\":\"ls\"}".to_string()));
+    acc.process_event(&ControllerEvent::ToolUse(
+        "Bash".to_string(),
+        "{\"cmd\":\"ls\"}".to_string(),
+    ));
     acc.process_event(&ControllerEvent::ToolResult("file.txt".to_string(), false));
     assert!(acc.process_event(&ControllerEvent::Done));
     let output = acc.take_output();

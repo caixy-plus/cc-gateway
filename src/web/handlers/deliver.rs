@@ -1,7 +1,4 @@
-use axum::{
-    extract::Multipart,
-    http::StatusCode,
-};
+use axum::{extract::Multipart, http::StatusCode};
 use serde_json::json;
 use tracing::info;
 
@@ -46,8 +43,15 @@ pub async fn handle_deliver(mut multipart: Multipart) -> (StatusCode, String) {
     }
 
     let expanded = shellexpand::tilde(&path).to_string();
-    let msg_opt = if message.is_empty() { None } else { Some(message.as_str()) };
-    info!("Deliver request: session_id={}, path={}, message={:?}", session_id, expanded, msg_opt);
+    let msg_opt = if message.is_empty() {
+        None
+    } else {
+        Some(message.as_str())
+    };
+    info!(
+        "Deliver request: session_id={}, path={}, message={:?}",
+        session_id, expanded, msg_opt
+    );
 
     broadcast_deliver(&session_id, &expanded, msg_opt);
 

@@ -5,11 +5,11 @@ use std::fs;
 use crate::config::loader::ConfigLoader;
 use crate::web::handlers::session::AppState;
 
-fn mask_secret(s: &str) -> String {
+pub(crate) fn mask_secret(s: &str) -> String {
     if s.len() <= 8 {
         "***".to_string()
     } else {
-        format!("{}***{}", &s[..4], &s[s.len()-4..])
+        format!("{}***{}", &s[..4], &s[s.len() - 4..])
     }
 }
 
@@ -29,9 +29,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
     }))
 }
 
-pub async fn handle_save_config(
-    Json(body): Json<serde_json::Value>,
-) -> (StatusCode, String) {
+pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusCode, String) {
     let path = match ConfigLoader::config_path() {
         Ok(p) => p,
         Err(e) => {

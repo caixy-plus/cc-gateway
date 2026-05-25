@@ -1,40 +1,27 @@
 use anyhow::Result;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
-use tokio::time::{interval, Instant, MissedTickBehavior};
+use serde_json::Value;
+use tokio::sync::{mpsc, Mutex};
+use tracing::debug;
 
 use crate::claude::controller::{ClaudeController, ControllerEvent};
-use crate::claude::event_formatter::EventAccumulator;
 
-/// Default idle timeout in seconds: the poller exits if no event arrives
-/// for this duration. As long as events keep flowing, it continues indefinitely.
-pub const DEFAULT_DEADLINE_SECS: u64 = 300;
-/// Default interval for partial flushing of accumulated output.
-pub const DEFAULT_FLUSH_INTERVAL_MILLIS: u64 = 1000;
-/// Default threshold for flushing accumulated text after the first chunk.
-pub const DEFAULT_FLUSH_THRESHOLD_CHARS: usize = 300;
-
-/// Trait for consumers that want to receive events from a Claude session poll loop.
-///
-/// Implementors handle platform-specific actions like sending messages,
-/// displaying interactive cards, or broadcasting to WebUI clients.
+/// Sink trait for consuming Claude events during a poll cycle.
+/// Each platform/TUI provides its own implementation.
 #[async_trait::async_trait]
 pub trait EventPollSink: Send {
-    /// Called when accumulated text should be flushed to the user.
-    /// `is_done` is true when this is the final flush after the session ends.
+    /// Called when Claude emits a text/thinking/tool output chunk.
+    /// `is_done` is true when the response stream for this turn is complete.
     async fn flush(&mut self, text: &str, is_done: bool) -> Result<()>;
 
-    /// Called when a permission request is received.
-    /// The implementor should display an approval UI and return.
+    /// Called when Claude requests permission for a tool.
     async fn on_permission_request(
         &mut self,
         request_id: &str,
         tool_name: &str,
-        input: Option<&serde_json::Value>,
+        input: Option<&Value>,
     ) -> Result<()>;
 
-    /// Called when a confirmation request is received.
+    /// Called when Claude requests a confirmation.
     async fn on_confirm_request(
         &mut self,
         request_id: &str,
@@ -42,7 +29,7 @@ pub trait EventPollSink: Send {
         options: &[String],
     ) -> Result<()>;
 
-    /// Called when a single-select request is received.
+    /// Called when Claude requests a selection.
     async fn on_select_request(
         &mut self,
         request_id: &str,
@@ -50,7 +37,7 @@ pub trait EventPollSink: Send {
         options: &[String],
     ) -> Result<()>;
 
-    /// Called when a question (multi-step input) request is received.
+    /// Called when Claude sends an AskUserQuestion form.
     async fn on_question_request(
         &mut self,
         request_id: &str,
@@ -58,173 +45,127 @@ pub trait EventPollSink: Send {
     ) -> Result<()>;
 }
 
-/// Configuration for the Claude event poller.
-#[derive(Debug, Clone, Copy)]
-pub struct PollerConfig {
-    /// Total time to wait for the session to complete before forcing exit.
-    pub deadline_secs: u64,
-    /// How often to flush partial output when no new events arrive.
-    pub flush_interval_millis: u64,
-    /// Character threshold for flushing after the first text chunk.
-    pub flush_threshold_chars: usize,
-}
-
-impl Default for PollerConfig {
-    fn default() -> Self {
-        Self {
-            deadline_secs: DEFAULT_DEADLINE_SECS,
-            flush_interval_millis: DEFAULT_FLUSH_INTERVAL_MILLIS,
-            flush_threshold_chars: DEFAULT_FLUSH_THRESHOLD_CHARS,
-        }
-    }
-}
-
-
-/// Generic Claude event poller that encapsulates the common polling logic
-/// used by Feishu, Telegram, and WebUI consumers.
-///
-/// Usage:
-/// ```ignore
-/// let poller = ClaudeEventPoller::new(controller, config);
-/// poller.run(&mut my_sink).await?;
-/// ```
+/// Polls ClaudeController events and dispatches them to an EventPollSink.
 pub struct ClaudeEventPoller {
-    event_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<ControllerEvent>>>,
-    config: PollerConfig,
+    event_rx: std::sync::Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
 }
 
 impl ClaudeEventPoller {
-    /// Create a new poller from a controller, cloning its event receiver.
+    /// Create a poller from an existing controller reference.
+    /// Clones the controller's event receiver so the poller can listen
+    /// independently after the controller lock is released.
     pub fn from_controller(controller: &ClaudeController) -> Self {
-        let event_rx = controller.event_rx_clone();
         Self {
-            event_rx,
-            config: PollerConfig::default(),
+            event_rx: controller.event_rx_clone(),
         }
     }
 
-
-    /// Run the poll loop, forwarding events to the provided sink.
-    ///
-    /// Uses an idle timeout: the loop exits if no event arrives for
-    /// `deadline_secs`. As long as events keep flowing, the poller
-    /// continues indefinitely — it does not enforce a wall-clock limit.
-    pub async fn run<S: EventPollSink>(self, sink: &mut S) -> Result<()> {
-        let mut accumulator = EventAccumulator::new();
-        let idle_timeout = Duration::from_secs(self.config.deadline_secs);
-        let mut ticker = interval(Duration::from_millis(self.config.flush_interval_millis));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut first_text_sent = false;
-        let mut last_event_at = Instant::now();
-
+    /// Run the poll loop: drain events from the controller and dispatch to `sink`.
+    /// Returns when the session ends (Done event) or the event channel closes.
+    pub async fn run(self, sink: &mut (dyn EventPollSink + Send)) -> Result<()> {
         loop {
-            let idle_elapsed = last_event_at.elapsed();
-            let remaining = idle_timeout.saturating_sub(idle_elapsed);
-            if remaining.is_zero() {
-                break;
-            }
-
-            let event_fut = async {
+            let event = {
                 let mut rx = self.event_rx.lock().await;
                 rx.recv().await
             };
-            tokio::pin!(event_fut);
 
-            tokio::select! {
-                _ = ticker.tick() => {
-                    let partial = accumulator.take_output();
-                    if !partial.trim().is_empty() {
-                        let _ = sink.flush(&partial, false).await;
+            match event {
+                Some(ControllerEvent::Text(text)) => {
+                    sink.flush(&text, false).await?;
+                }
+                Some(ControllerEvent::Thinking(text)) => {
+                    if !text.is_empty() {
+                        sink.flush(&text, false).await?;
                     }
                 }
-                event_res = tokio::time::timeout(remaining, event_fut) => {
-                    match event_res {
-                        Ok(Some(event)) => {
-                            last_event_at = Instant::now();
-
-                            if self.handle_special_event(&event, sink).await? {
-                                continue;
+                Some(ControllerEvent::ToolUse(name, input)) => {
+                    let text = format!("\n[Tool: {}]\n{}\n", name, input);
+                    sink.flush(&text, false).await?;
+                }
+                Some(ControllerEvent::ToolResult(text, is_error)) => {
+                    let prefix = if is_error {
+                        "Tool error"
+                    } else {
+                        "Tool result"
+                    };
+                    let formatted = format!("\n[{}]\n{}\n", prefix, text);
+                    sink.flush(&formatted, false).await?;
+                }
+                Some(ControllerEvent::PermissionRequest {
+                    request_id,
+                    tool_name,
+                    input,
+                }) => {
+                    sink.on_permission_request(&request_id, &tool_name, input.as_ref())
+                        .await?;
+                }
+                Some(ControllerEvent::ConfirmRequest {
+                    request_id,
+                    prompt,
+                    options,
+                }) => {
+                    sink.on_confirm_request(&request_id, &prompt, &options)
+                        .await?;
+                }
+                Some(ControllerEvent::SelectRequest {
+                    request_id,
+                    prompt,
+                    options,
+                }) => {
+                    sink.on_select_request(&request_id, &prompt, &options)
+                        .await?;
+                }
+                Some(ControllerEvent::QuestionRequest {
+                    request_id,
+                    questions,
+                }) => {
+                    sink.on_question_request(&request_id, &questions).await?;
+                }
+                Some(ControllerEvent::Error(text)) => {
+                    sink.flush(&format!("Error: {}", text), false).await?;
+                }
+                Some(ControllerEvent::Done) | None => {
+                    sink.flush("", true).await?;
+                    // Drain any late-arriving events (e.g., text sent after Done due to stdout ordering)
+                    loop {
+                        let late_event = {
+                            let mut rx = self.event_rx.lock().await;
+                            rx.try_recv().ok()
+                        };
+                        match late_event {
+                            Some(ControllerEvent::Text(text)) => {
+                                sink.flush(&text, false).await?;
                             }
-
-                            let is_text = matches!(event, ControllerEvent::Text(_));
-                            let is_done = accumulator.process_event(&event);
-
-                            let should_flush = if !first_text_sent {
-                                is_text
-                            } else {
-                                accumulator.peek_output().len() >= self.config.flush_threshold_chars
-                            };
-
-                            if is_text && should_flush {
-                                let partial = accumulator.take_output();
-                                if !partial.trim().is_empty() {
-                                    sink.flush(&partial, false).await?;
-                                    first_text_sent = true;
+                            Some(ControllerEvent::Thinking(text)) => {
+                                if !text.is_empty() {
+                                    sink.flush(&text, false).await?;
                                 }
                             }
-
-                            if is_done {
-                                break;
+                            Some(ControllerEvent::ToolUse(name, input)) => {
+                                let text = format!("\n[Tool: {}]\n{}\n", name, input);
+                                sink.flush(&text, false).await?;
                             }
+                            Some(ControllerEvent::ToolResult(text, is_error)) => {
+                                let prefix = if is_error {
+                                    "Tool error"
+                                } else {
+                                    "Tool result"
+                                };
+                                let formatted = format!("\n[{}]\n{}\n", prefix, text);
+                                sink.flush(&formatted, false).await?;
+                            }
+                            Some(ControllerEvent::Error(text)) => {
+                                sink.flush(&format!("Error: {}", text), false).await?;
+                            }
+                            _ => break,
                         }
-                        Ok(None) => break,
-                        Err(_) => break,
                     }
+                    break;
                 }
             }
         }
 
-        // Final flush of any remaining accumulated output
-        let reply = accumulator.take_output();
-        if !reply.trim().is_empty() {
-            sink.flush(reply.trim(), true).await?;
-        }
-
+        debug!("ClaudeEventPoller: poll loop ended");
         Ok(())
     }
-
-    /// Handle special events that require platform-specific behavior.
-    /// Returns `true` if the event was consumed and should not be processed
-    /// further by the accumulator.
-    async fn handle_special_event<S: EventPollSink>(
-        &self,
-        event: &ControllerEvent,
-        sink: &mut S,
-    ) -> Result<bool> {
-        match event {
-            ControllerEvent::PermissionRequest {
-                request_id,
-                tool_name,
-                input,
-            } => {
-                sink.on_permission_request(request_id, tool_name, input.as_ref()).await?;
-                Ok(true)
-            }
-            ControllerEvent::ConfirmRequest {
-                request_id,
-                prompt,
-                options,
-            } => {
-                sink.on_confirm_request(request_id, prompt, options).await?;
-                Ok(true)
-            }
-            ControllerEvent::SelectRequest {
-                request_id,
-                prompt,
-                options,
-            } => {
-                sink.on_select_request(request_id, prompt, options).await?;
-                Ok(true)
-            }
-            ControllerEvent::QuestionRequest {
-                request_id,
-                questions,
-            } => {
-                sink.on_question_request(request_id, questions).await?;
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
 }
-

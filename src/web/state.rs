@@ -28,7 +28,10 @@ pub fn broadcast_event(session_id: &str, platform: &str, chat_id: &str, role: &s
         content: content.to_string(),
         timestamp: Utc::now().to_rfc3339(),
     }) {
-        warn!("EVENT_BUS send failed (lagging receivers): {} events dropped", e);
+        warn!(
+            "EVENT_BUS send failed (lagging receivers): {} events dropped",
+            e
+        );
     }
 }
 
@@ -55,6 +58,9 @@ pub fn broadcast_deliver(session_id: &str, path: &str, message: Option<&str>) {
         path: path.to_string(),
         message: message.map(|s| s.to_string()),
     }) {
-        warn!("DELIVER_BUS send failed (lagging receivers): {} events dropped", e);
+        warn!(
+            "DELIVER_BUS send failed (lagging receivers): {} events dropped",
+            e
+        );
     }
 }

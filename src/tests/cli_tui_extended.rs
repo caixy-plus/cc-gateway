@@ -4,7 +4,7 @@
 // to_lines, prompt rendering, inline hints, command completion state,
 // message management, and edge cases.
 
-use crate::cli::tui::{App, ChatMessage, MsgRole, strip_ansi, to_lines};
+use crate::cli::tui::{strip_ansi, to_lines, App, ChatMessage, MsgRole};
 
 // ---------------------------------------------------------------------------
 // App::new - initial state

@@ -2,36 +2,46 @@ use axum::{extract::Json, http::StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::claude::controller::ensure_under_home;
-use crate::session::manager::GLOBAL_SESSIONS;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 #[derive(Deserialize)]
 pub struct CdRequest {
-    session_id: Option<String>,
-    path: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) path: String,
 }
 
 #[derive(Deserialize)]
 pub struct LlRequest {
-    session_id: Option<String>,
-    path: Option<String>,
-    show_hidden: Option<bool>,
+    #[allow(dead_code)]
+    pub(crate) session_id: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) show_hidden: Option<bool>,
 }
 
 #[derive(Deserialize)]
 pub struct SessionCmdRequest {
-    session_id: Option<String>,
+    pub(crate) session_id: Option<String>,
 }
 
-async fn get_work_dir_async(session_id: Option<&str>) -> String {
-    if let Some(id) = session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
-            let ctrl = runtime.controller.lock().await;
-            let wd = ctrl.get_work_dir().await;
-            if !wd.is_empty() {
-                return wd;
+fn webui_channel_id() -> Option<String> {
+    GLOBAL_CHANNEL_SESSIONS
+        .list_channels()
+        .into_iter()
+        .find(|c| c.platform == "webui")
+        .map(|c| c.id)
+}
+
+async fn get_work_dir_async(_session_id: Option<&str>) -> String {
+    if let Some(channel_id) = webui_channel_id() {
+        if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+            if let Some(ref active) = runtime.active_claude {
+                let ctrl = active.controller.lock().await;
+                let wd = ctrl.get_work_dir().await;
+                if !wd.is_empty() {
+                    return wd;
+                }
             }
-            return runtime.session.work_dir.clone();
+            return runtime.channel_session.work_dir.clone();
         }
     }
     std::env::current_dir()
@@ -39,23 +49,42 @@ async fn get_work_dir_async(session_id: Option<&str>) -> String {
         .unwrap_or_else(|_| "~".to_string())
 }
 
-async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
-    if let Some(id) = session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(id) {
-            let ctrl = runtime.controller.lock().await;
-            ctrl.init_work_dir(dir.clone()).await;
-            drop(ctrl);
-            GLOBAL_SESSIONS.update_work_dir(id, &dir);
+async fn set_session_work_dir(_session_id: Option<&str>, dir: String) {
+    if let Some(channel_id) = webui_channel_id() {
+        if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+            if let Some(ref active) = runtime.active_claude {
+                let ctrl = active.controller.lock().await;
+                ctrl.init_work_dir(dir.clone()).await;
+            }
+            GLOBAL_CHANNEL_SESSIONS.update_channel_work_dir(&channel_id, &dir);
             return;
         }
     }
     let _ = std::env::set_current_dir(&dir);
 }
 
+async fn resolve_requested_dir(
+    session_id: Option<&str>,
+    requested: &str,
+) -> anyhow::Result<String> {
+    let current_dir = get_work_dir_async(session_id).await;
+    crate::command::workdir::resolve_work_dir_target(
+        &current_dir,
+        "~",
+        std::path::Path::new(requested),
+    )
+}
+
 pub async fn handle_ll(Json(req): Json<LlRequest>) -> (StatusCode, String) {
-    let path = req.path.unwrap_or_else(|| "~".to_string());
+    let path = req.path.unwrap_or_else(|| ".".to_string());
     let show_hidden = req.show_hidden.unwrap_or(false);
-    let expanded = shellexpand::tilde(&path).to_string();
+    let expanded = match resolve_requested_dir(req.session_id.as_deref(), &path).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let body = json!({ "error": e.to_string() });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
     match std::fs::read_dir(&expanded) {
         Ok(entries) => {
             let mut items: Vec<String> = entries
@@ -93,17 +122,13 @@ pub async fn handle_pwd(Json(req): Json<SessionCmdRequest>) -> (StatusCode, Stri
 }
 
 pub async fn handle_cd(Json(req): Json<CdRequest>) -> (StatusCode, String) {
-    let path = shellexpand::tilde(&req.path).to_string();
-    let target = std::path::Path::new(&path).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(&path));
-    if !target.is_dir() {
-        let body = json!({ "error": format!("Not a directory: {}", path) });
-        return (StatusCode::BAD_REQUEST, body.to_string());
-    }
-    let target_str = target.to_string_lossy().to_string();
-    if let Err(e) = ensure_under_home(&target_str) {
-        let body = json!({ "error": e.to_string() });
-        return (StatusCode::FORBIDDEN, body.to_string());
-    }
+    let target_str = match resolve_requested_dir(req.session_id.as_deref(), &req.path).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let body = json!({ "error": e.to_string() });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
     set_session_work_dir(req.session_id.as_deref(), target_str.clone()).await;
     let body = json!({ "dir": target_str });
     (StatusCode::OK, body.to_string())
@@ -122,26 +147,9 @@ pub async fn handle_help() -> (StatusCode, String) {
         { "cmd": "/quit", "desc": "Quit current Claude session" },
         { "cmd": "/cd <path>", "desc": "Change working directory" },
         { "cmd": "/cd_default", "desc": "Reset to default directory" },
-        { "cmd": "/claude [args...]", "desc": "Start or restart Claude session" },
+        { "cmd": "/claude [args...]", "desc": "Start a new Claude session" },
         { "cmd": "/pwd", "desc": "Show current working directory" },
         { "cmd": "/ll", "desc": "List directory contents" },
-        { "cmd": "/show-thinking-toggle", "desc": "Toggle thinking display" },
     ]);
     (StatusCode::OK, commands.to_string())
-}
-
-pub async fn handle_show_thinking_toggle(
-    Json(req): Json<SessionCmdRequest>,
-) -> (StatusCode, String) {
-    if let Some(id) = req.session_id {
-        if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(&id) {
-            let ctrl = runtime.controller.lock().await;
-            let new_value = !ctrl.get_show_thinking();
-            ctrl.set_show_thinking(new_value);
-            let body = json!({ "show_thinking": new_value });
-            return (StatusCode::OK, body.to_string());
-        }
-    }
-    let body = json!({ "message": "Thinking display toggled (no active session)" });
-    (StatusCode::OK, body.to_string())
 }

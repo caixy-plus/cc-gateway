@@ -1,86 +1,155 @@
 use anyhow::{Context, Result};
+use serde_json::Value;
 
-use super::FeishuPlatform;
-
-impl FeishuPlatform {
-    // -----------------------------------------------------------------------
-    // Media download
-    // -----------------------------------------------------------------------
-
-    /// Download a message resource (image/file/audio) from Feishu and cache it locally.
-    pub(crate) async fn download_message_resource(
-        &self,
-        message_id: &str,
-        file_key: &str,
-        resource_type: &str,
-    ) -> Result<Option<(String, String)>> {
-        let url = format!(
-            "https://open.feishu.cn/open-apis/im/v1/messages/{}/resources/{}",
-            message_id, file_key
-        );
-        let resp = self
-            .http_client
-            .get(&url)
-            .query(&[("type", resource_type)])
-            .send()
-            .await
-            .with_context(|| format!("Failed to download {} resource {}", resource_type, file_key))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Feishu resource download failed: {} - {}",
-                status,
-                body
-            );
+/// Extract image keys from a Feishu post / image message content JSON.
+pub fn extract_image_keys(content_str: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Ok(v) = serde_json::from_str::<Value>(content_str) {
+        if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
+            for line in content {
+                if let Some(line_arr) = line.as_array() {
+                    for segment in line_arr {
+                        if let Some("img") = segment.get("tag").and_then(|t| t.as_str()) {
+                            if let Some(key) = segment.get("image_key").and_then(|k| k.as_str()) {
+                                keys.push(key.to_string());
+                            }
+                        }
+                    }
+                }
+            }
         }
-
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("application/octet-stream")
-            .split(';')
-            .next()
-            .unwrap_or("application/octet-stream")
-            .to_string();
-
-        let bytes = resp.bytes().await.context("Failed to read resource bytes")?;
-
-        let cache_dir = crate::daemon::cleaner::media_dir();
-        std::fs::create_dir_all(&cache_dir)
-            .with_context(|| format!("Failed to create media cache dir {:?}", cache_dir))?;
-
-        let ext = match content_type.as_str() {
-            "image/jpeg" | "image/jpg" => "jpg",
-            "image/png" => "png",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            "audio/mpeg" | "audio/mp3" => "mp3",
-            "audio/ogg" => "ogg",
-            "audio/wav" => "wav",
-            "audio/mp4" => "m4a",
-            "video/mp4" => "mp4",
-            "text/plain" => "txt",
-            "text/markdown" => "md",
-            "application/pdf" => "pdf",
-            _ => "bin",
-        };
-        let filename = format!("{}_{}.{}", resource_type, file_key, ext);
-        let path = cache_dir.join(&filename);
-        tokio::fs::write(&path, &bytes)
-            .await
-            .with_context(|| format!("Failed to write media file {:?}", path))?;
-
-        let path_str = path.to_string_lossy().to_string();
-        tracing::info!(
-            "[Feishu] Cached {} resource at {} ({} bytes, {})",
-            resource_type,
-            path_str,
-            bytes.len(),
-            content_type
-        );
-        Ok(Some((path_str, content_type)))
     }
+    keys
+}
+
+/// Download an image from Feishu by image_key.
+/// `token` is a tenant or user access token.
+pub async fn download_image(image_key: &str, token: &str) -> Result<Vec<u8>> {
+    let url = format!(
+        "https://open.feishu.cn/open-apis/im/v1/images/{}",
+        image_key
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("Failed to download image from Feishu")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Feishu download image failed: {} - {}", status, body);
+    }
+
+    let bytes = resp.bytes().await.context("Failed to read image bytes")?;
+    Ok(bytes.to_vec())
+}
+
+/// Upload an image to Feishu and return the image_key.
+/// `token` is a tenant or user access token.
+pub async fn upload_image(bytes: Vec<u8>, filename: &str, token: &str) -> Result<String> {
+    let url = "https://open.feishu.cn/open-apis/im/v1/images";
+    let client = reqwest::Client::new();
+
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str("image/png")
+        .context("Failed to build image multipart")?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("image", part)
+        .text("image_type", "message");
+
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .multipart(form)
+        .send()
+        .await
+        .context("Failed to upload image to Feishu")?;
+
+    let status = resp.status();
+    let body: Value = resp
+        .json()
+        .await
+        .context("Failed to parse upload image response")?;
+
+    if !status.is_success() {
+        anyhow::bail!("Feishu upload image failed: {} - {}", status, body);
+    }
+
+    let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    if code != 0 {
+        let msg = body
+            .get("msg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        anyhow::bail!(
+            "Feishu API error (upload image): code={}, msg={}",
+            code,
+            msg
+        );
+    }
+
+    let image_key = body
+        .get("data")
+        .and_then(|d| d.get("image_key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Upload image response missing image_key"))?;
+
+    Ok(image_key.to_string())
+}
+
+/// Upload a file to Feishu and return the file_key.
+/// `token` is a tenant or user access token.
+pub async fn upload_file(bytes: Vec<u8>, filename: &str, token: &str) -> Result<String> {
+    let url = "https://open.feishu.cn/open-apis/im/v1/files";
+    let client = reqwest::Client::new();
+
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str("application/octet-stream")
+        .context("Failed to build file multipart")?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("file_type", "stream")
+        .text("file_name", filename.to_string());
+
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .multipart(form)
+        .send()
+        .await
+        .context("Failed to upload file to Feishu")?;
+
+    let status = resp.status();
+    let body: Value = resp
+        .json()
+        .await
+        .context("Failed to parse upload file response")?;
+
+    if !status.is_success() {
+        anyhow::bail!("Feishu upload file failed: {} - {}", status, body);
+    }
+
+    let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+    if code != 0 {
+        let msg = body
+            .get("msg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        anyhow::bail!("Feishu API error (upload file): code={}, msg={}", code, msg);
+    }
+
+    let file_key = body
+        .get("data")
+        .and_then(|d| d.get("file_key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Upload file response missing file_key"))?;
+
+    Ok(file_key.to_string())
 }

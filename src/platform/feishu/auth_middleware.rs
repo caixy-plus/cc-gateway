@@ -1,21 +1,18 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use reqwest::{Request, Response};
 use reqwest_middleware::{Middleware, Next};
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::warn;
+use tracing::{debug, warn};
 
-use crate::platform::feishu::FeishuConfig;
+use crate::config::model::FeishuConfig;
 
-/// Shared token manager used by both `FeishuPlatform` and `FeishuAuthMiddleware`.
+/// Manages Feishu tenant access token with caching and auto-refresh.
 #[derive(Clone)]
 pub struct TokenManager {
     config: FeishuConfig,
-    pub(crate) cached_token: Arc<RwLock<Option<String>>>,
-    pub(crate) token_fetched_at: Arc<RwLock<Option<Instant>>>,
-    http_client: reqwest::Client,
+    cached_token: Arc<RwLock<Option<(String, std::time::Instant)>>>,
+    token_ttl: std::time::Duration,
 }
 
 impl TokenManager {
@@ -23,91 +20,80 @@ impl TokenManager {
         Self {
             config,
             cached_token: Arc::new(RwLock::new(None)),
-            token_fetched_at: Arc::new(RwLock::new(None)),
-            http_client: reqwest::Client::new(),
+            token_ttl: std::time::Duration::from_secs(3600), // 1 hour default
         }
     }
 
+    /// Get a valid tenant access token, refreshing if necessary.
     pub async fn get_tenant_access_token(&self) -> Result<String> {
+        // Check cache first
         {
-            let cached = self.cached_token.read().await;
-            let fetched_at = self.token_fetched_at.read().await;
-            if let (Some(token), Some(instant)) = (cached.as_ref(), fetched_at.as_ref()) {
-                if instant.elapsed().as_secs() < 3300 {
+            let cache = self.cached_token.read().await;
+            if let Some((ref token, ref created)) = *cache {
+                if created.elapsed() < self.token_ttl {
                     return Ok(token.clone());
                 }
             }
         }
 
-        let token = self.fetch_tenant_access_token().await?;
-        let mut cached = self.cached_token.write().await;
-        let mut fetched_at = self.token_fetched_at.write().await;
-        *cached = Some(token.clone());
-        *fetched_at = Some(Instant::now());
-        Ok(token)
-    }
-
-    pub async fn refresh_token(&self) -> Result<String> {
-        let token = self.fetch_tenant_access_token().await?;
-        let mut cached = self.cached_token.write().await;
-        let mut fetched_at = self.token_fetched_at.write().await;
-        *cached = Some(token.clone());
-        *fetched_at = Some(Instant::now());
-        Ok(token)
-    }
-
-    pub async fn invalidate_token_cache(&self) {
-        let mut cached = self.cached_token.write().await;
-        let mut fetched_at = self.token_fetched_at.write().await;
-        *cached = None;
-        *fetched_at = None;
-    }
-
-    pub fn is_auth_error(e: &anyhow::Error) -> bool {
-        let s = e.to_string();
-        s.contains("99991663")
-            || s.contains("99991661")
-            || s.contains("99991664")
-            || s.contains("Invalid access token")
-    }
-
-    async fn fetch_tenant_access_token(&self) -> Result<String> {
+        // Refresh
         let url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
-        let resp = self
-            .http_client
+        let client = reqwest::Client::new();
+        let resp = client
             .post(url)
             .json(&serde_json::json!({
-                "app_id": self.config.app_id,
-                "app_secret": self.config.app_secret,
+                "app_id": &self.config.app_id,
+                "app_secret": &self.config.app_secret,
             }))
             .send()
             .await
             .context("Failed to request tenant access token")?;
 
-        let data: serde_json::Value = resp
+        let body: serde_json::Value = resp
             .json()
             .await
             .context("Failed to parse tenant access token response")?;
 
-        let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
         if code != 0 {
-            let msg = data
+            let msg = body
                 .get("msg")
                 .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            anyhow::bail!("Feishu API error: {} - {}", code, msg);
+                .unwrap_or("unknown");
+            anyhow::bail!("Feishu tenant access token error: {} - {}", code, msg);
         }
 
-        let token = data
+        let token = body
             .get("tenant_access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing tenant_access_token in response"))?;
-        Ok(token.to_string())
+            .context("Missing tenant_access_token in response")?
+            .to_string();
+
+        debug!("Refreshed Feishu tenant access token");
+        let mut cache = self.cached_token.write().await;
+        *cache = Some((token.clone(), std::time::Instant::now()));
+
+        Ok(token)
+    }
+
+    /// Invalidate the cached token (e.g., after a 401 response).
+    pub async fn invalidate_token_cache(&self) {
+        let mut cache = self.cached_token.write().await;
+        *cache = None;
+        debug!("Invalidated Feishu tenant access token cache");
+    }
+
+    /// Check if an error is an authentication error that should trigger token refresh.
+    pub fn is_auth_error(err: &anyhow::Error) -> bool {
+        let msg = format!("{}", err);
+        msg.contains("99991663")  // tenant access token invalid
+            || msg.contains("99991664")  // tenant access token expired
+            || msg.contains("401")
     }
 }
 
-/// Reqwest middleware that injects Feishu tenant access tokens and refreshes
-/// them automatically when Feishu returns an auth error (99991663 etc.).
+/// reqwest-middleware that auto-injects the Feishu tenant access token
+/// into the Authorization header of every request.
 #[derive(Clone)]
 pub struct FeishuAuthMiddleware {
     token_manager: TokenManager,
@@ -119,48 +105,30 @@ impl FeishuAuthMiddleware {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Middleware for FeishuAuthMiddleware {
     async fn handle(
         &self,
         mut req: Request,
-        _extensions: &mut http::Extensions,
+        extensions: &mut http::Extensions,
         next: Next<'_>,
     ) -> reqwest_middleware::Result<Response> {
-        // Inject current token.
-        let token = self
-            .token_manager
-            .get_tenant_access_token()
-            .await
-            .map_err(|e| reqwest_middleware::Error::Middleware(e.into()))?;
+        // Skip token injection for auth endpoint itself
+        let skip_auth = req.url().path().contains("auth/v3/tenant_access_token");
 
-        req.headers_mut().insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
-                .map_err(|e| reqwest_middleware::Error::Middleware(e.into()))?,
-        );
-
-        let resp = next.run(req, _extensions).await?;
-
-        // If Feishu returned an HTTP auth error, invalidate the cache so the
-        // next request gets a fresh token.  Callers may retry once if they
-        // also need to handle JSON-level error codes (e.g. 99991663).
-        if Self::is_feishu_auth_error(&resp) {
-            warn!("[Feishu] HTTP auth error detected, invalidating token cache");
-            self.token_manager.invalidate_token_cache().await;
+        if !skip_auth {
+            match self.token_manager.get_tenant_access_token().await {
+                Ok(token) => {
+                    let header_val = format!("Bearer {}", token);
+                    req.headers_mut()
+                        .insert("Authorization", header_val.parse().unwrap());
+                }
+                Err(e) => {
+                    warn!("Failed to get tenant access token for request: {}", e);
+                }
+            }
         }
 
-        Ok(resp)
-    }
-}
-
-impl FeishuAuthMiddleware {
-    /// Returns true if the response indicates an invalid/expired token.
-    /// This only checks HTTP status (401/403) without consuming the body;
-    /// JSON code 99991663 is returned with HTTP 400, so callers should still
-    /// handle that in their business logic if they need precise retry.
-    fn is_feishu_auth_error(resp: &Response) -> bool {
-        let status = resp.status();
-        status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
+        next.run(req, extensions).await
     }
 }

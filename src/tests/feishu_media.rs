@@ -7,9 +7,9 @@
 //   - Cache directory path construction
 //   - Edge cases around media response handling
 
-use crate::platform::feishu::FeishuPlatform;
 use crate::config::model::{FeishuConfig, GatewayConfig};
 use crate::daemon::cleaner;
+use crate::platform::feishu::FeishuPlatform;
 
 fn make_test_platform() -> FeishuPlatform {
     let config = FeishuConfig {
@@ -39,14 +39,21 @@ fn test_media_cache_dir_exists_or_creatable() {
     let dir = cleaner::media_dir();
     // The path should end with "media" under the cc-gateway config dir
     let dir_str = dir.to_string_lossy();
-    assert!(dir_str.contains("media") || dir_str.contains("cc-gateway"),
-        "media_dir should be under cc-gateway config dir, got: {}", dir_str);
+    assert!(
+        dir_str.contains("media") || dir_str.contains("cc-gateway"),
+        "media_dir should be under cc-gateway config dir, got: {}",
+        dir_str
+    );
 }
 
 #[test]
 fn test_media_cache_dir_is_absolute() {
     let dir = cleaner::media_dir();
-    assert!(dir.is_absolute(), "media_dir should be absolute, got: {:?}", dir);
+    assert!(
+        dir.is_absolute(),
+        "media_dir should be absolute, got: {:?}",
+        dir
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +63,10 @@ fn test_media_cache_dir_is_absolute() {
 /// The content-type-to-extension mapping embedded in download_message_resource.
 /// We replicate it here to verify correctness independently.
 fn content_type_to_extension(content_type: &str) -> &'static str {
-    let base = content_type.split(';').next().unwrap_or("application/octet-stream");
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or("application/octet-stream");
     match base {
         "image/jpeg" | "image/jpg" => "jpg",
         "image/png" => "png",
@@ -131,15 +141,27 @@ fn test_content_type_to_ext_unknown_returns_bin() {
 #[test]
 fn test_content_type_to_ext_with_charset_parameter() {
     // Content-Type often includes charset: "text/plain; charset=utf-8"
-    assert_eq!(content_type_to_extension("text/plain; charset=utf-8"), "txt");
-    assert_eq!(content_type_to_extension("text/markdown; charset=utf-8"), "md");
-    assert_eq!(content_type_to_extension("application/pdf; boundary=something"), "pdf");
+    assert_eq!(
+        content_type_to_extension("text/plain; charset=utf-8"),
+        "txt"
+    );
+    assert_eq!(
+        content_type_to_extension("text/markdown; charset=utf-8"),
+        "md"
+    );
+    assert_eq!(
+        content_type_to_extension("application/pdf; boundary=something"),
+        "pdf"
+    );
 }
 
 #[test]
 fn test_content_type_to_ext_with_extra_params() {
     // Multiple parameters should still match the base type
-    assert_eq!(content_type_to_extension("image/png; charset=binary; foo=bar"), "png");
+    assert_eq!(
+        content_type_to_extension("image/png; charset=binary; foo=bar"),
+        "png"
+    );
 }
 
 // ---------------------------------------------------------------------------

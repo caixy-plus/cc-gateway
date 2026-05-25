@@ -1,27 +1,88 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::claude::controller::ClaudeController;
 use crate::command::builtin::BuiltinCommands;
-use crate::command::forward::ForwardCommand;
+use crate::{t, t_fmt};
+
+/// Semantic action produced by parsing a user message.
+///
+/// All command parsing happens in one place (`CommandRouter::route`) and
+/// platforms/WebUI/CLI only execute the resulting action.
+#[derive(Debug, Clone)]
+pub enum CommandAction {
+    /// Immediate text reply (e.g. /help, error messages)
+    Reply(String),
+    /// Start a Claude session with optional work directory and extra args
+    StartSession {
+        work_dir: Option<PathBuf>,
+        args: Vec<String>,
+    },
+    /// Stop the current Claude session
+    StopSession,
+    /// Change working directory to the given path
+    ChangeDir(PathBuf),
+    /// Change working directory to the default directory
+    ChangeDirDefault,
+    /// Print the current working directory
+    PrintWorkingDir,
+    /// List directory contents (interactive TUI for CLI, card for platforms)
+    ListDir { path: Option<PathBuf> },
+    /// Create a new directory
+    MakeDir(PathBuf),
+    /// Enable showing thinking content
+    ShowThinking,
+    /// Disable showing thinking content
+    HideThinking,
+    /// Show recent Claude sessions and allow resuming
+    ShowClaudeHistory { arg: String },
+    /// Forward regular text to the active Claude session
+    ForwardToClaude(String),
+    /// Unknown slash command when no session is active
+    UnknownCommand(String),
+    /// No operation needed
+    NoOp,
+}
+
 pub struct CommandRouter {
     builtin: BuiltinCommands,
-    forward: ForwardCommand,
     controller: Arc<Mutex<ClaudeController>>,
+    default_dir: String,
 }
 
 impl CommandRouter {
     pub fn new(controller: Arc<Mutex<ClaudeController>>, default_dir: &str) -> Self {
         Self {
             builtin: BuiltinCommands::new(controller.clone(), default_dir),
-            forward: ForwardCommand::new(controller.clone()),
             controller,
+            default_dir: default_dir.to_string(),
         }
     }
 
-    /// Handle a user message. Returns Some(response) if the message was handled internally.
-    pub async fn handle(&self, message: &str) -> Option<String> {
+    pub async fn current_work_dir(&self) -> String {
+        let ctrl = self.controller.lock().await;
+        let work_dir = ctrl.get_work_dir().await;
+        if work_dir.is_empty() {
+            shellexpand::tilde(&self.default_dir).to_string()
+        } else {
+            work_dir
+        }
+    }
+
+    /// Parse a user message into a semantic `CommandAction`.
+    ///
+    /// This is the single source of truth for command semantics.
+    /// No side effects are performed here — callers execute the action.
+    pub async fn route(&self, message: &str) -> CommandAction {
         let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return CommandAction::NoOp;
+        }
+
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        let cmd = parts[0];
+        let arg = parts.get(1).map(|s| *s).unwrap_or("");
 
         // Check if we are in Claude session mode
         let session_active = {
@@ -30,180 +91,292 @@ impl CommandRouter {
         };
 
         if session_active {
-            // In Claude mode: only /quit and thinking toggles are handled locally.
-            // Everything else (including /help, /cd, /ll, /claude, raw text,
-            // slash commands) is forwarded directly to Claude.
-            match trimmed {
-                "/quit" | "/close-session"
-                | "/show-thinking-toggle" | "/show-thinking" | "/hide-thinking" => {
-                    return self.builtin.handle(trimmed).await;
+            // Active session: local gateway commands are still handled here;
+            // regular text and unknown commands go to Claude.
+            match cmd {
+                "/quit" | "/close-session" => CommandAction::StopSession,
+                "/show-thinking" => CommandAction::ShowThinking,
+                "/hide-thinking" => CommandAction::HideThinking,
+                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                    arg: arg.to_string(),
+                },
+                "/help" => CommandAction::Reply(self.builtin.help_text()),
+                "/cd" => {
+                    if arg.is_empty() {
+                        CommandAction::Reply(t!("builtin.cd_usage").to_string())
+                    } else {
+                        let expanded = shellexpand::tilde(arg).to_string();
+                        CommandAction::ChangeDir(PathBuf::from(expanded))
+                    }
                 }
+                "/cd_default" => CommandAction::ChangeDirDefault,
+                "/pwd" => CommandAction::PrintWorkingDir,
+                "/ll" => {
+                    let path = if arg.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(shellexpand::tilde(arg).to_string()))
+                    };
+                    CommandAction::ListDir { path }
+                }
+                "/mkdir" => {
+                    if arg.is_empty() {
+                        CommandAction::Reply(t!("builtin.mkdir_usage").to_string())
+                    } else {
+                        let expanded = shellexpand::tilde(arg).to_string();
+                        CommandAction::MakeDir(PathBuf::from(expanded))
+                    }
+                }
+                "/claude" | "/new-session" => CommandAction::Reply(
+                    "A session is already active. Use /quit to stop it first.".to_string(),
+                ),
                 _ => {
-                    return self.forward.handle_regular(trimmed).await;
+                    if trimmed.starts_with('/') {
+                        CommandAction::UnknownCommand(cmd.to_string())
+                    } else {
+                        CommandAction::ForwardToClaude(trimmed.to_string())
+                    }
+                }
+            }
+        } else {
+            // No active session: handle gateway commands locally
+            match cmd {
+                "/help" => CommandAction::Reply(self.builtin.help_text()),
+                "/quit" => CommandAction::Reply("No active session to quit. Use /quit in an active session or type /help for available commands.".to_string()),
+                "/cd" => {
+                    if arg.is_empty() {
+                        CommandAction::Reply(t!("builtin.cd_usage").to_string())
+                    } else {
+                        let expanded = shellexpand::tilde(arg).to_string();
+                        CommandAction::ChangeDir(PathBuf::from(expanded))
+                    }
+                }
+                "/cd_default" => CommandAction::ChangeDirDefault,
+                "/pwd" => CommandAction::PrintWorkingDir,
+                "/ll" => {
+                    let path = if arg.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(shellexpand::tilde(arg).to_string()))
+                    };
+                    CommandAction::ListDir { path }
+                }
+                "/mkdir" => {
+                    if arg.is_empty() {
+                        CommandAction::Reply(t!("builtin.mkdir_usage").to_string())
+                    } else {
+                        let expanded = shellexpand::tilde(arg).to_string();
+                        CommandAction::MakeDir(PathBuf::from(expanded))
+                    }
+                }
+                "/claude" | "/new-session" => {
+                    let args: Vec<String> = arg
+                        .split_whitespace()
+                        .filter(|s| *s != "--new")
+                        .map(|s| s.to_string())
+                        .collect();
+                    CommandAction::StartSession {
+                        work_dir: None,
+                        args,
+                    }
+                }
+                "/show-thinking" => CommandAction::ShowThinking,
+                "/hide-thinking" => CommandAction::HideThinking,
+                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                    arg: arg.to_string(),
+                },
+                _ => {
+                    if trimmed.starts_with('/') {
+                        CommandAction::UnknownCommand(cmd.to_string())
+                    } else {
+                        CommandAction::Reply(t_fmt!("forward.no_session", MSG = trimmed))
+                    }
                 }
             }
         }
+    }
 
-        // Session inactive: only specific gateway commands are handled locally.
-        // Regular text and unknown commands get "No active Claude session".
-        match trimmed {
-            "/help" | "/cd" | "/cd_default" | "/pwd" | "/ll"
-            | "/claude" | "/claude-resume" | "/new-session"
-            | "/list-sessions" | "/switch-session" | "/close-session"
-            | "/mkdir" | "/show-thinking-toggle" | "/show-thinking"
-            | "/hide-thinking" | "/claude-history" => {
-                return self.builtin.handle(trimmed).await;
+    /// Execute a `CommandAction` and produce an optional immediate reply.
+    ///
+    /// This bridges the new semantic layer with the existing execution layer.
+    /// Callers that want full control should use `route` directly.
+    pub async fn execute(&self, action: CommandAction) -> Option<String> {
+        match action {
+            CommandAction::Reply(text) => Some(text),
+            CommandAction::StopSession => {
+                let ctrl = self.controller.lock().await;
+                match ctrl.stop_session().await {
+                    Ok(()) => Some(t!("builtin.session_stopped").to_string()),
+                    Err(e) => Some(t_fmt!("builtin.failed_stop_session", ERR = e)),
+                }
             }
-            _ => {
-                return self.forward.handle_regular(trimmed).await;
+            CommandAction::ChangeDir(path) => {
+                let ctrl = self.controller.lock().await;
+                let current_dir = ctrl.get_work_dir().await;
+                drop(ctrl);
+
+                let path_str = match crate::command::workdir::resolve_work_dir_target(
+                    &current_dir,
+                    &self.default_dir,
+                    &path,
+                ) {
+                    Ok(path) => path,
+                    Err(e) => return Some(e.to_string()),
+                };
+                let ctrl = self.controller.lock().await;
+                ctrl.init_work_dir(path_str.clone()).await;
+                Some(t_fmt!("builtin.dir_changed", PATH = path_str))
             }
-        }
-    }
-}
+            CommandAction::ChangeDirDefault => {
+                let current_dir = {
+                    let ctrl = self.controller.lock().await;
+                    ctrl.get_work_dir().await
+                };
+                let dir = match crate::command::workdir::resolve_work_dir_target(
+                    &current_dir,
+                    &self.default_dir,
+                    std::path::Path::new(&self.default_dir),
+                ) {
+                    Ok(path) => path,
+                    Err(e) => return Some(e.to_string()),
+                };
+                let ctrl = self.controller.lock().await;
+                ctrl.init_work_dir(dir.clone()).await;
+                Some(t_fmt!("builtin.dir_changed", PATH = dir))
+            }
+            CommandAction::PrintWorkingDir => {
+                let ctrl = self.controller.lock().await;
+                let work_dir = ctrl.get_work_dir().await;
+                let dir = if work_dir.is_empty() {
+                    shellexpand::tilde(&self.default_dir).to_string()
+                } else {
+                    work_dir
+                };
+                Some(t_fmt!("builtin.current_dir", DIR = dir))
+            }
+            CommandAction::ListDir { path } => {
+                let ctrl = self.controller.lock().await;
+                let work_dir = ctrl.get_work_dir().await;
+                let dir = crate::command::workdir::effective_work_dir(&work_dir, &self.default_dir);
+                drop(ctrl);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::model::ClaudeConfig;
+                let requested = path.unwrap_or_else(|| PathBuf::from("."));
+                let target = match crate::command::workdir::resolve_work_dir_target(
+                    &dir,
+                    &self.default_dir,
+                    &requested,
+                ) {
+                    Ok(path) => path,
+                    Err(e) => return Some(e.to_string()),
+                };
 
-    fn setup() -> CommandRouter {
-        let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-        CommandRouter::new(controller, "~")
-    }
+                let items = match crate::command::builtin::list_directory_items(
+                    &target,
+                ) {
+                    Ok(items) => items,
+                    Err(e) => return Some(t_fmt!("builtin.failed_list_dir", ERR = e)),
+                };
 
-    #[tokio::test]
-    async fn test_help_handled_by_builtin() {
-        let router = setup();
-        let response = router.handle("/help").await;
-        assert!(response.is_some());
-        let text = response.unwrap();
-        assert!(text.contains("/help"));
-    }
+                let dirs: Vec<(String, bool)> = items
+                    .into_iter()
+                    .filter(|(name, is_dir)| *is_dir && !name.starts_with('.'))
+                    .collect();
 
-    #[tokio::test]
-    async fn test_pwd_handled_by_builtin() {
-        let router = setup();
-        let response = router.handle("/pwd").await;
-        assert!(response.is_some());
-        let text = response.unwrap();
-        assert!(text.contains("Current directory"));
-    }
+                if dirs.is_empty() {
+                    return Some(t!("builtin.no_subdirs").to_string());
+                }
 
-    #[tokio::test]
-    async fn test_slash_command_falls_through_when_inactive() {
-        // /clear (or any /cmd) falls through to forward
-        let router = setup();
-        let response = router.handle("/clear").await;
-        assert!(response.is_some());
-        let text = response.unwrap();
-        assert!(text.contains("No active Claude session"));
-    }
+                let dirs_clone = dirs.clone();
+                let selected =
+                    tokio::task::spawn_blocking(move || {
+                        crate::command::builtin::interactive_select(&dirs_clone)
+                    })
+                    .await
+                    .unwrap_or(crate::command::builtin::SelectAction::Cancelled);
 
-    #[tokio::test]
-    async fn test_regular_text_forwarded_when_inactive() {
-        let router = setup();
-        let response = router.handle("hello world").await;
-        assert!(response.is_some());
-        let text = response.unwrap();
-        assert!(text.contains("No active Claude session"));
-        assert!(text.contains("hello world"));
-    }
+                match selected {
+                    crate::command::builtin::SelectAction::Selected(idx) => {
+                        let name = &dirs[idx].0;
+                        let path = PathBuf::from(&target).join(name);
+                        let path_str = match crate::command::workdir::resolve_work_dir_target(
+                            &target,
+                            &self.default_dir,
+                            &path,
+                        ) {
+                            Ok(path) => path,
+                            Err(e) => return Some(e.to_string()),
+                        };
+                        let ctrl = self.controller.lock().await;
+                        ctrl.init_work_dir(path_str.clone()).await;
+                        Some(t_fmt!("builtin.changed_dir", PATH = path_str))
+                    }
+                    _ => Some(t!("builtin.selection_cancelled").to_string()),
+                }
+            }
+            CommandAction::MakeDir(path) => {
+                let ctrl = self.controller.lock().await;
+                let work_dir = ctrl.get_work_dir().await;
+                let base = if work_dir.is_empty() {
+                    shellexpand::tilde(&self.default_dir).to_string()
+                } else {
+                    work_dir
+                };
+                drop(ctrl);
 
-    #[tokio::test]
-    async fn test_unknown_command_falls_through() {
-        let router = setup();
-        let response = router.handle("/unknown_command_xyz").await;
-        assert!(response.is_some());
-        let text = response.unwrap();
-        assert!(text.contains("No active Claude session"));
-        assert!(text.contains("/unknown_command_xyz"));
-    }
-
-    #[tokio::test]
-    async fn test_quit_handled_locally_when_session_active() {
-        let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-        let router = CommandRouter::new(controller.clone(), "~");
-
-        {
-            let ctrl = controller.lock().await;
-            ctrl.inject_dummy_session().await.unwrap();
-        }
-
-        let response = router.handle("/quit").await;
-        assert!(response.is_some(), "/quit should be handled locally when session is active");
-    }
-
-    #[tokio::test]
-    async fn test_ll_forwarded_when_session_active() {
-        let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-        let router = CommandRouter::new(controller.clone(), "~");
-
-        {
-            let ctrl = controller.lock().await;
-            ctrl.inject_dummy_session().await.unwrap();
-        }
-
-        let response = router.handle("/ll").await;
-        assert!(
-            response.is_none(),
-            "/ll should be forwarded to Claude when session is active, got: {:?}",
-            response
-        );
-
-        {
-            let ctrl = controller.lock().await;
-            let _ = ctrl.stop_session().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn test_claude_forwarded_when_session_active() {
-        let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-        let router = CommandRouter::new(controller.clone(), "~");
-
-        {
-            let ctrl = controller.lock().await;
-            ctrl.inject_dummy_session().await.unwrap();
-        }
-
-        let response = router.handle("/claude").await;
-        assert!(
-            response.is_none(),
-            "/claude should be forwarded to Claude when session is active, got: {:?}",
-            response
-        );
-
-        {
-            let ctrl = controller.lock().await;
-            let _ = ctrl.stop_session().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn test_text_forwarded_when_session_active() {
-        let config = ClaudeConfig::default();
-        let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
-        let router = CommandRouter::new(controller.clone(), "~");
-
-        {
-            let ctrl = controller.lock().await;
-            ctrl.inject_dummy_session().await.unwrap();
-        }
-
-        let response = router.handle("hello world").await;
-        assert!(
-            response.is_none(),
-            "regular text should be forwarded to Claude when session is active, got: {:?}",
-            response
-        );
-
-        {
-            let ctrl = controller.lock().await;
-            let _ = ctrl.stop_session().await;
+                let target = PathBuf::from(&base).join(&path);
+                let target_str = target.to_string_lossy().to_string();
+                if let Err(e) = crate::claude::controller::ensure_under_home(&target_str) {
+                    return Some(e.to_string());
+                }
+                match std::fs::create_dir_all(&target) {
+                    Ok(()) => Some(t_fmt!("builtin.dir_created", PATH = target_str)),
+                    Err(e) => Some(t_fmt!("builtin.failed_create_dir", ERR = e)),
+                }
+            }
+            CommandAction::StartSession { work_dir, args } => {
+                let ctrl = self.controller.lock().await;
+                let dir = if let Some(p) = work_dir {
+                    p.to_string_lossy().to_string()
+                } else {
+                    let wd = ctrl.get_work_dir().await;
+                    if wd.is_empty() {
+                        shellexpand::tilde(&self.default_dir).to_string()
+                    } else {
+                        wd
+                    }
+                };
+                match ctrl.start_session(dir.clone(), args).await {
+                    Ok(()) => Some(t_fmt!("builtin.session_started", DIR = dir)),
+                    Err(e) => Some(t_fmt!("builtin.failed_start_claude", ERR = e)),
+                }
+            }
+            CommandAction::ShowThinking => {
+                let ctrl = self.controller.lock().await;
+                ctrl.set_show_thinking(true);
+                Some(t!("builtin.thinking_enabled").to_string())
+            }
+            CommandAction::HideThinking => {
+                let ctrl = self.controller.lock().await;
+                ctrl.set_show_thinking(false);
+                Some(t!("builtin.thinking_disabled").to_string())
+            }
+            CommandAction::ShowClaudeHistory { arg } => {
+                Some(self.builtin.claude_history(&arg).await)
+            }
+            CommandAction::UnknownCommand(cmd) => {
+                Some(format!("Unknown command: {}. Available commands: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))
+            }
+            CommandAction::ForwardToClaude(text) => {
+                let ctrl = self.controller.lock().await;
+                if !ctrl.is_session_active().await {
+                    return Some(crate::i18n::dict::tfmt("forward.no_session", &[("MSG", &text)]));
+                }
+                match ctrl.send_message(&text).await {
+                    Ok(()) => None,
+                    Err(e) => Some(t_fmt!("forward.failed_send", ERR = e)),
+                }
+            }
+            CommandAction::NoOp => Some(String::new()),
         }
     }
 }

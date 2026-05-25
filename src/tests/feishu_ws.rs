@@ -4,12 +4,12 @@
 // tests (src/tests/command_router.rs), which is the core dispatch logic used
 // inside handle_event.
 
-use crate::platform::feishu::{
-    build_ack_frame, build_ping_frame, split_text_into_chunks, extract_post_content,
-    build_http_response, DedupCache, RateLimiter, AnomalyTracker,
-    NormalizedMessage, PendingPermissionContext, FeishuPlatform,
-};
 use crate::config::model::{FeishuConfig, GatewayConfig};
+use crate::platform::feishu::{
+    build_ack_frame, build_http_response, build_ping_frame, extract_post_content,
+    split_text_into_chunks, AnomalyTracker, DedupCache, FeishuPlatform, NormalizedMessage,
+    PendingPermissionContext, RateLimiter,
+};
 use crate::platform::proto::Frame;
 use serde_json::json;
 
@@ -141,7 +141,8 @@ fn test_extract_post_content_with_text_elements() {
                 {"tag": "text", "text": " from Feishu"}
             ]
         ]
-    }).to_string();
+    })
+    .to_string();
     let (text, image_keys) = extract_post_content(&input);
     assert_eq!(text, "Post Title\nHello world\n from Feishu");
     assert!(image_keys.is_empty());
@@ -159,7 +160,8 @@ fn test_extract_post_content_with_image_keys() {
                 {"tag": "img", "image_key": "img_key_002"}
             ]
         ]
-    }).to_string();
+    })
+    .to_string();
     let (text, image_keys) = extract_post_content(&input);
     assert_eq!(text, "Check this image");
     assert_eq!(image_keys, vec!["img_key_001", "img_key_002"]);
@@ -174,7 +176,8 @@ fn test_extract_post_content_with_at_mentions() {
                 {"tag": "text", "text": " hello"}
             ]
         ]
-    }).to_string();
+    })
+    .to_string();
     let (text, image_keys) = extract_post_content(&input);
     assert_eq!(text, "@Alice\n hello");
     assert!(image_keys.is_empty());
@@ -188,7 +191,8 @@ fn test_extract_post_content_with_link_tag() {
                 {"tag": "a", "text": "Click here", "href": "https://example.com"}
             ]
         ]
-    }).to_string();
+    })
+    .to_string();
     let (text, image_keys) = extract_post_content(&input);
     assert_eq!(text, "Click here");
     assert!(image_keys.is_empty());
@@ -543,7 +547,7 @@ fn test_event_sink_trait_is_object_safe_for_boxing() {
 #[tokio::test]
 async fn test_command_router_help_when_inactive() {
     use crate::claude::controller::ClaudeController;
-    use crate::command::router::{CommandRouter, CommandAction};
+    use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -558,7 +562,7 @@ async fn test_command_router_help_when_inactive() {
 #[tokio::test]
 async fn test_command_router_claude_starts_session_when_inactive() {
     use crate::claude::controller::ClaudeController;
-    use crate::command::router::{CommandRouter, CommandAction};
+    use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -573,7 +577,7 @@ async fn test_command_router_claude_starts_session_when_inactive() {
 #[tokio::test]
 async fn test_command_router_unknown_command_when_inactive() {
     use crate::claude::controller::ClaudeController;
-    use crate::command::router::{CommandRouter, CommandAction};
+    use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -588,7 +592,7 @@ async fn test_command_router_unknown_command_when_inactive() {
 #[tokio::test]
 async fn test_command_router_quit_when_inactive_returns_reply() {
     use crate::claude::controller::ClaudeController;
-    use crate::command::router::{CommandRouter, CommandAction};
+    use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -603,7 +607,7 @@ async fn test_command_router_quit_when_inactive_returns_reply() {
 #[tokio::test]
 async fn test_command_router_pwd_when_inactive() {
     use crate::claude::controller::ClaudeController;
-    use crate::command::router::{CommandRouter, CommandAction};
+    use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -618,7 +622,7 @@ async fn test_command_router_pwd_when_inactive() {
 #[tokio::test]
 async fn test_command_router_regular_text_without_session() {
     use crate::claude::controller::ClaudeController;
-    use crate::command::router::{CommandRouter, CommandAction};
+    use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 

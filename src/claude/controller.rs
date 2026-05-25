@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
 use crate::claude::mcp_server::McpContext;
-use crate::claude::protocol::{build_user_message, InputMessage, OutputEvent};
+use crate::claude::protocol::{
+    build_permission_allow, build_user_message, InputMessage, OutputEvent,
+};
 use crate::claude::session::ClaudeSession;
 use crate::config::model::ClaudeConfig;
 use crate::{t, t_fmt};
@@ -67,21 +69,18 @@ pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
 
 #[cfg(windows)]
 fn get_system_drive() -> Option<String> {
-    std::env::var("SystemRoot")
-        .ok()
-        .and_then(|root| {
-            let lower = root.to_lowercase();
-            // Extract drive letter like "c:" from "C:\Windows"
-            lower.get(..2).map(|s| s.to_string())
-        })
+    std::env::var("SystemRoot").ok().and_then(|root| {
+        let lower = root.to_lowercase();
+        // Extract drive letter like "c:" from "C:\Windows"
+        lower.get(..2).map(|s| s.to_string())
+    })
 }
 
 #[cfg(windows)]
 fn is_on_drive(path: &std::path::Path, drive: &str) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
     let drive_lower = drive.to_lowercase();
-    path_str.starts_with(&drive_lower)
-        || path_str.starts_with(&format!(r"\\?\{}", drive_lower))
+    path_str.starts_with(&drive_lower) || path_str.starts_with(&format!(r"\\?\{}", drive_lower))
 }
 
 #[derive(Debug, Clone)]
@@ -111,7 +110,6 @@ pub enum ControllerEvent {
     },
     Error(String),
     Done,
-    Dead,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +117,7 @@ pub struct QuestionItem {
     pub question: String,
     pub header: String,
     pub options: Vec<QuestionOption>,
+    #[allow(dead_code)]
     pub multi_select: bool,
 }
 
@@ -179,32 +178,35 @@ impl ClaudeController {
         self.stop_session().await?;
 
         let validated = ensure_under_home(&work_dir)?;
-        {
-            let mut wd = self.work_dir.write().await;
-            *wd = validated.clone();
-        }
 
-        let pending_resume = {
+        let resume_id = {
             let mut pending = self.pending_resume_session_id.write().await;
             pending.take()
         };
 
-        let resume_id = if let Some(id) = pending_resume {
-            Some(id)
-        } else {
-            let sid = self.claude_session_id.read().await;
-            sid.clone()
+        let mcp_ctx = {
+            let ctx = self.mcp_context.read().await;
+            ctx.clone()
         };
-
-        // Clear any stale claude_session_id so a new session gets a new ID
-        // unless we are explicitly resuming via pending_resume.
-        if resume_id.is_none() {
-            let mut sid = self.claude_session_id.write().await;
-            *sid = None;
-        }
-
         let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
-        let (session, claude_session_id) = ClaudeSession::spawn(validated.clone(), extra_args, &self.config, claude_tx, resume_id).await?;
+        let (mut session, claude_session_id) = ClaudeSession::spawn(
+            validated.clone(),
+            extra_args,
+            &self.config,
+            claude_tx,
+            resume_id,
+            mcp_ctx,
+        )
+        .await?;
+
+        // Brief delay to let the child stabilize; if it exits immediately (e.g. invalid --resume)
+        // we fail fast instead of pretending the session is active.
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        if !session.is_alive() {
+            return Err(anyhow::anyhow!(
+                "Claude process exited immediately after spawn; check stderr logs for details"
+            ));
+        }
 
         {
             let mut s = self.session.write().await;
@@ -213,6 +215,10 @@ impl ClaudeController {
         {
             let mut sid = self.claude_session_id.write().await;
             *sid = claude_session_id.clone();
+        }
+        {
+            let mut wd = self.work_dir.write().await;
+            *wd = validated.clone();
         }
         {
             let mut state = self.session_state.write().await;
@@ -253,15 +259,13 @@ impl ClaudeController {
             let _ = event_tx.send(ControllerEvent::Done);
 
             // Auto-cleanup: stdout closed means the child process exited
-            let was_active = {
+            {
                 let mut state = session_state.write().await;
-                let was = *state == SessionState::Active;
-                info!("SessionState: {:?} -> Inactive (event processor ended)", *state);
+                info!(
+                    "SessionState: {:?} -> Inactive (event processor ended)",
+                    *state
+                );
                 *state = SessionState::Inactive;
-                was
-            };
-            if was_active {
-                let _ = event_tx.send(ControllerEvent::Dead);
             }
             {
                 let mut s = session_arc.write().await;
@@ -316,10 +320,8 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        {
-            let mut sid = self.claude_session_id.write().await;
-            *sid = None;
-        }
+        // NOTE: we intentionally keep claude_session_id here so that a
+        // subsequent /claude can resume the same Claude session.
         Ok(())
     }
 
@@ -372,37 +374,16 @@ impl ClaudeController {
     pub async fn is_session_active(&self) -> bool {
         let state = self.session_state.read().await;
         let active = *state != SessionState::Inactive;
-        info!("is_session_active called, state={:?}, result={}", *state, active);
+        info!(
+            "is_session_active called, state={:?}, result={}",
+            *state, active
+        );
         active
-    }
-
-    #[cfg(test)]
-    pub async fn inject_dummy_session(&self) -> Result<()> {
-        let session = crate::claude::session::ClaudeSession::dummy_for_test().await?;
-        let mut s = self.session.write().await;
-        *s = Some(session);
-        let mut state = self.session_state.write().await;
-        *state = SessionState::Active;
-        Ok(())
     }
 
     pub async fn get_work_dir(&self) -> String {
         let wd = self.work_dir.read().await;
         wd.clone()
-    }
-
-    #[allow(dead_code)]
-    #[deprecated(note = "work_dir is immutable after init_work_dir / start_session")]
-    #[allow(dead_code)]
-    pub async fn set_work_dir(&self, dir: String) -> Result<()> {
-        let validated = ensure_under_home(&dir)?;
-        {
-            let mut wd = self.work_dir.write().await;
-            *wd = validated.clone();
-        }
-        // Restart session with new work dir
-        self.start_session(validated, vec![]).await?;
-        Ok(())
     }
 
     /// Clone the internal event receiver Arc so consumers can poll events
@@ -411,31 +392,12 @@ impl ClaudeController {
         self.event_rx.clone()
     }
 
-    pub fn get_show_thinking(&self) -> bool {
-        self.show_thinking.load(Ordering::Relaxed)
-    }
-
     pub fn set_show_thinking(&self, value: bool) {
         self.show_thinking.store(value, Ordering::Relaxed);
     }
 
-    pub async fn recv_event(&self) -> Option<ControllerEvent> {
-        let mut rx = self.event_rx.lock().await;
-        rx.recv().await
-    }
-
     pub async fn get_claude_session_id(&self) -> Option<String> {
         let sid = self.claude_session_id.read().await;
-        sid.clone()
-    }
-
-    pub async fn set_claude_session_id(&self, id: Option<String>) {
-        let mut sid = self.claude_session_id.write().await;
-        *sid = id;
-    }
-
-    pub async fn get_pending_resume_session_id(&self) -> Option<String> {
-        let sid = self.pending_resume_session_id.read().await;
         sid.clone()
     }
 
@@ -445,15 +407,15 @@ impl ClaudeController {
     }
 
     pub async fn set_mcp_context(&self, ctx: McpContext) {
-        let mut mc = self.mcp_context.write().await;
-        *mc = Some(ctx);
+        let mut c = self.mcp_context.write().await;
+        *c = Some(ctx);
     }
 
-    async fn process_claude_event(
+    pub(crate) async fn process_claude_event(
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
         pending_perm: &Arc<RwLock<Option<(String, String)>>>,
         _work_dir: &str,
-        _session_arc: &Arc<RwLock<Option<ClaudeSession>>>,
+        session_arc: &Arc<RwLock<Option<ClaudeSession>>>,
         event: OutputEvent,
         show_thinking: &Arc<AtomicBool>,
     ) {
@@ -479,7 +441,8 @@ impl ClaudeController {
                         }
                         crate::claude::protocol::ContentBlock::ToolUse { name, input } => {
                             let input_str = serde_json::to_string(input).unwrap_or_default();
-                            let _ = event_tx.send(ControllerEvent::ToolUse(name.clone(), input_str));
+                            let _ =
+                                event_tx.send(ControllerEvent::ToolUse(name.clone(), input_str));
                         }
                         crate::claude::protocol::ContentBlock::ToolResult { content, is_error } => {
                             let text = content.clone().unwrap_or_default();
@@ -488,14 +451,19 @@ impl ClaudeController {
                         crate::claude::protocol::ContentBlock::Image { source } => {
                             let text = format!(
                                 "[Image: {} {} ({} bytes)]",
-                                source.source_type, source.media_type, source.data.len()
+                                source.source_type,
+                                source.media_type,
+                                source.data.len()
                             );
                             let _ = event_tx.send(ControllerEvent::Text(text));
                         }
                     }
                 }
             }
-            OutputEvent::Result { result: _result, usage } => {
+            OutputEvent::Result {
+                result: _result,
+                usage,
+            } => {
                 // The result text is the complete assembled response, but we already
                 // streamed it via Assistant::Text blocks. Emitting it again here would
                 // duplicate the content in the accumulator, causing Feishu users to
@@ -515,19 +483,24 @@ impl ClaudeController {
 
                     let dispatched = if tool_name == "AskUserQuestion" {
                         if let Some(ref val) = input {
-                            if let Some(questions) = val.get("questions").and_then(|q| q.as_array()) {
+                            if let Some(questions) = val.get("questions").and_then(|q| q.as_array())
+                            {
                                 let parsed: Vec<QuestionItem> = questions
                                     .iter()
                                     .filter_map(|q| {
                                         let question = q.get("question")?.as_str()?.to_string();
                                         let header = q.get("header")?.as_str()?.to_string();
-                                        let multi_select = q.get("multi_select").and_then(|m| m.as_bool()).unwrap_or(false);
+                                        let multi_select = q
+                                            .get("multi_select")
+                                            .and_then(|m| m.as_bool())
+                                            .unwrap_or(false);
                                         let options = q.get("options")?.as_array()?;
                                         let parsed_options: Vec<QuestionOption> = options
                                             .iter()
                                             .filter_map(|o| {
                                                 let label = o.get("label")?.as_str()?.to_string();
-                                                let description = o.get("description")?.as_str()?.to_string();
+                                                let description =
+                                                    o.get("description")?.as_str()?.to_string();
                                                 Some(QuestionOption { label, description })
                                             })
                                             .collect();
@@ -555,11 +528,19 @@ impl ClaudeController {
                         }
                     } else if subtype == "confirm" {
                         if let Some(ref val) = input {
-                            let prompt = val.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let prompt = val
+                                .get("prompt")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let options: Vec<String> = val
                                 .get("options")
                                 .and_then(|o| o.as_array())
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             Some(ControllerEvent::ConfirmRequest {
                                 request_id: req_id.clone(),
@@ -571,11 +552,19 @@ impl ClaudeController {
                         }
                     } else if subtype == "select_option" {
                         if let Some(ref val) = input {
-                            let prompt = val.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let prompt = val
+                                .get("prompt")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let options: Vec<String> = val
                                 .get("options")
                                 .and_then(|o| o.as_array())
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             Some(ControllerEvent::SelectRequest {
                                 request_id: req_id.clone(),
@@ -586,6 +575,14 @@ impl ClaudeController {
                             None
                         }
                     } else {
+                        // Auto-approve MCP send_file tool — no user interaction needed
+                        if tool_name == "mcp__cc-gateway__send_file" {
+                            let mut s = session_arc.write().await;
+                            if let Some(ref mut session) = *s {
+                                let allow_msg = build_permission_allow(&req_id);
+                                let _ = session.send(allow_msg).await;
+                            }
+                        }
                         Some(ControllerEvent::PermissionRequest {
                             request_id: req_id.clone(),
                             tool_name: tool_name.clone(),
@@ -616,146 +613,5 @@ impl ClaudeController {
                 // Ignore user echo events
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_init_work_dir_sets_internal_state() {
-        let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config, false);
-        controller.init_work_dir("/test/path".to_string()).await;
-        assert_eq!(controller.get_work_dir().await, "/test/path");
-    }
-
-    #[test]
-    fn test_ensure_under_home_allows_home_subdir() {
-        let home = dirs::home_dir().unwrap();
-        let test_path = home.join("some_subdir");
-        let result = ensure_under_home(test_path.to_str().unwrap());
-        assert!(result.is_ok(), "Should allow path under home: {:?}", result.err());
-        let resolved = result.unwrap();
-        assert!(resolved.contains("some_subdir"));
-    }
-
-    #[test]
-    fn test_ensure_under_home_denies_outside_home() {
-        let result = ensure_under_home("/tmp");
-        assert!(result.is_err(), "Should deny path outside home");
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Access denied"), "Error should mention access denied: {}", err);
-        assert!(err.contains("outside home directory"), "Error should mention outside home: {}", err);
-    }
-
-    #[test]
-    fn test_ensure_under_home_denies_root() {
-        let result = ensure_under_home("/");
-        assert!(result.is_err(), "Should deny root directory");
-    }
-
-    #[tokio::test]
-    async fn test_start_session_outside_home_denied() {
-        let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config, false);
-        let result = controller.start_session("/tmp".to_string(), vec![]).await;
-        assert!(result.is_err(), "Should deny starting session outside home");
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Access denied"), "Error should mention access denied: {}", err);
-        assert!(err.contains("outside home directory"), "Error should mention outside home: {}", err);
-    }
-
-    #[tokio::test]
-    async fn test_set_work_dir_outside_home_denied() {
-        let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config, false);
-        let result = controller.set_work_dir("/tmp".to_string()).await;
-        assert!(result.is_err(), "Should deny changing work dir outside home");
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Access denied"), "Error should mention access denied: {}", err);
-        assert!(err.contains("outside home directory"), "Error should mention outside home: {}", err);
-    }
-
-    #[tokio::test]
-    async fn test_set_work_dir_under_home_allowed() {
-        let config = ClaudeConfig::default();
-        let controller = ClaudeController::new(config, false);
-        let home = dirs::home_dir().unwrap();
-        let test_dir = home.join("cc_gateway_test_nonexistent_12345");
-        let result = controller.set_work_dir(test_dir.to_string_lossy().to_string()).await;
-        // Validation should pass; start_session may fail due to missing Claude binary,
-        // but it must NOT fail due to home directory restriction.
-        if result.is_err() {
-            let err = result.unwrap_err().to_string();
-            assert!(
-                !err.contains("outside home directory"),
-                "Should not fail home check: {}",
-                err
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_process_claude_event_emits_tool_result() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let pending_perm = Arc::new(RwLock::new(None));
-        let session_arc = Arc::new(RwLock::new(None));
-
-        let event = OutputEvent::Assistant {
-            message: crate::claude::protocol::AssistantMessage {
-                role: "assistant".to_string(),
-                content: vec![
-                    crate::claude::protocol::ContentBlock::ToolResult {
-                        content: Some("hello output".to_string()),
-                        is_error: false,
-                    },
-                ],
-            },
-        };
-        ClaudeController::process_claude_event(
-            &tx,
-            &pending_perm,
-            "/tmp",
-            &session_arc,
-            event,
-            &Arc::new(AtomicBool::new(true)),
-        )
-        .await;
-
-        let received = rx.recv().await;
-        assert!(matches!(received, Some(ControllerEvent::ToolResult(content, false)) if content == "hello output"));
-    }
-
-    #[tokio::test]
-    async fn test_process_claude_event_emits_tool_error() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let pending_perm = Arc::new(RwLock::new(None));
-        let session_arc = Arc::new(RwLock::new(None));
-
-        let event = OutputEvent::Assistant {
-            message: crate::claude::protocol::AssistantMessage {
-                role: "assistant".to_string(),
-                content: vec![
-                    crate::claude::protocol::ContentBlock::ToolResult {
-                        content: Some("command failed".to_string()),
-                        is_error: true,
-                    },
-                ],
-            },
-        };
-        ClaudeController::process_claude_event(
-            &tx,
-            &pending_perm,
-            "/tmp",
-            &session_arc,
-            event,
-            &Arc::new(AtomicBool::new(true)),
-        )
-        .await;
-
-        let received = rx.recv().await;
-        assert!(matches!(received, Some(ControllerEvent::ToolResult(content, true)) if content == "command failed"));
     }
 }

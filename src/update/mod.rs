@@ -45,13 +45,14 @@ impl Ord for Version {
 pub struct GitHubRelease {
     pub tag_name: String,
     pub body: Option<String>,
-    pub html_url: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub html_url: Option<String>,
 }
 
 /// Parsed release info useful for the updater.
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
-    pub version: Version,
     pub tag_name: String,
     pub body: String,
     pub url: String,
@@ -60,13 +61,6 @@ pub struct ReleaseInfo {
 /// Parse a GitHub release JSON payload.
 pub fn parse_release_json(json: &str) -> Result<GitHubRelease> {
     serde_json::from_str(json).context("failed to parse GitHub release JSON")
-}
-
-/// Compare current and latest versions.
-pub fn needs_update(current: &str, latest: &str) -> Result<bool> {
-    let current = Version::parse(current)?;
-    let latest = Version::parse(latest)?;
-    Ok(latest > current)
 }
 
 /// Detect the platform name used in release asset filenames.
@@ -87,10 +81,15 @@ pub fn detect_platform() -> String {
     } else {
         "unknown"
     };
-    let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     format!("{}-{}{}", os, arch, ext)
 }
 
+/// Compare two version strings and return true if `latest` is newer than `current`.
 /// Build the download URL for a given release tag and platform.
 pub fn build_download_url(repo: &str, tag: &str, platform: &str) -> String {
     format!(
@@ -113,7 +112,10 @@ pub async fn fetch_latest_release(client: &reqwest::Client, repo: &str) -> Resul
         anyhow::bail!("GitHub API returned status: {}", resp.status());
     }
 
-    let json = resp.text().await.context("failed to read GitHub response")?;
+    let json = resp
+        .text()
+        .await
+        .context("failed to read GitHub response")?;
     parse_release_json(&json)
 }
 
@@ -135,7 +137,6 @@ pub async fn check_update(
     let url = build_download_url(repo, &release.tag_name, &platform);
 
     Ok(Some(ReleaseInfo {
-        version: latest,
         tag_name: release.tag_name,
         body: release.body.unwrap_or_default(),
         url,
@@ -199,7 +200,6 @@ pub async fn run(check_only: bool, force: bool) -> Result<()> {
                 let platform = detect_platform();
                 let url = build_download_url(repo, &release.tag_name, &platform);
                 ReleaseInfo {
-                    version: Version::parse(&release.tag_name)?,
                     tag_name: release.tag_name.clone(),
                     body: release.body.unwrap_or_default(),
                     url,
@@ -246,110 +246,4 @@ pub async fn run(check_only: bool, force: bool) -> Result<()> {
     crate::daemon::restart(None).await?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_version_parse_basic() {
-        let v = Version::parse("1.2.3").unwrap();
-        assert_eq!(v.major, 1);
-        assert_eq!(v.minor, 2);
-        assert_eq!(v.patch, 3);
-    }
-
-    #[test]
-    fn test_version_parse_with_v_prefix() {
-        let v = Version::parse("v2.0.0").unwrap();
-        assert_eq!(v.major, 2);
-        assert_eq!(v.minor, 0);
-        assert_eq!(v.patch, 0);
-    }
-
-    #[test]
-    fn test_version_parse_invalid() {
-        assert!(Version::parse("1.2").is_err());
-        assert!(Version::parse("abc").is_err());
-        assert!(Version::parse("").is_err());
-    }
-
-    #[test]
-    fn test_version_ordering() {
-        assert!(Version::parse("1.0.0").unwrap() < Version::parse("1.0.1").unwrap());
-        assert!(Version::parse("1.0.0").unwrap() < Version::parse("1.1.0").unwrap());
-        assert!(Version::parse("1.0.0").unwrap() < Version::parse("2.0.0").unwrap());
-        assert!(Version::parse("1.0.10").unwrap() > Version::parse("1.0.2").unwrap());
-        assert!(Version::parse("1.0.0").unwrap() == Version::parse("1.0.0").unwrap());
-    }
-
-    #[test]
-    fn test_needs_update() {
-        assert!(needs_update("1.0.0", "1.0.1").unwrap());
-        assert!(needs_update("1.0.0", "1.1.0").unwrap());
-        assert!(needs_update("1.0.0", "2.0.0").unwrap());
-        assert!(!needs_update("1.0.0", "1.0.0").unwrap());
-        assert!(!needs_update("1.0.1", "1.0.0").unwrap());
-        assert!(!needs_update("1.0.0", "v1.0.0").unwrap());
-    }
-
-    #[test]
-    fn test_parse_release_json() {
-        let json = serde_json::json!({
-            "tag_name": "v1.1.0",
-            "body": "## What is new\n- feature A\n- bugfix B",
-            "html_url": "https://github.com/caixy-plus/cc-gateway/releases/tag/v1.1.0"
-        }).to_string();
-        let release = parse_release_json(&json).unwrap();
-        assert_eq!(release.tag_name, "v1.1.0");
-        assert_eq!(release.body.as_deref().unwrap(), "## What is new\n- feature A\n- bugfix B");
-        assert_eq!(release.html_url, "https://github.com/caixy-plus/cc-gateway/releases/tag/v1.1.0");
-    }
-
-    #[test]
-    fn test_detect_platform_not_empty() {
-        let platform = detect_platform();
-        assert!(!platform.is_empty());
-        assert!(!platform.contains("unknown"));
-    }
-
-    #[test]
-    fn test_build_download_url() {
-        let url = build_download_url("caixy-plus/cc-gateway", "v1.1.0", "darwin-arm64");
-        assert_eq!(
-            url,
-            "https://github.com/caixy-plus/cc-gateway/releases/download/v1.1.0/cc-gateway-darwin-arm64"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_download_and_replace() {
-        // Start a tiny HTTP server that serves a fixed binary payload.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nABCD";
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
-            }
-        });
-
-        let client = reqwest::Client::new();
-        let url = format!("http://{}/download", addr);
-        let dir = std::env::temp_dir();
-        let target_path = dir.join("cc-gateway-test-update-bin");
-        let _ = std::fs::remove_file(&target_path);
-
-        download_and_replace(&client, &url, &target_path)
-            .await
-            .unwrap();
-
-        let content = std::fs::read(&target_path).unwrap();
-        assert_eq!(content, b"ABCD");
-
-        let _ = std::fs::remove_file(&target_path);
-    }
 }

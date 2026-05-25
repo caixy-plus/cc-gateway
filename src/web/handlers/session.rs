@@ -1,20 +1,24 @@
 use axum::{
-    extract::{Json, Path, State},
-    response::sse::{Event as SseEvent, Sse},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
+    response::sse::{Event as SseEvent, Sse},
 };
+use chrono::FixedOffset;
 use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tracing::info;
 
-use crate::claude::controller::{ClaudeController, ControllerEvent};
-use crate::claude::event_formatter::EventAccumulator;
+use crate::claude::controller::ClaudeController;
+use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
+use crate::command::{CommandAction, CommandRouter};
 use crate::config::model::ClaudeConfig;
-use crate::session::manager::GLOBAL_SESSIONS;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::web::state::{broadcast_event, EVENT_BUS};
 
 #[derive(Clone)]
@@ -24,13 +28,17 @@ pub struct AppState {
     pub default_dir: String,
 }
 
-pub async fn handle_events(Path(session_id): Path<String>) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+async fn ensure_webui_channel(default_dir: &str) -> anyhow::Result<String> {
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", default_dir)
+        .await?;
+    Ok(runtime.channel_session.id.clone())
+}
+
+pub async fn handle_events() -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let rx = EVENT_BUS.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(move |result| {
+    let stream = BroadcastStream::new(rx).filter_map(|result| {
         if let Ok(event) = result {
-            if event.session_id != session_id {
-                return None;
-            }
             let json = match serde_json::to_string(&event) {
                 Ok(s) => s,
                 Err(_) => return None,
@@ -47,34 +55,98 @@ pub async fn handle_events(Path(session_id): Path<String>) -> Sse<impl Stream<It
     )
 }
 
-pub async fn handle_list_sessions() -> Json<serde_json::Value> {
-    let sessions = GLOBAL_SESSIONS.list();
+#[derive(Deserialize)]
+pub struct ListSessionsQuery {
+    pub(crate) source: Option<String>,
+}
+
+pub async fn handle_list_sessions(
+    Query(query): Query<ListSessionsQuery>,
+) -> Json<serde_json::Value> {
+    let sessions = GLOBAL_CHANNEL_SESSIONS.list_claude_sessions();
+    let channels: HashMap<String, crate::session::channel_model::ChannelSession> =
+        GLOBAL_CHANNEL_SESSIONS
+            .list_channels()
+            .into_iter()
+            .map(|c| (c.id.clone(), c))
+            .collect();
+
+    let source_filter = query.source.unwrap_or_else(|| "webui".to_string());
+
+    let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
+
+    let mapped: Vec<serde_json::Value> = sessions
+        .into_iter()
+        .filter(|s| {
+            if source_filter == "all" {
+                return true;
+            }
+            channels.get(&s.channel_session_id)
+                .map(|c| c.source.to_string().eq_ignore_ascii_case(&source_filter))
+                .unwrap_or(false)
+        })
+        .map(|s| {
+            let channel = channels.get(&s.channel_session_id);
+            let created_at_local = s.created_at.with_timezone(&beijing_offset);
+            let stopped_at_local = s.stopped_at.map(|t| t.with_timezone(&beijing_offset));
+            let updated_at_local = s.updated_at.map(|t| t.with_timezone(&beijing_offset));
+            serde_json::json!({
+                "id": s.id,
+                "title": s.title,
+                "source": channel.map(|c| c.source.to_string()).unwrap_or_else(|| "webui".to_string()),
+                "platform": channel.map(|c| c.platform.clone()).unwrap_or_else(|| "webui".to_string()),
+                "chat_id": s.channel_session_id,
+                "work_dir": channel.map(|c| c.work_dir.clone()).unwrap_or_else(|| s.work_dir.clone()),
+                "active": s.active,
+                "claude_session_id": s.claude_session_id,
+                "created_at": created_at_local.to_rfc3339(),
+                "stopped_at": stopped_at_local.map(|t| t.to_rfc3339()),
+                "updated_at": updated_at_local.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+
     Json(serde_json::json!({
-        "sessions": sessions
+        "sessions": mapped
     }))
 }
 
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {
-    title: Option<String>,
-    work_dir: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) work_dir: Option<String>,
 }
 
 pub async fn handle_create_session(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> (StatusCode, String) {
+    let channel_id = match ensure_webui_channel(&state.default_dir).await {
+        Ok(id) => id,
+        Err(e) => {
+            let body = json!({ "error": format!("Failed to ensure WebUI channel: {}", e) });
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
+        }
+    };
     let title = req.title.unwrap_or_else(|| "WebUI Session".to_string());
     let work_dir = req.work_dir.unwrap_or_else(|| state.default_dir.clone());
     let expanded = shellexpand::tilde(&work_dir).to_string();
 
-    match GLOBAL_SESSIONS
-        .create_webui_session(&title, &expanded, state.claude_config, state.show_thinking)
-        .await
-    {
-        Ok(runtime) => {
+    match GLOBAL_CHANNEL_SESSIONS.create_claude_session_only(&channel_id, &title, &expanded) {
+        Ok(session) => {
+            let channel = GLOBAL_CHANNEL_SESSIONS.get_channel(&channel_id);
             let body = json!({
-                "session": runtime.session
+                "session": {
+                    "id": session.id,
+                    "title": session.title,
+                    "source": channel.as_ref().map(|c| c.source.clone()).unwrap_or(crate::session::channel_model::SessionSource::WebUI),
+                    "platform": channel.as_ref().map(|c| c.platform.clone()).unwrap_or_else(|| "webui".to_string()),
+                    "chat_id": session.channel_session_id,
+                    "work_dir": session.work_dir,
+                    "active": session.active,
+                    "claude_session_id": session.claude_session_id,
+                    "created_at": session.created_at,
+                }
             });
             (StatusCode::OK, body.to_string())
         }
@@ -85,9 +157,78 @@ pub async fn handle_create_session(
     }
 }
 
+pub async fn handle_start_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> (StatusCode, String) {
+    let channel_id = match ensure_webui_channel(&state.default_dir).await {
+        Ok(id) => id,
+        Err(e) => {
+            let body = json!({ "error": format!("Failed to ensure WebUI channel: {}", e) });
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
+        }
+    };
+
+    // If this session is already the active one, nothing to do
+    if let Some(active) = GLOBAL_CHANNEL_SESSIONS.get_active_claude_session(&channel_id) {
+        if active.id == session_id {
+            let body = json!({ "status": "already_active" });
+            return (StatusCode::OK, body.to_string());
+        }
+    }
+
+    // Stop any existing session + poller before starting a new one
+    let _ = GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel_id)
+        .await;
+
+    let claude_config = state.claude_config.clone();
+    match GLOBAL_CHANNEL_SESSIONS
+        .resume_claude_session(&session_id, claude_config, state.show_thinking)
+        .await
+    {
+        Ok((session, controller)) => {
+            let router =
+                std::sync::Arc::new(CommandRouter::new(controller.clone(), &state.default_dir));
+            let active = crate::session::channel_manager::ActiveClaudeRuntime {
+                claude_session: session.clone(),
+                controller: controller.clone(),
+                router,
+            };
+            GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&channel_id, Some(active));
+
+            // Start long-running poller for this session
+            let abort_handle =
+                spawn_webui_poller_task(channel_id.clone(), session.id.clone(), controller.clone());
+            GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(&channel_id, Some(abort_handle));
+
+            let channel = GLOBAL_CHANNEL_SESSIONS.get_channel(&channel_id);
+            let body = json!({
+                "status": "started",
+                "session": {
+                    "id": session.id,
+                    "title": session.title,
+                    "source": channel.as_ref().map(|c| c.source.clone()).unwrap_or(crate::session::channel_model::SessionSource::WebUI),
+                    "platform": channel.as_ref().map(|c| c.platform.clone()).unwrap_or_else(|| "webui".to_string()),
+                    "chat_id": session.channel_session_id,
+                    "work_dir": session.work_dir,
+                    "active": session.active,
+                    "claude_session_id": session.claude_session_id,
+                    "created_at": session.created_at,
+                }
+            });
+            (StatusCode::OK, body.to_string())
+        }
+        Err(e) => {
+            let body = json!({ "error": format!("Failed to start session: {}", e) });
+            (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
-    message: String,
+    pub(crate) message: String,
 }
 
 pub async fn handle_send_message(
@@ -95,86 +236,246 @@ pub async fn handle_send_message(
     Path(session_id): Path<String>,
     Json(req): Json<SendMessageRequest>,
 ) -> (StatusCode, String) {
-    let runtime = match GLOBAL_SESSIONS.get_webui_runtime(&session_id) {
-        Some(r) => r,
-        None => {
-            match GLOBAL_SESSIONS
-                .get_or_create_webui_runtime(&session_id, state.claude_config, state.show_thinking)
-                .await
-            {
-                Some(r) => r,
-                None => {
-                    let body = json!({ "error": "Session not found" });
-                    return (StatusCode::NOT_FOUND, body.to_string());
-                }
-            }
+    let channel_id = match ensure_webui_channel(&state.default_dir).await {
+        Ok(id) => id,
+        Err(e) => {
+            let body = json!({ "error": format!("Failed to ensure WebUI channel: {}", e) });
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
-
     let message = req.message.trim().to_string();
     if message.is_empty() {
-        let body = json!({ "error": "Empty message" });
+        let body = json!({ "error": crate::t!("webui.empty_message") });
         return (StatusCode::BAD_REQUEST, body.to_string());
     }
 
-    let response = runtime.router.handle(&message).await;
+    // Check if the requested session is the currently active one
+    let active_session = GLOBAL_CHANNEL_SESSIONS.get_active_claude_session(&channel_id);
+    let needs_switch = match &active_session {
+        Some(s) if s.id == session_id => false,
+        _ => true,
+    };
 
-    match response {
-        Some(text) => {
-            // Immediate response from builtin command
-            // Sync session state for /claude and /cd commands
-            if message == "/claude" || message.starts_with("/claude ") {
-                GLOBAL_SESSIONS.update_active(&session_id, true);
-                let ctrl = runtime.controller.lock().await;
-                let wd = ctrl.get_work_dir().await;
-                let csid = ctrl.get_claude_session_id().await;
-                drop(ctrl);
-                if !wd.is_empty() {
-                    GLOBAL_SESSIONS.update_work_dir(&session_id, &wd);
+    if needs_switch {
+        // Stop existing session + poller before switching
+        let _ = GLOBAL_CHANNEL_SESSIONS
+            .stop_channel_session(&channel_id)
+            .await;
+
+        let claude_config = state.claude_config.clone();
+        // Try to resume the requested session
+        match GLOBAL_CHANNEL_SESSIONS
+            .resume_claude_session(&session_id, claude_config.clone(), state.show_thinking)
+            .await
+        {
+            Ok((session, controller)) => {
+                let router =
+                    std::sync::Arc::new(CommandRouter::new(controller.clone(), &state.default_dir));
+                let active = crate::session::channel_manager::ActiveClaudeRuntime {
+                    claude_session: session.clone(),
+                    controller: controller.clone(),
+                    router,
+                };
+                GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&channel_id, Some(active));
+
+                // Start long-running poller for the resumed session
+                let abort_handle = spawn_webui_poller_task(
+                    channel_id.clone(),
+                    session.id.clone(),
+                    controller.clone(),
+                );
+                GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(&channel_id, Some(abort_handle));
+            }
+            Err(e) => {
+                let body = json!({ "error": format!("Session not active and could not be resumed: {}", e) });
+                return (StatusCode::NOT_FOUND, body.to_string());
+            }
+        }
+    }
+
+    let runtime = match GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+        Some(r) => r,
+        None => {
+            let body = json!({ "error": crate::t!("webui.runtime_not_found") });
+            return (StatusCode::NOT_FOUND, body.to_string());
+        }
+    };
+
+    let mut active = match runtime.active_claude {
+        Some(a) => a,
+        None => {
+            let body = json!({ "error": crate::t!("webui.no_active_session") });
+            return (StatusCode::NOT_FOUND, body.to_string());
+        }
+    };
+
+    // Guard: if the controller's session died since we last checked, try to restart it.
+    {
+        let ctrl = active.controller.lock().await;
+        if !ctrl.is_session_active().await {
+            drop(ctrl);
+            // Stop the dead session + poller first
+            let _ = GLOBAL_CHANNEL_SESSIONS
+                .stop_channel_session(&channel_id)
+                .await;
+
+            let claude_config = state.claude_config.clone();
+            match GLOBAL_CHANNEL_SESSIONS
+                .resume_claude_session(&session_id, claude_config, state.show_thinking)
+                .await
+            {
+                Ok((session, controller)) => {
+                    let router = std::sync::Arc::new(CommandRouter::new(
+                        controller.clone(),
+                        &state.default_dir,
+                    ));
+                    let new_active = crate::session::channel_manager::ActiveClaudeRuntime {
+                        claude_session: session.clone(),
+                        controller: controller.clone(),
+                        router,
+                    };
+                    GLOBAL_CHANNEL_SESSIONS
+                        .set_webui_active_claude(&channel_id, Some(new_active.clone()));
+                    active = new_active;
+
+                    // Start long-running poller for the restarted session
+                    let abort_handle = spawn_webui_poller_task(
+                        channel_id.clone(),
+                        session.id.clone(),
+                        controller.clone(),
+                    );
+                    GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(&channel_id, Some(abort_handle));
                 }
-                if let Some(id) = csid {
-                    GLOBAL_SESSIONS.update_claude_session_id(&session_id, Some(&id));
-                }
-            } else if message.starts_with("/cd ") || message == "/cd_default" {
-                let ctrl = runtime.controller.lock().await;
-                let wd = ctrl.get_work_dir().await;
-                drop(ctrl);
-                if !wd.is_empty() {
-                    GLOBAL_SESSIONS.update_work_dir(&session_id, &wd);
+                Err(e) => {
+                    let body = json!({ "error": format!("Session died and could not be restarted: {}", e) });
+                    return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
                 }
             }
-            broadcast_event(&session_id, "webui", &session_id, "system", &text);
-            let body = json!({ "response": text });
+        }
+    }
+
+    ensure_webui_poller_task(&channel_id, &session_id, active.controller.clone()).await;
+
+    let action = active.router.route(&message).await;
+
+    match action {
+        CommandAction::ForwardToClaude(text) => {
+            let response = active
+                .router
+                .execute(CommandAction::ForwardToClaude(text.clone()))
+                .await;
+            if let Some(reply) = response {
+                broadcast_event(&session_id, "webui", &session_id, "system", &reply);
+                let body = json!({ "response": reply });
+                return (StatusCode::OK, body.to_string());
+            }
+            broadcast_event(&session_id, "webui", &session_id, "user", &text);
+            GLOBAL_CHANNEL_SESSIONS.touch_claude_session(&session_id);
+            // Poller is already running (started in handle_start_session or resumed above)
+            let body = json!({ "status": "forwarded" });
             (StatusCode::OK, body.to_string())
         }
-        None => {
-            // Message forwarded to Claude; record user message first, then spawn poller
-            broadcast_event(&session_id, "webui", &session_id, "user", &message);
-            tokio::spawn(poll_claude_and_broadcast(
-                session_id.clone(),
-                runtime.controller.clone(),
-            ));
-            let body = json!({ "status": "forwarded" });
+        CommandAction::StopSession => {
+            // Gracefully stop controller first, then mark session inactive.
+            {
+                let ctrl = active.controller.lock().await;
+                let _ = ctrl.stop_session().await;
+            }
+            match GLOBAL_CHANNEL_SESSIONS
+                .stop_channel_session(&channel_id)
+                .await
+            {
+                Ok(()) => {
+                    broadcast_event(
+                        &session_id,
+                        "webui",
+                        &session_id,
+                        "system",
+                        crate::t!("builtin.session_stopped"),
+                    );
+                    let body = json!({ "status": "stopped", "session_id": session_id });
+                    (StatusCode::OK, body.to_string())
+                }
+                Err(e) => {
+                    let body =
+                        json!({ "error": crate::t_fmt!("webui.failed_stop_session", ERR = e) });
+                    (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
+                }
+            }
+        }
+        CommandAction::ChangeDir(_) | CommandAction::ChangeDirDefault => {
+            let response = active.router.execute(action).await;
+            if let Some(text) = response {
+                let ctrl = active.controller.lock().await;
+                let wd = ctrl.get_work_dir().await;
+                drop(ctrl);
+                if !wd.is_empty() {
+                    let _ = GLOBAL_CHANNEL_SESSIONS
+                        .switch_work_dir(&channel_id, PathBuf::from(wd))
+                        .await;
+                }
+                broadcast_event(&session_id, "webui", &session_id, "system", &text);
+                let body = json!({ "response": text });
+                return (StatusCode::OK, body.to_string());
+            }
+            let body = json!({ "response": "" });
+            (StatusCode::OK, body.to_string())
+        }
+        _ => {
+            let response = active.router.execute(action).await;
+            if let Some(text) = response {
+                broadcast_event(&session_id, "webui", &session_id, "system", &text);
+                let body = json!({ "response": text });
+                return (StatusCode::OK, body.to_string());
+            }
+            let body = json!({ "response": "" });
             (StatusCode::OK, body.to_string())
         }
     }
 }
 
+async fn ensure_webui_poller_task(
+    channel_id: &str,
+    session_id: &str,
+    controller: std::sync::Arc<Mutex<ClaudeController>>,
+) {
+    if GLOBAL_CHANNEL_SESSIONS
+        .has_webui_poll_handle(channel_id)
+        .await
+    {
+        return;
+    }
+    let abort_handle =
+        spawn_webui_poller_task(channel_id.to_string(), session_id.to_string(), controller);
+    GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(channel_id, Some(abort_handle));
+}
+
 pub async fn handle_stop_session(Path(session_id): Path<String>) -> (StatusCode, String) {
-    let runtime = match GLOBAL_SESSIONS.get_webui_runtime(&session_id) {
-        Some(r) => r,
+    let channel_id = match GLOBAL_CHANNEL_SESSIONS
+        .get_claude_session(&session_id)
+        .map(|s| s.channel_session_id.clone())
+    {
+        Some(id) => id,
         None => {
-            let body = json!({ "error": "Session not found" });
+            let body = json!({ "error": crate::t!("webui.session_not_found") });
             return (StatusCode::NOT_FOUND, body.to_string());
         }
     };
 
-    let ctrl = runtime.controller.lock().await;
-    match ctrl.stop_session().await {
+    // Gracefully stop controller first
+    if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+        if let Some(ref active) = runtime.active_claude {
+            let ctrl = active.controller.lock().await;
+            let _ = ctrl.stop_session().await;
+        }
+    }
+
+    match GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel_id)
+        .await
+    {
         Ok(()) => {
-            drop(ctrl);
-            GLOBAL_SESSIONS.update_active(&session_id, false);
-            let body = json!({ "status": "stopped" });
+            let body = json!({ "status": "stopped", "session_id": session_id });
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
@@ -190,12 +491,18 @@ pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, 
     let history_dir = match dirs::home_dir() {
         Some(h) => h.join(".cc-gateway").join("history"),
         None => {
-            let body = json!({ "error": "Could not determine home directory" });
+            let body = json!({ "error": crate::t!("webui.home_dir_error") });
             return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
 
-    let file_path = history_dir.join(format!("{}.jsonl", session_id));
+    // Use claude_session_id if available, otherwise fall back to session_id
+    let file_id = GLOBAL_CHANNEL_SESSIONS
+        .get_claude_session(&session_id)
+        .and_then(|s| s.claude_session_id)
+        .unwrap_or(session_id);
+
+    let file_path = history_dir.join(format!("{}.jsonl", file_id));
     if !file_path.exists() {
         let body = json!({ "history": [] });
         return (StatusCode::OK, body.to_string());
@@ -223,13 +530,28 @@ pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, 
 }
 
 pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCode, String) {
-    // Stop controller if still active
-    if let Some(runtime) = GLOBAL_SESSIONS.get_webui_runtime(&session_id) {
-        let ctrl = runtime.controller.lock().await;
-        let _ = ctrl.stop_session().await;
+    let channel_id = GLOBAL_CHANNEL_SESSIONS
+        .get_claude_session(&session_id)
+        .map(|s| s.channel_session_id.clone());
+
+    // Stop controller if this session is active
+    if let Some(ref cid) = channel_id {
+        if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(cid) {
+            if let Some(ref active) = runtime.active_claude {
+                if active.claude_session.id == session_id {
+                    let _ = GLOBAL_CHANNEL_SESSIONS.stop_channel_session(cid).await;
+                }
+            }
+        }
     }
 
-    GLOBAL_SESSIONS.remove(&session_id);
+    // Get claude_session_id BEFORE removing the session so we can delete the correct history file.
+    let file_id = GLOBAL_CHANNEL_SESSIONS
+        .get_claude_session(&session_id)
+        .and_then(|s| s.claude_session_id)
+        .unwrap_or_else(|| session_id.clone());
+
+    GLOBAL_CHANNEL_SESSIONS.remove_claude_session(&session_id);
 
     // Delete history file
     let history_dir = match dirs::home_dir() {
@@ -239,7 +561,8 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
             return (StatusCode::OK, body.to_string());
         }
     };
-    let file_path = history_dir.join(format!("{}.jsonl", session_id));
+
+    let file_path = history_dir.join(format!("{}.jsonl", file_id));
     if file_path.exists() {
         let _ = std::fs::remove_file(&file_path);
     }
@@ -248,77 +571,140 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
     (StatusCode::OK, body.to_string())
 }
 
-async fn poll_claude_and_broadcast(
+// ---------------------------------------------------------------------------
+// Claude event poller for WebUI
+// ---------------------------------------------------------------------------
+
+struct WebUIEventSink {
+    session_id: String,
+}
+
+#[async_trait::async_trait]
+impl EventPollSink for WebUIEventSink {
+    async fn flush(&mut self, text: &str, _is_done: bool) -> anyhow::Result<()> {
+        broadcast_event(
+            &self.session_id,
+            "webui",
+            &self.session_id,
+            "assistant",
+            text,
+        );
+        Ok(())
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        request_id: &str,
+        tool_name: &str,
+        _input: Option<&serde_json::Value>,
+    ) -> anyhow::Result<()> {
+        let card = crate::t_fmt!(
+            "webui.permission_request",
+            NAME = tool_name,
+            ID = request_id
+        );
+        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &card);
+        Ok(())
+    }
+
+    async fn on_confirm_request(
+        &mut self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> anyhow::Result<()> {
+        let text = crate::t_fmt!(
+            "webui.confirm_request",
+            PROMPT = prompt,
+            ID = request_id,
+            OPTIONS = format!("{:?}", options)
+        );
+        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &text);
+        Ok(())
+    }
+
+    async fn on_select_request(
+        &mut self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> anyhow::Result<()> {
+        let text = crate::t_fmt!(
+            "webui.select_request",
+            PROMPT = prompt,
+            ID = request_id,
+            OPTIONS = format!("{:?}", options)
+        );
+        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &text);
+        Ok(())
+    }
+
+    async fn on_question_request(
+        &mut self,
+        request_id: &str,
+        questions: &[crate::claude::controller::QuestionItem],
+    ) -> anyhow::Result<()> {
+        let mut text = crate::t_fmt!("webui.questions_title", ID = request_id);
+        for q in questions {
+            text.push_str(&crate::t_fmt!(
+                "webui.question_item",
+                HEADER = q.header,
+                QUESTION = q.question
+            ));
+            for opt in &q.options {
+                text.push_str(&crate::t_fmt!(
+                    "webui.question_option",
+                    LABEL = opt.label,
+                    DESCRIPTION = opt.description
+                ));
+            }
+        }
+        text.push('\n');
+        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &text);
+        Ok(())
+    }
+}
+
+/// Spawn a long-running poller task for a WebUI session.
+/// The task loops as long as the Claude session remains active,
+/// handling multiple user messages without re-spawning.
+fn spawn_webui_poller_task(
+    channel_id: String,
     session_id: String,
     controller: std::sync::Arc<Mutex<ClaudeController>>,
-) {
-    let event_rx = {
-        let ctrl = controller.lock().await;
-        ctrl.event_rx_clone()
-    };
-
-    let mut accumulator = EventAccumulator::new();
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(300);
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut first_text_sent = false;
-
-    info!("[WebUI] Session {} poller started", session_id);
-
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-
-        let event_fut = async {
-            let mut rx = event_rx.lock().await;
-            rx.recv().await
-        };
-        tokio::pin!(event_fut);
-
-        tokio::select! {
-            _ = interval.tick() => {
-                let partial = accumulator.take_output();
-                if !partial.trim().is_empty() {
-                    broadcast_event(&session_id, "webui", &session_id, "assistant", &partial);
+) -> tokio::task::AbortHandle {
+    let handle = tokio::spawn(async move {
+        info!("[WebUI] Poller task started for session {}", session_id);
+        loop {
+            let poller = {
+                let ctrl = controller.lock().await;
+                if !ctrl.is_session_active().await {
+                    info!(
+                        "[WebUI] Session {} no longer active, poller exiting",
+                        session_id
+                    );
+                    break;
                 }
+                ClaudeEventPoller::from_controller(&*ctrl)
+            };
+
+            let mut sink = WebUIEventSink {
+                session_id: session_id.clone(),
+            };
+            if let Err(e) = poller.run(&mut sink).await {
+                tracing::warn!("[WebUI] Poller error for session {}: {}", session_id, e);
             }
-            event_res = tokio::time::timeout(remaining, event_fut) => {
-                match event_res {
-                    Ok(Some(event)) => {
-                        if let ControllerEvent::PermissionRequest { request_id, tool_name, .. } = &event {
-                            let card = format!("Permission request: `{}`\nID: `{}`", tool_name, request_id);
-                            broadcast_event(&session_id, "webui", &session_id, "system", &card);
-                            continue;
-                        }
-                        let is_text = matches!(event, ControllerEvent::Text(_));
-                        let is_done = accumulator.process_event(&event);
-                        let should_flush = if !first_text_sent {
-                            is_text
-                        } else {
-                            accumulator.peek_output().len() >= 300
-                        };
-                        if is_text && should_flush {
-                            first_text_sent = true;
-                            let partial = accumulator.take_output();
-                            if !partial.trim().is_empty() {
-                                broadcast_event(&session_id, "webui", &session_id, "assistant", &partial);
-                            }
-                        }
-                        if is_done {
-                            break;
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
+
+            // After Done, check if session is still active (next message may arrive)
+            let still_active = {
+                let ctrl = controller.lock().await;
+                ctrl.is_session_active().await
+            };
+            if !still_active {
+                break;
             }
         }
-    }
-
-    let reply = accumulator.take_output();
-    if !reply.trim().is_empty() {
-        broadcast_event(&session_id, "webui", &session_id, "assistant", reply.trim());
-    }
+        info!("[WebUI] Poller task for channel {} ended", channel_id);
+    });
+    handle.abort_handle()
 }

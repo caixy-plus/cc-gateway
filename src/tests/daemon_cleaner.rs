@@ -97,7 +97,11 @@ fn test_clean_excess_sessions_real() {
             before_total += crate::db::load_claude_sessions_by_channel_id(&ch.id).len();
         }
     }
-    println!("Before: {} non-TUI sessions across {} channels", before_total, before_channels.len());
+    println!(
+        "Before: {} non-TUI sessions across {} channels",
+        before_total,
+        before_channels.len()
+    );
 
     let removed = clean_excess_sessions();
     println!("Removed: {} excess sessions", removed);
@@ -122,7 +126,10 @@ fn test_clean_tui_sessions_real() {
     println!("TUI running: {}", tui_running);
 
     let removed = clean_tui_sessions();
-    println!("Removed: {} TUI sessions (channels + claude_sessions)", removed);
+    println!(
+        "Removed: {} TUI sessions (channels + claude_sessions)",
+        removed
+    );
 }
 
 /// Run media cleanup on real media dir.
