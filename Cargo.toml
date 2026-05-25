@@ -1,6 +1,6 @@
 [package]
 name = "cc-gateway"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 authors = ["caixinyun"]
 description = "Gateway for controlling Claude Code via Feishu/Lark, Telegram, and CLI"
