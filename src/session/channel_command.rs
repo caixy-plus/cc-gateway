@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::claude::mcp_server::McpContext;
 use crate::command::router::CommandAction;
-use crate::config::model::ClaudeConfig;
+use crate::config::model::{AgentConfig, AgentProvider, AgentSettings};
 use crate::session::channel_manager::{ActiveClaudeRuntime, GLOBAL_CHANNEL_SESSIONS};
 use crate::session::channel_model::ClaudeSession;
 use crate::{t, t_fmt};
@@ -85,15 +85,19 @@ pub(crate) enum ChatCommandOutcome {
 
 pub(crate) struct ChatCommandExecutor {
     default_dir: String,
-    claude_config: ClaudeConfig,
+    claude_config: AgentSettings,
     show_thinking: bool,
 }
 
 impl ChatCommandExecutor {
-    pub(crate) fn new(default_dir: &str, claude_config: ClaudeConfig, show_thinking: bool) -> Self {
+    pub(crate) fn new<C: Into<AgentSettings>>(
+        default_dir: &str,
+        claude_config: C,
+        show_thinking: bool,
+    ) -> Self {
         Self {
             default_dir: default_dir.to_string(),
-            claude_config,
+            claude_config: claude_config.into(),
             show_thinking,
         }
     }
@@ -193,7 +197,11 @@ impl ChatCommandExecutor {
                     ))),
                 }
             }
-            CommandAction::StartSession { work_dir, args } => {
+            CommandAction::StartSession {
+                work_dir,
+                provider,
+                args,
+            } => {
                 let effective_dir = work_dir
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string())
@@ -208,7 +216,7 @@ impl ChatCommandExecutor {
                         &context.channel_id,
                         &context.title,
                         &self.default_dir,
-                        self.claude_config.clone(),
+                        self.config_for_provider(provider),
                         self.show_thinking,
                         args,
                         None,
@@ -312,5 +320,9 @@ impl ChatCommandExecutor {
             message: t_fmt!("builtin.dir_changed", PATH = work_dir),
             work_dir,
         })
+    }
+
+    fn config_for_provider(&self, provider: Option<AgentProvider>) -> AgentConfig {
+        self.claude_config.config_for_provider(provider)
     }
 }

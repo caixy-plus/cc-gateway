@@ -24,6 +24,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
         "effective": {
             "show_thinking": state.show_thinking,
             "default_dir": state.default_dir,
+            "agent_config": state.claude_config,
             "claude_config": state.claude_config,
         }
     }))
@@ -61,6 +62,11 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
     if let Some(v) = body.get("claude") {
         if let Ok(c) = serde_json::from_value(v.clone()) {
             config.claude = c;
+        }
+    }
+    if let Some(v) = body.get("agent") {
+        if let Ok(c) = serde_json::from_value(v.clone()) {
+            config.agent = Some(c);
         }
     }
     if let Some(v) = body.get("feishu") {

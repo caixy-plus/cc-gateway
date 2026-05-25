@@ -78,7 +78,7 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
     let work_dir = env.home().join("webui-project");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        claude_config: env.fake_claude_config().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
     };
@@ -147,7 +147,7 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
     let work_dir = env.home().join("webui-active-no-poller");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        claude_config: env.fake_claude_config().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
     };
@@ -202,7 +202,7 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
     let work_dir = env.home().join("webui-empty-assistant");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        claude_config: env.fake_claude_config().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
     };
@@ -258,7 +258,7 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
     let work_dir = env.home().join("webui-list-delete");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        claude_config: env.fake_claude_config().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
     };

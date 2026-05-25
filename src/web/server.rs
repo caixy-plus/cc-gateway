@@ -10,7 +10,7 @@ use crate::web::handlers::session::AppState;
 
 pub fn create_app(config: &GatewayConfig) -> Router {
     let state = AppState {
-        claude_config: config.claude.clone(),
+        claude_config: config.effective_agent_settings(),
         show_thinking: config.show_thinking,
         default_dir: config.default_dir.clone(),
     };

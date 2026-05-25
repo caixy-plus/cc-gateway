@@ -78,10 +78,12 @@ impl std::str::FromStr for ClaudeSessionState {
 pub struct ClaudeSession {
     pub id: String,
     pub channel_session_id: String,
+    pub provider: String,
     pub title: String,
     pub work_dir: String,
     pub active: bool,
     pub state: ClaudeSessionState,
+    pub provider_session_id: Option<String>,
     pub claude_session_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub stopped_at: Option<DateTime<Utc>>,

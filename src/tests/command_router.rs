@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::claude::controller::ClaudeController;
 use crate::command::router::{CommandAction, CommandRouter};
-use crate::config::model::ClaudeConfig;
+use crate::config::model::{AgentProvider, ClaudeConfig};
 
 use super::helpers::TestEnv;
 
@@ -73,7 +73,19 @@ async fn parses_core_commands_without_starting_claude() {
     ));
     assert!(matches!(
         router.route("/claude --model sonnet").await,
-        CommandAction::StartSession { args, .. } if args == vec!["--model", "sonnet"]
+        CommandAction::StartSession { provider: Some(AgentProvider::Claude), args, .. } if args == vec!["--model", "sonnet"]
+    ));
+    assert!(matches!(
+        router.route("/agent --model sonnet").await,
+        CommandAction::StartSession { provider: None, args, .. } if args == vec!["--model", "sonnet"]
+    ));
+    assert!(matches!(
+        router.route("/agent cursor --force").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::Cursor), args, .. } if args == vec!["--force"]
+    ));
+    assert!(matches!(
+        router.route("/agent claude --model sonnet").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::Claude), args, .. } if args == vec!["--model", "sonnet"]
     ));
     assert!(matches!(
         router.route("/pwd").await,

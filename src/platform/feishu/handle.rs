@@ -18,14 +18,14 @@ use super::{
     FEISHU_CHUNK_DELAY_MS, FEISHU_MAX_TEXT_CHARS, METHOD_CONTROL, REACTION_FAILURE,
     REACTION_TYPING,
 };
-use crate::config::model::{ClaudeConfig, FeishuConfig};
+use crate::config::model::{AgentSettings, FeishuConfig};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 impl FeishuPlatform {
-    pub fn new(
+    pub fn new<C: Into<AgentSettings>>(
         config: FeishuConfig,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        claude_config: C,
         show_thinking: bool,
     ) -> Self {
         let token_manager = auth_middleware::TokenManager::new(config.clone());
@@ -37,7 +37,7 @@ impl FeishuPlatform {
         Self {
             config,
             default_dir: default_dir.to_string(),
-            claude_config,
+            claude_config: claude_config.into(),
             show_thinking: Arc::new(AtomicBool::new(show_thinking)),
             http_client,
             dedup_cache: Arc::new(DedupCache::new(300)),

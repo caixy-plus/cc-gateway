@@ -319,7 +319,10 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
         let sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
         for s in sessions {
             result.push(HistorySessionInfo {
-                session_id: s.claude_session_id.unwrap_or_else(|| s.id.clone()),
+                session_id: s
+                    .provider_session_id
+                    .or(s.claude_session_id)
+                    .unwrap_or_else(|| s.id.clone()),
                 cc_gateway_id: Some(s.id),
                 project: s.work_dir,
                 last_timestamp: s.updated_at.unwrap_or(s.created_at).timestamp(),

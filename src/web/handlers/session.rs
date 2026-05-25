@@ -17,13 +17,13 @@ use tracing::info;
 use crate::claude::controller::ClaudeController;
 use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
 use crate::command::CommandAction;
-use crate::config::model::ClaudeConfig;
+use crate::config::model::AgentSettings;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::web::state::{broadcast_event, EVENT_BUS};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub claude_config: ClaudeConfig,
+    pub claude_config: AgentSettings,
     pub show_thinking: bool,
     pub default_dir: String,
 }
@@ -98,6 +98,8 @@ pub async fn handle_list_sessions(
                 "chat_id": s.channel_session_id,
                 "work_dir": channel.map(|c| c.work_dir.clone()).unwrap_or_else(|| s.work_dir.clone()),
                 "active": s.active,
+                "provider": s.provider,
+                "provider_session_id": s.provider_session_id,
                 "claude_session_id": s.claude_session_id,
                 "created_at": created_at_local.to_rfc3339(),
                 "stopped_at": stopped_at_local.map(|t| t.to_rfc3339()),
@@ -144,6 +146,8 @@ pub async fn handle_create_session(
                     "chat_id": session.channel_session_id,
                     "work_dir": session.work_dir,
                     "active": session.active,
+                    "provider": session.provider,
+                    "provider_session_id": session.provider_session_id,
                     "claude_session_id": session.claude_session_id,
                     "created_at": session.created_at,
                 }
@@ -212,6 +216,8 @@ pub async fn handle_start_session(
                     "chat_id": session.channel_session_id,
                     "work_dir": session.work_dir,
                     "active": session.active,
+                    "provider": session.provider,
+                    "provider_session_id": session.provider_session_id,
                     "claude_session_id": session.claude_session_id,
                     "created_at": session.created_at,
                 }
@@ -491,10 +497,10 @@ pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, 
         }
     };
 
-    // Use claude_session_id if available, otherwise fall back to session_id
+    // Use provider_session_id if available, otherwise fall back to legacy claude_session_id.
     let file_id = GLOBAL_CHANNEL_SESSIONS
         .get_claude_session(&session_id)
-        .and_then(|s| s.claude_session_id)
+        .and_then(|s| s.provider_session_id.or(s.claude_session_id))
         .unwrap_or(session_id);
 
     let file_path = history_dir.join(format!("{}.jsonl", file_id));
@@ -534,10 +540,10 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
         return (StatusCode::CONFLICT, body.to_string());
     }
 
-    // Get claude_session_id BEFORE removing the session so we can delete the correct history file.
+    // Get provider session id BEFORE removing the session so we can delete the correct history file.
     let file_id = GLOBAL_CHANNEL_SESSIONS
         .get_claude_session(&session_id)
-        .and_then(|s| s.claude_session_id)
+        .and_then(|s| s.provider_session_id.or(s.claude_session_id))
         .unwrap_or_else(|| session_id.clone());
 
     if !GLOBAL_CHANNEL_SESSIONS.remove_claude_session(&session_id) {

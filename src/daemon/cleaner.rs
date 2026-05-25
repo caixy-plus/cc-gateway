@@ -204,7 +204,11 @@ pub fn clean_tui_sessions() -> usize {
 
         // Delete history files and claude_sessions first (FK constraint)
         for cs in &claude_sessions {
-            let file_id = cs.claude_session_id.as_ref().unwrap_or(&cs.id);
+            let file_id = cs
+                .provider_session_id
+                .as_ref()
+                .or(cs.claude_session_id.as_ref())
+                .unwrap_or(&cs.id);
             if let Some(home) = dirs::home_dir() {
                 let history_file = home
                     .join(".cc-gateway")
@@ -245,7 +249,11 @@ pub fn clean_excess_sessions() -> usize {
 
         // Delete sessions beyond the limit
         for cs in sessions.iter().skip(MAX_PER_CHANNEL) {
-            let file_id = cs.claude_session_id.as_ref().unwrap_or(&cs.id);
+            let file_id = cs
+                .provider_session_id
+                .as_ref()
+                .or(cs.claude_session_id.as_ref())
+                .unwrap_or(&cs.id);
             if let Some(home) = dirs::home_dir() {
                 let history_file = home
                     .join(".cc-gateway")

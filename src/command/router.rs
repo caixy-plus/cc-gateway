@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::claude::controller::ClaudeController;
 use crate::command::builtin::BuiltinCommands;
+use crate::config::model::AgentProvider;
 use crate::{t, t_fmt};
 
 /// Semantic action produced by parsing a user message.
@@ -17,6 +18,7 @@ pub enum CommandAction {
     /// Start a Claude session with optional work directory and extra args
     StartSession {
         work_dir: Option<PathBuf>,
+        provider: Option<AgentProvider>,
         args: Vec<String>,
     },
     /// Stop the current Claude session
@@ -131,20 +133,28 @@ impl CommandRouter {
                         CommandAction::MakeDir(PathBuf::from(expanded))
                     }
                 }
-                "/claude" | "/new-session" => {
-                    let args: Vec<String> = arg
+                "/agent" | "/claude" | "/new-session" => {
+                    let mut args: Vec<String> = arg
                         .split_whitespace()
                         .filter(|s| *s != "--new")
                         .map(|s| s.to_string())
                         .collect();
+                    let provider = if cmd == "/claude" {
+                        Some(AgentProvider::Claude)
+                    } else if cmd == "/agent" {
+                        parse_provider_prefix(&mut args)
+                    } else {
+                        None
+                    };
                     CommandAction::StartSession {
                         work_dir: None,
+                        provider,
                         args,
                     }
                 }
                 "/show-thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" => CommandAction::HideThinking,
-                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                "/agent-history" | "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
                     arg: arg.to_string(),
                 },
                 _ => {
@@ -295,7 +305,11 @@ impl CommandRouter {
                     Err(e) => Some(t_fmt!("builtin.failed_create_dir", ERR = e)),
                 }
             }
-            CommandAction::StartSession { work_dir, args } => {
+            CommandAction::StartSession {
+                work_dir,
+                provider,
+                args,
+            } => {
                 let ctrl = self.controller.lock().await;
                 let dir = if let Some(p) = work_dir {
                     p.to_string_lossy().to_string()
@@ -307,7 +321,7 @@ impl CommandRouter {
                         wd
                     }
                 };
-                match ctrl.start_session(dir.clone(), args).await {
+                match ctrl.start_session_with_provider(dir.clone(), args, provider).await {
                     Ok(()) => Some(t_fmt!("builtin.session_started", DIR = dir)),
                     Err(e) => Some(t_fmt!("builtin.failed_start_claude", ERR = e)),
                 }
@@ -326,7 +340,7 @@ impl CommandRouter {
                 Some(self.builtin.claude_history(&arg).await)
             }
             CommandAction::UnknownCommand(cmd) => {
-                Some(format!("Unknown command: {}. Available commands: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))
+                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agent-history, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))
             }
             CommandAction::ForwardToClaude(text) => {
                 let ctrl = self.controller.lock().await;
@@ -341,4 +355,16 @@ impl CommandRouter {
             CommandAction::NoOp => Some(String::new()),
         }
     }
+}
+
+fn parse_provider_prefix(args: &mut Vec<String>) -> Option<AgentProvider> {
+    let provider = match args.first().map(|s| s.as_str()) {
+        Some("claude") => Some(AgentProvider::Claude),
+        Some("cursor") => Some(AgentProvider::Cursor),
+        _ => None,
+    };
+    if provider.is_some() {
+        args.remove(0);
+    }
+    provider
 }

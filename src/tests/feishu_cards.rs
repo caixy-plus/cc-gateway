@@ -52,10 +52,12 @@ fn session_history_resume_preserves_chat_and_receive_ids() {
     let session = ClaudeSession {
         id: "session-1".to_string(),
         channel_session_id: "channel-internal-id".to_string(),
+        provider: "claude".to_string(),
         title: "Past work".to_string(),
         work_dir: "/tmp/project".to_string(),
         active: false,
         state: ClaudeSessionState::Stopped,
+        provider_session_id: Some("claude-session-1".to_string()),
         claude_session_id: Some("claude-session-1".to_string()),
         created_at: now,
         stopped_at: Some(now),

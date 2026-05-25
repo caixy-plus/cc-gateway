@@ -35,10 +35,12 @@ fn dummy_active_runtime(channel_id: &str) -> ActiveClaudeRuntime {
         claude_session: ClaudeSession {
             id: "claude-row".to_string(),
             channel_session_id: channel_id.to_string(),
+            provider: "claude".to_string(),
             title: "test".to_string(),
             work_dir: "~".to_string(),
             active: true,
             state: ClaudeSessionState::Active,
+            provider_session_id: Some("cc-session".to_string()),
             claude_session_id: Some("cc-session".to_string()),
             created_at: Utc::now(),
             stopped_at: None,

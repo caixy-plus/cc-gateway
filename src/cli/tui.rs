@@ -578,10 +578,15 @@ async fn process_submit(
             Ok(SubmitResult { poll_claude: false })
         }
 
-        CommandAction::StartSession { work_dir, args } => {
+        CommandAction::StartSession {
+            work_dir,
+            provider,
+            args,
+        } => {
             let result = router
                 .execute(CommandAction::StartSession {
                     work_dir: work_dir.clone(),
+                    provider,
                     args,
                 })
                 .await;

@@ -12,7 +12,7 @@ use tracing::info;
 use crate::claude::controller::ClaudeController;
 use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
 use crate::command::router::CommandRouter;
-use crate::config::model::ClaudeConfig;
+use crate::config::model::AgentSettings;
 use crate::session::channel_model::{
     ChannelSession, ClaudeSession, ClaudeSessionState, SessionSource,
 };
@@ -266,10 +266,12 @@ impl ChannelManager {
         let session = ClaudeSession {
             id: id.clone(),
             channel_session_id: channel_id.to_string(),
+            provider: "claude".to_string(),
             title: title.to_string(),
             work_dir: work_dir.to_string(),
             active: false,
             state: ClaudeSessionState::Stopped,
+            provider_session_id: None,
             claude_session_id: None,
             created_at,
             stopped_at: None,
@@ -294,10 +296,12 @@ impl ChannelManager {
         let session = ClaudeSession {
             id: id.clone(),
             channel_session_id: channel_id.to_string(),
+            provider: "claude".to_string(),
             title: title.to_string(),
             work_dir: work_dir.to_string(),
             active: true,
             state: ClaudeSessionState::Active,
+            provider_session_id: claude_session_id.clone(),
             claude_session_id,
             created_at,
             stopped_at: None,
@@ -320,18 +324,25 @@ impl ChannelManager {
         }
         let work_dir = ctrl.get_work_dir().await;
         let claude_session_id = ctrl.get_claude_session_id().await;
+        let provider = ctrl.provider_name().await;
         drop(ctrl);
 
-        self.record_active_claude_session(channel_id, title, &work_dir, claude_session_id)
-            .map(Some)
+        let mut session =
+            self.record_active_claude_session(channel_id, title, &work_dir, claude_session_id)?;
+        session.provider = provider;
+        session.provider_session_id = session.claude_session_id.clone();
+        self.claude_sessions
+            .insert(session.id.clone(), session.clone());
+        crate::db::insert_claude_session(&session);
+        Ok(Some(session))
     }
 
-    pub async fn create_and_start_claude_session(
+    pub async fn create_and_start_claude_session<C: Into<AgentSettings>>(
         &self,
         channel_id: &str,
         title: &str,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        claude_config: C,
         show_thinking: bool,
         args: Vec<String>,
         resume_session_id: Option<String>,
@@ -339,12 +350,13 @@ impl ChannelManager {
         mcp_context: Option<crate::claude::mcp_server::McpContext>,
     ) -> Result<(ClaudeSession, Arc<Mutex<ClaudeController>>)> {
         self.stop_active_session_records_for_channel(channel_id, None);
+        let agent_settings = claude_config.into();
         let work_dir = work_dir_override
             .or_else(|| self.get_channel(channel_id).map(|c| c.work_dir))
             .unwrap_or_else(|| shellexpand::tilde(default_dir).to_string());
 
         let controller = Arc::new(Mutex::new(ClaudeController::new(
-            claude_config.clone(),
+            agent_settings.clone(),
             show_thinking,
         )));
 
@@ -368,6 +380,10 @@ impl ChannelManager {
             let ctrl = controller.lock().await;
             ctrl.get_claude_session_id().await
         };
+        let provider = {
+            let ctrl = controller.lock().await;
+            ctrl.provider_name().await
+        };
 
         self.update_channel_work_dir(channel_id, &work_dir);
 
@@ -376,10 +392,12 @@ impl ChannelManager {
         let session = ClaudeSession {
             id: id.clone(),
             channel_session_id: channel_id.to_string(),
+            provider,
             title: title.to_string(),
             work_dir,
             active: true,
             state: ClaudeSessionState::Active,
+            provider_session_id: claude_session_id.clone(),
             claude_session_id,
             created_at,
             stopped_at: None,
@@ -394,12 +412,12 @@ impl ChannelManager {
 
     /// High-level helper: create + start + build router in one call.
     /// Used by all platform integrations to reduce duplication.
-    pub async fn start_claude_session_for_platform(
+    pub async fn start_claude_session_for_platform<C: Into<AgentSettings>>(
         &self,
         channel_id: &str,
         title: &str,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        claude_config: C,
         show_thinking: bool,
         args: Vec<String>,
         resume_session_id: Option<String>,
@@ -427,11 +445,11 @@ impl ChannelManager {
         })
     }
 
-    pub async fn resume_claude_session_runtime(
+    pub async fn resume_claude_session_runtime<C: Into<AgentSettings>>(
         &self,
         session_id: &str,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        claude_config: C,
         show_thinking: bool,
     ) -> Result<ActiveClaudeRuntime> {
         self.resume_claude_session_for_platform(
@@ -445,15 +463,16 @@ impl ChannelManager {
         .await
     }
 
-    pub async fn resume_claude_session_for_platform(
+    pub async fn resume_claude_session_for_platform<C: Into<AgentSettings>>(
         &self,
         session_id: &str,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        claude_config: C,
         show_thinking: bool,
         work_dir_override: Option<String>,
         mcp_context: Option<crate::claude::mcp_server::McpContext>,
     ) -> Result<ActiveClaudeRuntime> {
+        let agent_settings = claude_config.into();
         let existing = self
             .get_claude_session(session_id)
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
@@ -470,7 +489,7 @@ impl ChannelManager {
         let work_dir = existing.work_dir.clone();
 
         let controller = Arc::new(Mutex::new(ClaudeController::new(
-            claude_config,
+            agent_settings.clone(),
             show_thinking,
         )));
 
@@ -490,6 +509,10 @@ impl ChannelManager {
             let ctrl = controller.lock().await;
             ctrl.get_claude_session_id().await
         };
+        let provider = {
+            let ctrl = controller.lock().await;
+            ctrl.provider_name().await
+        };
 
         let mut session = existing;
         self.stop_active_session_records_for_channel(
@@ -499,6 +522,8 @@ impl ChannelManager {
         session.active = true;
         session.state = ClaudeSessionState::Active;
         session.work_dir = work_dir.clone();
+        session.provider = provider;
+        session.provider_session_id = new_claude_id.clone();
         session.claude_session_id = new_claude_id;
         session.updated_at = Some(Utc::now());
         session.stopped_at = None;

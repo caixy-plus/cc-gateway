@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct GatewayConfig {
     pub log: LogConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentSettings>,
     pub claude: ClaudeConfig,
     pub feishu: FeishuConfig,
     pub telegram: TelegramConfig,
@@ -36,6 +38,53 @@ pub struct ClaudeConfig {
     pub default_args: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentProvider {
+    Claude,
+    Cursor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    pub provider: AgentProvider,
+    pub cli_path: String,
+    pub default_args: String,
+    /// Cursor ACP mode: "agent", "plan", or "ask".
+    pub mode: String,
+    /// Permission handling for providers that support it: "prompt", "allow", or "deny".
+    pub permission: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentSettings {
+    Profiles(AgentProfiles),
+    Legacy(AgentConfig),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentProfiles {
+    pub default: AgentProvider,
+    pub claude: AgentProviderConfig,
+    pub cursor: AgentProviderConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_args: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeishuConfig {
@@ -64,6 +113,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             log: LogConfig::default(),
+            agent: None,
             claude: ClaudeConfig::default(),
             feishu: FeishuConfig::default(),
             telegram: TelegramConfig::default(),
@@ -92,6 +142,159 @@ impl Default for ClaudeConfig {
             cli_path: "claude".to_string(),
             default_args: "--dangerously-skip-permissions".to_string(),
         }
+    }
+}
+
+impl Default for AgentProvider {
+    fn default() -> Self {
+        AgentProvider::Claude
+    }
+}
+
+impl std::fmt::Display for AgentProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentProvider::Claude => write!(f, "claude"),
+            AgentProvider::Cursor => write!(f, "cursor"),
+        }
+    }
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            provider: AgentProvider::Claude,
+            cli_path: "claude".to_string(),
+            default_args: "--dangerously-skip-permissions".to_string(),
+            mode: "agent".to_string(),
+            permission: "prompt".to_string(),
+        }
+    }
+}
+
+impl From<ClaudeConfig> for AgentConfig {
+    fn from(value: ClaudeConfig) -> Self {
+        Self {
+            provider: AgentProvider::Claude,
+            cli_path: value.cli_path,
+            default_args: value.default_args,
+            mode: "agent".to_string(),
+            permission: "prompt".to_string(),
+        }
+    }
+}
+
+impl From<ClaudeConfig> for AgentSettings {
+    fn from(value: ClaudeConfig) -> Self {
+        AgentSettings::Legacy(AgentConfig::from(value))
+    }
+}
+
+impl From<AgentConfig> for AgentSettings {
+    fn from(value: AgentConfig) -> Self {
+        AgentSettings::Legacy(value)
+    }
+}
+
+impl Default for AgentProfiles {
+    fn default() -> Self {
+        Self {
+            default: AgentProvider::Claude,
+            claude: AgentProviderConfig::default(),
+            cursor: AgentProviderConfig::default(),
+        }
+    }
+}
+
+impl AgentConfig {
+    pub fn default_for_provider(provider: AgentProvider) -> Self {
+        match provider {
+            AgentProvider::Claude => Self::default(),
+            AgentProvider::Cursor => Self {
+                provider: AgentProvider::Cursor,
+                cli_path: "agent".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
+        }
+    }
+
+    pub fn with_provider_override(&self, provider: Option<AgentProvider>) -> Self {
+        let Some(provider) = provider else {
+            return self.clone().normalized();
+        };
+        if provider == self.provider {
+            return self.clone().normalized();
+        }
+        let mut config = Self::default_for_provider(provider);
+        config.mode = self.mode.clone();
+        config.permission = self.permission.clone();
+        config.normalized()
+    }
+
+    pub fn normalized(mut self) -> Self {
+        if matches!(self.provider, AgentProvider::Cursor) {
+            if self.cli_path.is_empty() || self.cli_path == "claude" {
+                self.cli_path = "agent".to_string();
+            }
+            if self.default_args == "--dangerously-skip-permissions" {
+                self.default_args.clear();
+            }
+        }
+        if self.cli_path.is_empty() {
+            self.cli_path = match self.provider {
+                AgentProvider::Claude => "claude".to_string(),
+                AgentProvider::Cursor => "agent".to_string(),
+            };
+        }
+        self
+    }
+}
+
+impl AgentSettings {
+    pub fn effective_config(&self) -> AgentConfig {
+        self.config_for_provider(None)
+    }
+
+    pub fn config_for_provider(&self, provider: Option<AgentProvider>) -> AgentConfig {
+        match self {
+            AgentSettings::Legacy(config) => config.with_provider_override(provider),
+            AgentSettings::Profiles(profiles) => {
+                let selected = provider.unwrap_or_else(|| profiles.default.clone());
+                let mut config = AgentConfig::default_for_provider(selected.clone());
+                let profile = match selected {
+                    AgentProvider::Claude => &profiles.claude,
+                    AgentProvider::Cursor => &profiles.cursor,
+                };
+                if let Some(ref cli_path) = profile.cli_path {
+                    config.cli_path = cli_path.clone();
+                }
+                if let Some(ref default_args) = profile.default_args {
+                    config.default_args = default_args.clone();
+                }
+                if let Some(ref mode) = profile.mode {
+                    config.mode = mode.clone();
+                }
+                if let Some(ref permission) = profile.permission {
+                    config.permission = permission.clone();
+                }
+                config.normalized()
+            }
+        }
+    }
+}
+
+impl GatewayConfig {
+    #[allow(dead_code)]
+    pub fn effective_agent_config(&self) -> AgentConfig {
+        self.effective_agent_settings().effective_config()
+    }
+
+    pub fn effective_agent_settings(&self) -> AgentSettings {
+        self.agent
+            .clone()
+            .unwrap_or_else(|| AgentSettings::from(self.claude.clone()))
     }
 }
 

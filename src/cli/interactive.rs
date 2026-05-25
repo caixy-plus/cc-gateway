@@ -36,7 +36,7 @@ pub async fn run_interactive() -> Result<()> {
     // Create a controller without auto-starting a Claude session.
     // The user must type /claude to start one.
     let controller = Arc::new(Mutex::new(ClaudeController::new(
-        config.claude.clone(),
+        config.effective_agent_settings(),
         config.show_thinking,
     )));
 

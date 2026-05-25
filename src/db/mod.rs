@@ -44,10 +44,12 @@ pub fn init_schema() -> Result<()> {
         "CREATE TABLE IF NOT EXISTS claude_sessions (
             id TEXT PRIMARY KEY,
             channel_session_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'claude',
             title TEXT NOT NULL,
             work_dir TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 0,
             state TEXT NOT NULL DEFAULT 'stopped',
+            provider_session_id TEXT,
             claude_session_id TEXT,
             created_at TEXT NOT NULL,
             stopped_at TEXT,
@@ -66,6 +68,22 @@ pub fn init_schema() -> Result<()> {
     drop(stmt);
     if !cols.contains(&"updated_at".to_string()) {
         conn.execute("ALTER TABLE claude_sessions ADD COLUMN updated_at TEXT", [])?;
+    }
+    if !cols.contains(&"provider".to_string()) {
+        conn.execute(
+            "ALTER TABLE claude_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
+            [],
+        )?;
+    }
+    if !cols.contains(&"provider_session_id".to_string()) {
+        conn.execute(
+            "ALTER TABLE claude_sessions ADD COLUMN provider_session_id TEXT",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE claude_sessions SET provider_session_id = claude_session_id WHERE provider_session_id IS NULL",
+            [],
+        )?;
     }
 
     // Enable WAL mode so concurrent readers do not block writers (avoids SQLITE_BUSY)
@@ -189,15 +207,17 @@ pub fn insert_claude_session(session: &ClaudeSession) {
 fn try_insert_claude_session(session: &ClaudeSession) -> Result<()> {
     let conn = open_conn()?;
     conn.execute(
-        "INSERT OR REPLACE INTO claude_sessions (id, channel_session_id, title, work_dir, active, state, claude_session_id, created_at, stopped_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT OR REPLACE INTO claude_sessions (id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, claude_session_id, created_at, stopped_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             session.id,
             session.channel_session_id,
+            session.provider,
             session.title,
             session.work_dir,
             if session.active { 1 } else { 0 },
             session.state.to_string(),
+            session.provider_session_id.as_deref(),
             session.claude_session_id.as_deref(),
             session.created_at.to_rfc3339(),
             session.stopped_at.map(|t| t.to_rfc3339()),
@@ -232,13 +252,13 @@ pub fn load_all_claude_sessions() -> Vec<ClaudeSession> {
 fn try_load_all_claude_sessions() -> Result<Vec<ClaudeSession>> {
     let conn = open_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, channel_session_id, title, work_dir, active, state, claude_session_id, created_at, stopped_at, updated_at FROM claude_sessions"
+        "SELECT id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, claude_session_id, created_at, stopped_at, updated_at FROM claude_sessions"
     )?;
     let rows = stmt.query_map([], |row| {
-        let state_str: String = row.get(5)?;
-        let created_at_str: String = row.get(7)?;
-        let stopped_at_str: Option<String> = row.get(8)?;
-        let updated_at_str: Option<String> = row.get(9)?;
+        let state_str: String = row.get(6)?;
+        let created_at_str: String = row.get(9)?;
+        let stopped_at_str: Option<String> = row.get(10)?;
+        let updated_at_str: Option<String> = row.get(11)?;
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
@@ -255,11 +275,13 @@ fn try_load_all_claude_sessions() -> Result<Vec<ClaudeSession>> {
         Ok(ClaudeSession {
             id: row.get(0)?,
             channel_session_id: row.get(1)?,
-            title: row.get(2)?,
-            work_dir: row.get(3)?,
-            active: row.get::<_, i32>(4)? != 0,
+            provider: row.get(2)?,
+            title: row.get(3)?,
+            work_dir: row.get(4)?,
+            active: row.get::<_, i32>(5)? != 0,
             state: state_str.parse().unwrap_or(ClaudeSessionState::Stopped),
-            claude_session_id: row.get(6)?,
+            provider_session_id: row.get(7)?,
+            claude_session_id: row.get(8)?,
             created_at,
             stopped_at,
             updated_at,
@@ -292,13 +314,13 @@ pub fn load_claude_sessions_by_channel_id(channel_id: &str) -> Vec<ClaudeSession
 fn try_load_claude_sessions_by_channel_id(channel_id: &str) -> Result<Vec<ClaudeSession>> {
     let conn = open_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, channel_session_id, title, work_dir, active, state, claude_session_id, created_at, stopped_at, updated_at FROM claude_sessions WHERE channel_session_id = ?1"
+        "SELECT id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, claude_session_id, created_at, stopped_at, updated_at FROM claude_sessions WHERE channel_session_id = ?1"
     )?;
     let rows = stmt.query_map(params![channel_id], |row| {
-        let state_str: String = row.get(5)?;
-        let created_at_str: String = row.get(7)?;
-        let stopped_at_str: Option<String> = row.get(8)?;
-        let updated_at_str: Option<String> = row.get(9)?;
+        let state_str: String = row.get(6)?;
+        let created_at_str: String = row.get(9)?;
+        let stopped_at_str: Option<String> = row.get(10)?;
+        let updated_at_str: Option<String> = row.get(11)?;
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
@@ -315,11 +337,13 @@ fn try_load_claude_sessions_by_channel_id(channel_id: &str) -> Result<Vec<Claude
         Ok(ClaudeSession {
             id: row.get(0)?,
             channel_session_id: row.get(1)?,
-            title: row.get(2)?,
-            work_dir: row.get(3)?,
-            active: row.get::<_, i32>(4)? != 0,
+            provider: row.get(2)?,
+            title: row.get(3)?,
+            work_dir: row.get(4)?,
+            active: row.get::<_, i32>(5)? != 0,
             state: state_str.parse().unwrap_or(ClaudeSessionState::Stopped),
-            claude_session_id: row.get(6)?,
+            provider_session_id: row.get(7)?,
+            claude_session_id: row.get(8)?,
             created_at,
             stopped_at,
             updated_at,

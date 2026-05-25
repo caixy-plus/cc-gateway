@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
-use crate::config::model::{ClaudeConfig, FeishuConfig};
+use crate::config::model::{AgentSettings, FeishuConfig};
 use crate::session::channel_manager::ActiveClaudeRuntime;
 
 // Re-export commonly used items from child modules
@@ -431,7 +431,7 @@ impl AnomalyTracker {
 pub struct FeishuPlatform {
     pub(crate) config: FeishuConfig,
     pub(crate) default_dir: String,
-    pub(crate) claude_config: ClaudeConfig,
+    pub(crate) claude_config: AgentSettings,
     pub(crate) show_thinking: Arc<AtomicBool>,
     pub(crate) http_client: ClientWithMiddleware,
     pub(crate) dedup_cache: Arc<DedupCache>,

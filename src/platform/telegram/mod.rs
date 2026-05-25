@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use crate::claude::controller::ClaudeController;
 use crate::claude::event_poller::EventPollSink;
 use crate::command::router::CommandRouter;
-use crate::config::model::{ClaudeConfig, TelegramConfig};
+use crate::config::model::{AgentSettings, TelegramConfig};
 use crate::platform::Platform;
 use crate::session::channel_command::{
     ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
@@ -121,7 +121,7 @@ impl<'a> EventPollSink for TelegramEventSink<'a> {
 pub struct TelegramPlatform {
     config: TelegramConfig,
     default_dir: String,
-    claude_config: ClaudeConfig,
+    claude_config: AgentSettings,
     show_thinking: bool,
     http_client: reqwest::Client,
     channels: Arc<DashMap<String, TelegramChannelRuntime>>,
@@ -129,16 +129,16 @@ pub struct TelegramPlatform {
 }
 
 impl TelegramPlatform {
-    pub fn new(
+    pub fn new<C: Into<AgentSettings>>(
         config: TelegramConfig,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        claude_config: C,
         show_thinking: bool,
     ) -> Self {
         Self {
             config,
             default_dir: default_dir.to_string(),
-            claude_config,
+            claude_config: claude_config.into(),
             show_thinking,
             http_client: reqwest::Client::new(),
             channels: Arc::new(DashMap::new()),

@@ -61,10 +61,11 @@ async fn record_event(event: &Event) -> anyhow::Result<()> {
         }
     };
 
-    // Use the ClaudeSession's own id as the history file name.
+    // Use the provider's own session id as the history file name when available.
     let history_file_id = claude_session
-        .claude_session_id
+        .provider_session_id
         .as_deref()
+        .or(claude_session.claude_session_id.as_deref())
         .unwrap_or(&claude_session.id);
 
     let history_dir = get_history_dir()?;

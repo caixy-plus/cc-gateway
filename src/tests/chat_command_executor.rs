@@ -33,6 +33,7 @@ async fn chat_command_executor_starts_session_and_updates_channel_work_dir() {
             &mut context,
             CommandAction::StartSession {
                 work_dir: Some(child.clone()),
+                provider: None,
                 args: vec![],
             },
         )

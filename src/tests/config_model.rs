@@ -1,4 +1,6 @@
-use crate::config::model::{ClaudeConfig, FeishuConfig, GatewayConfig, LogConfig};
+use crate::config::model::{
+    AgentConfig, AgentProvider, ClaudeConfig, FeishuConfig, GatewayConfig, LogConfig,
+};
 
 #[test]
 fn test_gateway_config_default() {
@@ -73,6 +75,131 @@ fn gateway_config_ignores_legacy_platform_selector_when_loading() {
 
     assert!(config.feishu.enabled);
     assert!(config.telegram.enabled);
+}
+
+#[test]
+fn gateway_config_uses_legacy_claude_config_when_agent_is_absent() {
+    let config: GatewayConfig = serde_json::from_value(serde_json::json!({
+        "claude": {
+            "cli_path": "custom-claude",
+            "default_args": "--foo"
+        }
+    }))
+    .unwrap();
+
+    let agent = config.effective_agent_config();
+    assert_eq!(agent.provider, AgentProvider::Claude);
+    assert_eq!(agent.cli_path, "custom-claude");
+    assert_eq!(agent.default_args, "--foo");
+}
+
+#[test]
+fn cursor_agent_config_normalizes_defaults() {
+    let config: GatewayConfig = serde_json::from_value(serde_json::json!({
+        "agent": {
+            "provider": "cursor"
+        }
+    }))
+    .unwrap();
+
+    let agent = config.effective_agent_config();
+    assert_eq!(agent.provider, AgentProvider::Cursor);
+    assert_eq!(agent.cli_path, "agent");
+    assert_eq!(agent.default_args, "");
+}
+
+#[test]
+fn nested_agent_config_selects_default_profile() {
+    let config: GatewayConfig = serde_json::from_value(serde_json::json!({
+        "agent": {
+            "default": "cursor",
+            "cursor": {
+                "cli_path": "cursor-agent",
+                "default_args": "--force",
+                "mode": "plan",
+                "permission": "allow"
+            },
+            "claude": {
+                "cli_path": "custom-claude",
+                "default_args": "--model sonnet"
+            }
+        }
+    }))
+    .unwrap();
+
+    let agent = config.effective_agent_config();
+    assert_eq!(agent.provider, AgentProvider::Cursor);
+    assert_eq!(agent.cli_path, "cursor-agent");
+    assert_eq!(agent.default_args, "--force");
+    assert_eq!(agent.mode, "plan");
+    assert_eq!(agent.permission, "allow");
+}
+
+#[test]
+fn nested_agent_config_uses_named_profile_for_override() {
+    let config: GatewayConfig = serde_json::from_value(serde_json::json!({
+        "agent": {
+            "default": "cursor",
+            "cursor": {
+                "cli_path": "cursor-agent",
+                "default_args": "--force"
+            },
+            "claude": {
+                "cli_path": "custom-claude",
+                "default_args": "--model sonnet"
+            }
+        }
+    }))
+    .unwrap();
+
+    let settings = config.effective_agent_settings();
+    let claude = settings.config_for_provider(Some(AgentProvider::Claude));
+    let cursor = settings.config_for_provider(Some(AgentProvider::Cursor));
+
+    assert_eq!(claude.provider, AgentProvider::Claude);
+    assert_eq!(claude.cli_path, "custom-claude");
+    assert_eq!(claude.default_args, "--model sonnet");
+    assert_eq!(cursor.provider, AgentProvider::Cursor);
+    assert_eq!(cursor.cli_path, "cursor-agent");
+    assert_eq!(cursor.default_args, "--force");
+}
+
+#[test]
+fn agent_config_serde_roundtrip() {
+    let original = AgentConfig {
+        provider: AgentProvider::Cursor,
+        cli_path: "agent".to_string(),
+        default_args: "--force".to_string(),
+        mode: "plan".to_string(),
+        permission: "allow".to_string(),
+    };
+    let json = serde_json::to_string(&original).unwrap();
+    let deserialized: AgentConfig = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(deserialized.provider, AgentProvider::Cursor);
+    assert_eq!(deserialized.cli_path, "agent");
+    assert_eq!(deserialized.default_args, "--force");
+    assert_eq!(deserialized.mode, "plan");
+    assert_eq!(deserialized.permission, "allow");
+}
+
+#[test]
+fn provider_override_uses_target_provider_defaults() {
+    let cursor_config = AgentConfig::default_for_provider(AgentProvider::Cursor);
+    let claude_override = cursor_config.with_provider_override(Some(AgentProvider::Claude));
+
+    assert_eq!(claude_override.provider, AgentProvider::Claude);
+    assert_eq!(claude_override.cli_path, "claude");
+    assert_eq!(
+        claude_override.default_args,
+        "--dangerously-skip-permissions"
+    );
+
+    let cursor_override =
+        AgentConfig::default().with_provider_override(Some(AgentProvider::Cursor));
+    assert_eq!(cursor_override.provider, AgentProvider::Cursor);
+    assert_eq!(cursor_override.cli_path, "agent");
+    assert_eq!(cursor_override.default_args, "");
 }
 
 #[test]

@@ -281,8 +281,8 @@ pub fn t(key: &str) -> &str {
 
         // command/builtin.rs
         "builtin.help" => match lang {
-            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current claude session\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /claude [args...]    Start a new Claude session\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Claude Thinking\n  /hide-thinking       Hide Claude Thinking\n  /claude-history      Show recent Claude sessions\nAny other text is sent directly to Claude Code.",
-            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前 Claude 会话\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /claude [args...]    启动新的 Claude 会话\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示 Claude Thinking\n  /hide-thinking       隐藏 Claude Thinking\n  /claude-history      显示最近的 Claude 会话\n任何其他文本将直接发送给 Claude Code。",
+            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /claude [args...]    Alias for /agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
+            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /claude [args...]    /agent 的别名\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
         },
         "builtin.help_title" => match lang {
             Language::En => "cc-gateway commands:",
@@ -305,8 +305,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "  /cd_default          将工作目录更改为默认目录",
         },
         "builtin.help_claude" => match lang {
-            Language::En => "  /claude [args...]    Start a new Claude session (pass args to Claude CLI)",
-            Language::ZhCN => "  /claude [args...]    启动新的 Claude 会话 (传递参数给 Claude CLI)",
+            Language::En => "  /agent [args...]     Start a new agent session (pass args to the configured CLI)",
+            Language::ZhCN => "  /agent [args...]     启动新的智能体会话 (传递参数给配置的 CLI)",
         },
         "builtin.help_pwd" => match lang {
             Language::En => "  /pwd                 Show current working directory",
@@ -329,8 +329,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "  /hide-thinking         隐藏 Claude Thinking 内容（仅显示占位符）",
         },
         "builtin.help_claude_history" => match lang {
-            Language::En => "  /claude-history      Show recent Claude sessions and resume by index",
-            Language::ZhCN => "  /claude-history      显示最近的 Claude 会话并按索引恢复",
+            Language::En => "  /agent-history       Show recent agent sessions and resume by index",
+            Language::ZhCN => "  /agent-history       显示最近的智能体会话并按索引恢复",
         },
         "builtin.help_any_text" => match lang {
             Language::En => "Any other text is sent directly to Claude Code.",
@@ -441,16 +441,16 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "非活跃",
         },
         "builtin.start_new_session_hint" => match lang {
-            Language::En => "Use /claude to start a new session.",
-            Language::ZhCN => "使用 /claude 开始新会话。",
+            Language::En => "Use /agent to start a new session.",
+            Language::ZhCN => "使用 /agent 开始新会话。",
         },
         "builtin.recent_claude_sessions" => match lang {
-            Language::En => "Recent Claude sessions:",
-            Language::ZhCN => "最近的 Claude 会话:",
+            Language::En => "Recent agent sessions:",
+            Language::ZhCN => "最近的智能体会话:",
         },
         "builtin.resume_hint" => match lang {
-            Language::En => "Use /claude-history <n> to select a session to resume.",
-            Language::ZhCN => "使用 /claude-history <n> 选择要恢复的会话。",
+            Language::En => "Use /agent-history <n> to select a session to resume.",
+            Language::ZhCN => "使用 /agent-history <n> 选择要恢复的会话。",
         },
         "builtin.resume_session_set" => match lang {
             Language::En => "Resume session set: {SID}",
@@ -470,8 +470,8 @@ pub fn t(key: &str) -> &str {
         },
         // command/forward.rs
         "forward.no_session" => match lang {
-            Language::En => "No active Claude session. Use /claude to start one, or type a builtin command like /help.\n\nYou said: {MSG}",
-            Language::ZhCN => "没有活动的 Claude 会话。使用 /claude 启动一个，或输入内置命令如 /help。\n\n您说: {MSG}",
+            Language::En => "No active agent session. Use /agent to start one, or type a builtin command like /help.\n\nYou said: {MSG}",
+            Language::ZhCN => "没有活动的智能体会话。使用 /agent 启动一个，或输入内置命令如 /help。\n\n您说: {MSG}",
         },
         "forward.failed_send" => match lang {
             Language::En => "Failed to send message: {ERR}",
@@ -484,14 +484,14 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "访问被拒绝: '{PATH}' 不在主目录 '{HOME}' 下",
         },
         "controller.no_active_session" => match lang {
-            Language::En => "No active Claude session. Use /claude to start one.",
-            Language::ZhCN => "没有活动的 Claude 会话。使用 /claude 启动一个。",
+            Language::En => "No active agent session. Use /agent to start one.",
+            Language::ZhCN => "没有活动的智能体会话。使用 /agent 启动一个。",
         },
 
         // platform/feishu.rs
         "feishu.permission_title" => match lang {
-            Language::En => "Claude Tool Permission Request",
-            Language::ZhCN => "Claude 工具权限请求",
+            Language::En => "Agent Tool Permission Request",
+            Language::ZhCN => "智能体工具权限请求",
         },
         "feishu.permission_subtitle" => match lang {
             Language::En => "Tool: {NAME}",
@@ -550,8 +550,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
+            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agent-history, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agent-history, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
         },
 
         "feishu.file_from_user" => match lang {
