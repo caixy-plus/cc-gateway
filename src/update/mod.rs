@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::io::{Cursor, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A parsed semantic version (major.minor.patch).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +206,82 @@ fn binary_bytes_from_download(url: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
+fn update_tmp_path(target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("cc-gateway");
+    target.with_file_name(format!(".{}.update-tmp", file_name))
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn local_codesign(path: &Path) {
+    let Ok(status) = std::process::Command::new("codesign")
+        .arg("-s")
+        .arg("-")
+        .arg("-f")
+        .arg(path)
+        .status()
+    else {
+        eprintln!("Warning: local codesign command failed to start");
+        return;
+    };
+
+    if !status.success() {
+        eprintln!("Warning: local codesign failed, keeping downloaded binary signature");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn clear_macos_xattrs(path: &Path) {
+    let _ = std::process::Command::new("xattr")
+        .arg("-cr")
+        .arg(path)
+        .status();
+}
+
+#[cfg(target_os = "macos")]
+fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
+    let _ = std::fs::remove_file(target);
+    std::fs::copy(tmp_path, target).context("failed to copy binary into place")?;
+    make_executable(target)?;
+    clear_macos_xattrs(target);
+    std::fs::remove_file(tmp_path).context("failed to remove temp file")?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
+    std::fs::rename(tmp_path, target).context("failed to replace binary")?;
+    Ok(())
+}
+
+pub(crate) fn install_downloaded_binary(target: &Path, binary: &[u8]) -> Result<()> {
+    let tmp_path = update_tmp_path(target);
+    std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
+    make_executable(&tmp_path)?;
+
+    #[cfg(target_os = "macos")]
+    local_codesign(&tmp_path);
+
+    replace_binary(&tmp_path, target)?;
+    Ok(())
+}
+
 /// Download a binary to a temporary path and atomically replace the target.
 pub async fn download_and_replace(
     client: &reqwest::Client,
@@ -225,18 +301,7 @@ pub async fn download_and_replace(
     let bytes = resp.bytes().await.context("failed to read download body")?;
     let binary = binary_bytes_from_download(url, &bytes)?;
 
-    let tmp_path = target.with_extension("tmp");
-    std::fs::write(&tmp_path, &binary).context("failed to write temp file")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&tmp_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&tmp_path, perms)?;
-    }
-
-    std::fs::rename(&tmp_path, target).context("failed to replace binary")?;
+    install_downloaded_binary(target, &binary)?;
 
     Ok(())
 }
