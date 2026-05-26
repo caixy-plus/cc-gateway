@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use std::cmp::Ordering;
+use std::ffi::OsStr;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 /// A parsed semantic version (major.minor.patch).
@@ -65,28 +67,25 @@ pub fn parse_release_json(json: &str) -> Result<GitHubRelease> {
 
 /// Detect the platform name used in release asset filenames.
 pub fn detect_platform() -> String {
-    let os = if cfg!(target_os = "macos") {
-        "darwin"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else if cfg!(target_os = "windows") {
-        "windows"
+    let target = if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
     } else {
         "unknown"
     };
-    let arch = if cfg!(target_arch = "x86_64") {
-        "amd64"
-    } else if cfg!(target_arch = "aarch64") {
-        "arm64"
+    let archive_ext = if cfg!(target_os = "windows") {
+        "zip"
     } else {
-        "unknown"
+        "tar.gz"
     };
-    let ext = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    format!("{}-{}{}", os, arch, ext)
+    format!("{}.{}", target, archive_ext)
 }
 
 /// Compare two version strings and return true if `latest` is newer than `current`.
@@ -143,6 +142,70 @@ pub async fn check_update(
     }))
 }
 
+fn binary_name_for_current_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "cc-gateway.exe"
+    } else {
+        "cc-gateway"
+    }
+}
+
+fn extract_binary_from_tar_gz(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
+    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries().context("failed to read tar archive")? {
+        let mut entry = entry.context("failed to read tar entry")?;
+        let path = entry.path().context("failed to read tar entry path")?;
+        if path.file_name() != Some(OsStr::new(binary_name)) {
+            continue;
+        }
+
+        let mut binary = Vec::new();
+        entry
+            .read_to_end(&mut binary)
+            .context("failed to extract binary from tar archive")?;
+        return Ok(binary);
+    }
+
+    anyhow::bail!("archive does not contain {}", binary_name);
+}
+
+fn extract_binary_from_zip(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
+    let reader = Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).context("failed to read zip archive")?;
+
+    for idx in 0..archive.len() {
+        let mut file = archive
+            .by_index(idx)
+            .context("failed to read zip archive entry")?;
+        let Some(name) = file.name().rsplit('/').next() else {
+            continue;
+        };
+        if name != binary_name {
+            continue;
+        }
+
+        let mut binary = Vec::new();
+        file.read_to_end(&mut binary)
+            .context("failed to extract binary from zip archive")?;
+        return Ok(binary);
+    }
+
+    anyhow::bail!("archive does not contain {}", binary_name);
+}
+
+fn binary_bytes_from_download(url: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+    let binary_name = binary_name_for_current_platform();
+    if url.ends_with(".tar.gz") {
+        extract_binary_from_tar_gz(bytes, binary_name)
+    } else if url.ends_with(".zip") {
+        extract_binary_from_zip(bytes, binary_name)
+    } else {
+        Ok(bytes.to_vec())
+    }
+}
+
 /// Download a binary to a temporary path and atomically replace the target.
 pub async fn download_and_replace(
     client: &reqwest::Client,
@@ -160,9 +223,10 @@ pub async fn download_and_replace(
     }
 
     let bytes = resp.bytes().await.context("failed to read download body")?;
+    let binary = binary_bytes_from_download(url, &bytes)?;
 
     let tmp_path = target.with_extension("tmp");
-    std::fs::write(&tmp_path, &bytes).context("failed to write temp file")?;
+    std::fs::write(&tmp_path, &binary).context("failed to write temp file")?;
 
     #[cfg(unix)]
     {

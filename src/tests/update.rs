@@ -57,14 +57,19 @@ fn test_detect_platform_not_empty() {
     let platform = detect_platform();
     assert!(!platform.is_empty());
     assert!(!platform.contains("unknown"));
+    assert!(platform.ends_with(".tar.gz") || platform.ends_with(".zip"));
 }
 
 #[test]
 fn test_build_download_url() {
-    let url = build_download_url("caixy-plus/cc-gateway", "v1.1.0", "darwin-arm64");
+    let url = build_download_url(
+        "caixy-plus/cc-gateway",
+        "v1.1.0",
+        "aarch64-apple-darwin.tar.gz",
+    );
     assert_eq!(
         url,
-        "https://github.com/caixy-plus/cc-gateway/releases/download/v1.1.0/cc-gateway-darwin-arm64"
+        "https://github.com/caixy-plus/cc-gateway/releases/download/v1.1.0/cc-gateway-aarch64-apple-darwin.tar.gz"
     );
 }
 

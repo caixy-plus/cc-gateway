@@ -11,6 +11,7 @@ mod i18n;
 mod proto;
 mod shutdown;
 mod telegram_flow;
+mod update;
 mod ui_tui;
 mod webui_cmd;
 mod webui_session;

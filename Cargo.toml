@@ -1,6 +1,6 @@
 [package]
 name = "cc-gateway"
-version = "1.2.2"
+version = "1.2.3"
 edition = "2021"
 authors = ["caixinyun"]
 description = "Gateway for controlling Claude Code via Feishu/Lark, Telegram, and CLI"
@@ -82,6 +82,9 @@ mime_guess = "2.0"
 rust-embed = { version = "8.3", features = ["include-exclude"] }
 reqwest-middleware = { version = "0.4", features = ["json"] }
 http = "1"
+flate2 = "1.1.9"
+tar = "0.4.46"
+zip = "8.6.0"
 
 # Unix signals
 [target.'cfg(unix)'.dependencies]
