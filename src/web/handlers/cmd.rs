@@ -134,7 +134,8 @@ pub async fn handle_ll(Json(req): Json<LlRequest>) -> (StatusCode, String) {
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json!({ "error": format!("Failed to read directory: {}", e) });
+            let body =
+                json!({ "error": format!("Failed to read directory '{}': {}", expanded, e) });
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }

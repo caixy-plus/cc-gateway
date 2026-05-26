@@ -82,7 +82,9 @@ async fn test_download_and_replace() {
     tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nABCD";
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+            let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nABCD";
             let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
         }
     });

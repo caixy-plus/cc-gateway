@@ -14,6 +14,7 @@ mod shutdown;
 mod telegram_flow;
 mod ui_tui;
 mod update;
+mod web_system;
 mod webui_cmd;
 mod webui_session;
 mod workdir;

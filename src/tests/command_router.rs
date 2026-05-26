@@ -24,6 +24,12 @@ fn test_router_with_default(default_dir: &str) -> (CommandRouter, Arc<Mutex<Clau
     )
 }
 
+fn display_path(path: &std::path::Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
+}
+
 #[tokio::test]
 async fn routes_claude_history_with_index_argument() {
     let (router, _) = test_router();
@@ -64,7 +70,7 @@ async fn exposes_work_dir_after_relative_change_dir() {
     let temp = tempfile::tempdir_in(env.home()).expect("temp dir should be created");
     let child = temp.path().join("child");
     std::fs::create_dir(&child).expect("child dir should be created");
-    let expected = temp.path().canonicalize().unwrap();
+    let expected = display_path(&temp.path().canonicalize().unwrap());
 
     {
         let ctrl = controller.lock().await;
@@ -76,13 +82,8 @@ async fn exposes_work_dir_after_relative_change_dir() {
         .execute(CommandAction::ChangeDir(PathBuf::from("..")))
         .await;
 
-    assert!(reply
-        .unwrap()
-        .contains(&expected.to_string_lossy().to_string()));
-    assert_eq!(
-        router.current_work_dir().await,
-        expected.to_string_lossy().to_string()
-    );
+    assert!(reply.unwrap().contains(&expected));
+    assert_eq!(router.current_work_dir().await, expected);
 }
 
 #[tokio::test]

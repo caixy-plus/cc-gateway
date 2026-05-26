@@ -214,6 +214,11 @@ fn update_tmp_path(target: &Path) -> PathBuf {
     target.with_file_name(format!(".{}.update-tmp", file_name))
 }
 
+#[cfg(windows)]
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 #[cfg(unix)]
 fn make_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -270,6 +275,43 @@ fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn schedule_windows_self_replace(
+    tmp_path: &Path,
+    target: &Path,
+    restart_daemon: bool,
+) -> Result<()> {
+    let updater_pid = std::process::id();
+    let tmp = powershell_quote(&tmp_path.to_string_lossy());
+    let target_quoted = powershell_quote(&target.to_string_lossy());
+    let restart = if restart_daemon { "$true" } else { "$false" };
+    let script = format!(
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $tmp = {tmp}; $target = {target}; $restart = {restart}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $moved = $false; for ($i = 0; $i -lt 120; $i++) {{ try {{ Move-Item -LiteralPath $tmp -Destination $target -Force; $moved = $true; break }} catch {{ Start-Sleep -Milliseconds 500 }} }}; if (-not $moved) {{ throw "failed to replace binary after waiting for locks" }}; if ($restart) {{ Start-Process -FilePath $target -ArgumentList 'start' -WindowStyle Hidden }}"#,
+        updater_pid = updater_pid,
+        tmp = tmp,
+        target = target_quoted,
+        restart = restart
+    );
+
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("failed to schedule Windows binary replacement")?;
+
+    Ok(())
+}
+
 pub(crate) fn install_downloaded_binary(target: &Path, binary: &[u8]) -> Result<()> {
     let tmp_path = update_tmp_path(target);
     std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
@@ -282,12 +324,7 @@ pub(crate) fn install_downloaded_binary(target: &Path, binary: &[u8]) -> Result<
     Ok(())
 }
 
-/// Download a binary to a temporary path and atomically replace the target.
-pub async fn download_and_replace(
-    client: &reqwest::Client,
-    url: &str,
-    target: &Path,
-) -> Result<()> {
+async fn download_binary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     let resp = client
         .get(url)
         .send()
@@ -299,15 +336,36 @@ pub async fn download_and_replace(
     }
 
     let bytes = resp.bytes().await.context("failed to read download body")?;
-    let binary = binary_bytes_from_download(url, &bytes)?;
+    binary_bytes_from_download(url, &bytes)
+}
 
+/// Download a binary to a temporary path and atomically replace the target.
+pub async fn download_and_replace(
+    client: &reqwest::Client,
+    url: &str,
+    target: &Path,
+) -> Result<()> {
+    let binary = download_binary(client, url).await?;
     install_downloaded_binary(target, &binary)?;
 
     Ok(())
 }
 
+#[cfg(windows)]
+async fn download_and_schedule_windows_replace(
+    client: &reqwest::Client,
+    url: &str,
+    target: &Path,
+    restart_daemon: bool,
+) -> Result<()> {
+    let binary = download_binary(client, url).await?;
+    let tmp_path = update_tmp_path(target);
+    std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
+    schedule_windows_self_replace(&tmp_path, target, restart_daemon)
+}
+
 /// CLI entry point for `cc-gateway update`.
-pub async fn run(check_only: bool, force: bool) -> Result<()> {
+pub async fn run(check_only: bool, force: bool, yes: bool) -> Result<()> {
     let repo = "caixy-plus/cc-gateway";
     let current = env!("CARGO_PKG_VERSION");
 
@@ -356,23 +414,38 @@ pub async fn run(check_only: bool, force: bool) -> Result<()> {
     let exe = std::env::current_exe().context("failed to get current executable path")?;
     println!("Target binary: {}", exe.display());
 
-    print!("Download and replace? [y/N] ");
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    if !input.trim().eq_ignore_ascii_case("y") {
-        println!("Aborted.");
-        return Ok(());
+    if !yes {
+        print!("Download and replace? [y/N] ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
     }
 
     println!("Downloading...");
-    download_and_replace(&client, &info.url, &exe)
-        .await
-        .context("failed to download and replace binary")?;
 
-    println!("Binary updated. Restarting daemon...");
-    crate::daemon::restart(None).await?;
+    #[cfg(windows)]
+    {
+        println!("Stopping daemon before replacing the Windows executable...");
+        let _ = crate::daemon::stop().await;
+        download_and_schedule_windows_replace(&client, &info.url, &exe, true)
+            .await
+            .context("failed to schedule Windows binary replacement")?;
+        println!("Binary downloaded. It will be replaced after this updater exits, then the daemon will restart.");
+        Ok(())
+    }
 
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        download_and_replace(&client, &info.url, &exe)
+            .await
+            .context("failed to download and replace binary")?;
+
+        println!("Binary updated. Restarting daemon...");
+        crate::daemon::restart(None).await
+    }
 }

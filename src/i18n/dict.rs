@@ -456,6 +456,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Resume session set: {SID}",
             Language::ZhCN => "恢复会话已设置: {SID}",
         },
+        "builtin.resume_session_missing_id" => match lang {
+            Language::En => "Claude resume id is missing for {SID}; starting a new session in its project directory.",
+            Language::ZhCN => "会话 {SID} 缺少 Claude 恢复 ID，将在原项目目录启动新会话。",
+        },
         "builtin.invalid_history_index" => match lang {
             Language::En => "Invalid history index.",
             Language::ZhCN => "无效的历史索引。",

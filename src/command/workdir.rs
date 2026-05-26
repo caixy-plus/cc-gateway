@@ -4,11 +4,31 @@ use anyhow::Result;
 
 use crate::t_fmt;
 
+fn expand_tilde(path: &str) -> String {
+    if path == "~" || path.starts_with("~/") || path.starts_with(r"~\") {
+        let home = std::env::var_os("HOME").filter(|h| !h.is_empty());
+        #[cfg(windows)]
+        let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()));
+
+        if let Some(home) = home {
+            let home = PathBuf::from(home);
+            if path == "~" {
+                return home.to_string_lossy().to_string();
+            }
+            return home
+                .join(path.trim_start_matches("~/").trim_start_matches(r"~\"))
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+    shellexpand::tilde(path).to_string()
+}
+
 pub(crate) fn effective_work_dir(current_dir: &str, default_dir: &str) -> String {
     if current_dir.is_empty() {
-        shellexpand::tilde(default_dir).to_string()
+        expand_tilde(default_dir)
     } else {
-        shellexpand::tilde(current_dir).to_string()
+        expand_tilde(current_dir)
     }
 }
 
@@ -17,7 +37,7 @@ pub(crate) fn resolve_work_dir_target(
     default_dir: &str,
     requested: &Path,
 ) -> Result<String> {
-    let expanded = shellexpand::tilde(&requested.to_string_lossy()).to_string();
+    let expanded = expand_tilde(&requested.to_string_lossy());
     let requested = PathBuf::from(expanded);
     let base = PathBuf::from(effective_work_dir(current_dir, default_dir));
     let target = if requested.is_absolute() {

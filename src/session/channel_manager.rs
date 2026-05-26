@@ -338,6 +338,27 @@ impl ChannelManager {
             .map(Some)
     }
 
+    pub async fn refresh_active_controller_session(
+        &self,
+        channel_id: &str,
+        controller: &Arc<Mutex<ClaudeController>>,
+    ) {
+        let Some(mut session) = self.get_active_claude_session(channel_id) else {
+            return;
+        };
+        let ctrl = controller.lock().await;
+        session.work_dir = ctrl.get_work_dir().await;
+        if let Some(claude_session_id) = ctrl.get_claude_session_id().await {
+            session.claude_session_id = Some(claude_session_id);
+        }
+        session.updated_at = Some(Utc::now());
+        drop(ctrl);
+
+        self.claude_sessions
+            .insert(session.id.clone(), session.clone());
+        crate::db::insert_claude_session(&session);
+    }
+
     pub async fn create_and_start_claude_session(
         &self,
         channel_id: &str,

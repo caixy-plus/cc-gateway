@@ -65,6 +65,18 @@ pub fn create_app(config: &GatewayConfig) -> Router {
             get(handlers::config::handle_get_platforms),
         )
         .route("/api/version", get(handlers::system::handle_version))
+        .route(
+            "/api/version/check",
+            get(handlers::system::handle_update_check),
+        )
+        .route(
+            "/api/update/check",
+            get(handlers::system::handle_update_check),
+        )
+        .route(
+            "/api/update",
+            get(handlers::system::handle_update_check).post(handlers::system::handle_update),
+        )
         .route("/api/restart", post(handlers::system::handle_restart))
         // WebUI static files
         .route("/", get(handlers::ui::serve_index))

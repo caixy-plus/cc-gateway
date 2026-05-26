@@ -78,6 +78,9 @@ enum Commands {
         /// Force update even if already on the latest version
         #[arg(short, long)]
         force: bool,
+        /// Install without prompting for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Internal: run the daemon engine (do not use directly)
     #[command(hide = true, name = "_daemon")]
@@ -136,8 +139,8 @@ async fn main() -> Result<()> {
                 config::wizard::run_interactive_config()?;
             }
         }
-        Some(Commands::Update { check, force }) => {
-            update::run(check, force).await?;
+        Some(Commands::Update { check, force, yes }) => {
+            update::run(check, force, yes).await?;
         }
         Some(Commands::McpServer) => {
             claude::mcp_server::run_mcp_server().await?;

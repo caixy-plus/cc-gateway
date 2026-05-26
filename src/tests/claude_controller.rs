@@ -132,6 +132,7 @@ async fn test_process_claude_event_emits_tool_result() {
         &pending_perm,
         "/tmp",
         &session_arc,
+        &Arc::new(RwLock::new(None)),
         event,
         &Arc::new(AtomicBool::new(true)),
     )
@@ -164,6 +165,7 @@ async fn test_process_claude_event_emits_tool_error() {
         &pending_perm,
         "/tmp",
         &session_arc,
+        &Arc::new(RwLock::new(None)),
         event,
         &Arc::new(AtomicBool::new(true)),
     )

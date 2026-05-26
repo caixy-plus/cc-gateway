@@ -33,6 +33,10 @@ use crate::t_fmt;
 // Helpers
 // ---------------------------------------------------------------------------
 
+pub(crate) fn should_handle_key_event(key: &KeyEvent) -> bool {
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
 /// Strip ANSI escape sequences so text renders cleanly in ratatui.
 pub(crate) fn strip_ansi(s: &str) -> String {
     thread_local! {
@@ -568,6 +572,9 @@ async fn process_submit(
         }
 
         CommandAction::StopSession => {
+            GLOBAL_CHANNEL_SESSIONS
+                .refresh_active_controller_session(&app.channel_id, controller)
+                .await;
             if let Some(reply) = router.execute(CommandAction::StopSession).await {
                 app.add_message(MsgRole::System, &reply);
             }
@@ -596,6 +603,41 @@ async fn process_submit(
                 app.session_active = true;
                 app.poller_running = false;
             }
+            Ok(SubmitResult { poll_claude: false })
+        }
+
+        CommandAction::ShowClaudeHistory { arg } => {
+            if let Some(reply) = router
+                .execute(CommandAction::ShowClaudeHistory { arg })
+                .await
+            {
+                app.add_message(MsgRole::System, &reply);
+            }
+
+            let has_pending_resume = {
+                let ctrl = controller.lock().await;
+                ctrl.has_pending_resume_session_id().await
+            };
+            if has_pending_resume {
+                let result = router
+                    .execute(CommandAction::StartSession {
+                        work_dir: None,
+                        args: Vec::new(),
+                    })
+                    .await;
+                if let Some(ref reply) = result {
+                    app.add_message(MsgRole::System, reply);
+                }
+                if GLOBAL_CHANNEL_SESSIONS
+                    .record_active_controller_session(&app.channel_id, "TUI Session", controller)
+                    .await?
+                    .is_some()
+                {
+                    app.session_active = true;
+                    app.poller_running = false;
+                }
+            }
+
             Ok(SubmitResult { poll_claude: false })
         }
 
@@ -741,7 +783,7 @@ pub async fn run_tui(
         }
         if let Ok(true) = event::poll(std::time::Duration::from_millis(10)) {
             if let Ok(Event::Key(key)) = event::read() {
-                if key_tx.send(key).is_err() {
+                if should_handle_key_event(&key) && key_tx.send(key).is_err() {
                     break;
                 }
             }

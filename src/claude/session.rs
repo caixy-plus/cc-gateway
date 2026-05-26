@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -25,6 +26,7 @@ pub struct ClaudeSession {
     #[allow(dead_code)]
     work_dir: String,
     mcp_config_path: Option<PathBuf>,
+    stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
 pub(crate) fn resolve_cli_path(config_path: &str) -> String {
@@ -198,7 +200,8 @@ impl ClaudeSession {
         let stderr = child.stderr.take().context("Failed to open stderr pipe")?;
 
         // Spawn stderr reader
-        tokio::spawn(Self::stderr_reader(stderr));
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
+        tokio::spawn(Self::stderr_reader(stderr, stderr_lines.clone()));
 
         // Spawn stdout reader
         let tx = event_tx.clone();
@@ -217,6 +220,7 @@ impl ClaudeSession {
                 stdin,
                 work_dir,
                 mcp_config_path,
+                stderr_lines,
             },
             claude_session_id,
         ))
@@ -304,6 +308,13 @@ impl ClaudeSession {
         }
     }
 
+    pub fn recent_stderr(&self) -> String {
+        self.stderr_lines
+            .lock()
+            .map(|lines| lines.join("\n"))
+            .unwrap_or_default()
+    }
+
     async fn stdout_reader(
         stdout: tokio::process::ChildStdout,
         tx: mpsc::UnboundedSender<OutputEvent>,
@@ -332,12 +343,21 @@ impl ClaudeSession {
         info!("Claude stdout reader ended");
     }
 
-    async fn stderr_reader(stderr: tokio::process::ChildStderr) {
+    async fn stderr_reader(
+        stderr: tokio::process::ChildStderr,
+        stderr_lines: Arc<Mutex<Vec<String>>>,
+    ) {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
 
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.trim().is_empty() {
+                if let Ok(mut lines) = stderr_lines.lock() {
+                    lines.push(line.clone());
+                    if lines.len() > 20 {
+                        lines.remove(0);
+                    }
+                }
                 debug!("Claude stderr: {}", line);
             }
         }
