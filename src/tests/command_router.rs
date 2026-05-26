@@ -36,6 +36,28 @@ async fn routes_claude_history_with_index_argument() {
 }
 
 #[tokio::test]
+async fn routes_telegram_menu_aliases_with_underscores() {
+    let (router, _) = test_router();
+
+    assert!(matches!(
+        router.route("/claude_history 2").await,
+        CommandAction::ShowClaudeHistory { arg } if arg == "2"
+    ));
+    assert!(matches!(
+        router.route("/cd_up").await,
+        CommandAction::ChangeDir(path) if path == PathBuf::from("..")
+    ));
+    assert!(matches!(
+        router.route("/show_thinking").await,
+        CommandAction::ShowThinking
+    ));
+    assert!(matches!(
+        router.route("/hide_thinking").await,
+        CommandAction::HideThinking
+    ));
+}
+
+#[tokio::test]
 async fn exposes_work_dir_after_relative_change_dir() {
     let env = TestEnv::new();
     let (router, controller) = test_router_with_default(env.home().to_str().unwrap());

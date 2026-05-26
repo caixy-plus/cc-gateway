@@ -96,8 +96,8 @@ impl CommandRouter {
             // controls that affect the gateway process itself.
             match cmd {
                 "/quit" => CommandAction::StopSession,
-                "/show-thinking" => CommandAction::ShowThinking,
-                "/hide-thinking" => CommandAction::HideThinking,
+                "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
+                "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
                 _ => CommandAction::ForwardToClaude(trimmed.to_string()),
             }
         } else {
@@ -113,6 +113,7 @@ impl CommandRouter {
                         CommandAction::ChangeDir(PathBuf::from(expanded))
                     }
                 }
+                "/cd_up" => CommandAction::ChangeDir(PathBuf::from("..")),
                 "/cd_default" => CommandAction::ChangeDirDefault,
                 "/pwd" => CommandAction::PrintWorkingDir,
                 "/ll" => {
@@ -142,9 +143,9 @@ impl CommandRouter {
                         args,
                     }
                 }
-                "/show-thinking" => CommandAction::ShowThinking,
-                "/hide-thinking" => CommandAction::HideThinking,
-                "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
+                "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
+                "/claude-history" | "/claude_history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
                     arg: arg.to_string(),
                 },
                 _ => {

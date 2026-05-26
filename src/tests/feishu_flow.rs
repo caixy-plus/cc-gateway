@@ -1,3 +1,4 @@
+use crate::claude::file_delivery::McpDeliveryTarget;
 use crate::command::builtin::list_directory_paths;
 use crate::platform::feishu::cards::build_dir_picker_card;
 use crate::platform::feishu::FeishuChannelRuntime;
@@ -19,6 +20,22 @@ fn feishu_normalizes_private_text_message_for_open_id_replies() {
     assert_eq!(normalized.chat_id.as_deref(), Some("oc-chat"));
     assert_eq!(normalized.receive_id_type, "open_id");
     assert_eq!(normalized.receive_id, "ou-user");
+}
+
+#[test]
+fn feishu_mcp_context_targets_current_receive_id() {
+    let platform = feishu_platform("~");
+    let context = platform.mcp_context_for_receive("ou-user", "open_id");
+
+    match context.delivery {
+        McpDeliveryTarget::Feishu(target) => {
+            assert_eq!(target.app_id, "app-id");
+            assert_eq!(target.app_secret, "app-secret");
+            assert_eq!(target.chat_id, "ou-user");
+            assert_eq!(target.receive_id_type, "open_id");
+        }
+        other => panic!("expected Feishu target, got {:?}", other),
+    }
 }
 
 #[tokio::test]

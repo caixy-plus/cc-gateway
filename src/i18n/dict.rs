@@ -664,6 +664,66 @@ pub fn t(key: &str) -> &str {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
         },
+        "telegram.command_help" => match lang {
+            Language::En => "Show help",
+            Language::ZhCN => "查看帮助",
+        },
+        "telegram.command_pwd" => match lang {
+            Language::En => "Show current directory",
+            Language::ZhCN => "查看当前目录",
+        },
+        "telegram.command_ll" => match lang {
+            Language::En => "List folders",
+            Language::ZhCN => "列出文件夹",
+        },
+        "telegram.command_cd" => match lang {
+            Language::En => "Change directory",
+            Language::ZhCN => "切换目录",
+        },
+        "telegram.command_cd_up" => match lang {
+            Language::En => "Go to parent directory (/cd ..)",
+            Language::ZhCN => "返回上级目录 (/cd ..)",
+        },
+        "telegram.command_cd_default" => match lang {
+            Language::En => "Return to default directory",
+            Language::ZhCN => "返回默认目录",
+        },
+        "telegram.command_mkdir" => match lang {
+            Language::En => "Create directory",
+            Language::ZhCN => "创建目录",
+        },
+        "telegram.command_claude" => match lang {
+            Language::En => "Start Claude session",
+            Language::ZhCN => "启动 Claude 会话",
+        },
+        "telegram.command_claude_history" => match lang {
+            Language::En => "Show Claude history",
+            Language::ZhCN => "查看 Claude 历史",
+        },
+        "telegram.command_show_thinking" => match lang {
+            Language::En => "Show thinking",
+            Language::ZhCN => "显示 Thinking",
+        },
+        "telegram.command_hide_thinking" => match lang {
+            Language::En => "Hide thinking",
+            Language::ZhCN => "隐藏 Thinking",
+        },
+        "telegram.command_quit" => match lang {
+            Language::En => "Stop active session",
+            Language::ZhCN => "停止当前会话",
+        },
+        "telegram.choose_directory" => match lang {
+            Language::En => "Choose a directory in {DIR}:",
+            Language::ZhCN => "请选择 {DIR} 下的目录:",
+        },
+        "telegram.choose_history" => match lang {
+            Language::En => "Choose a Claude session to resume:",
+            Language::ZhCN => "请选择要恢复的 Claude 会话:",
+        },
+        "telegram.callback_expired" => match lang {
+            Language::En => "This action has expired. Please run the command again.",
+            Language::ZhCN => "这个操作已过期，请重新执行命令。",
+        },
 
         // cli/tui.rs
         "tui.permission_required" => match lang {

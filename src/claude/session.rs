@@ -8,6 +8,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::claude::file_delivery::MCP_TARGET_ENV;
 use crate::claude::mcp_server::McpContext;
 use crate::claude::protocol::{InputMessage, OutputEvent};
 use crate::config::model::ClaudeConfig;
@@ -135,16 +136,14 @@ impl ClaudeSession {
         let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
             let config_path =
                 std::env::temp_dir().join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
+            let target_json = mcp_ctx.to_env_json()?;
             let config_json = serde_json::json!({
                 "mcpServers": {
                     "cc-gateway": {
                         "command": std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cc-gateway")),
                         "args": ["_mcp-server"],
                         "env": {
-                            "CC_GATEWAY_FEISHU_APP_ID": mcp_ctx.feishu_app_id,
-                            "CC_GATEWAY_FEISHU_APP_SECRET": mcp_ctx.feishu_app_secret,
-                            "CC_GATEWAY_FEISHU_CHAT_ID": mcp_ctx.chat_id,
-                            "CC_GATEWAY_FEISHU_RECEIVE_ID_TYPE": mcp_ctx.receive_id_type,
+                            (MCP_TARGET_ENV): target_json,
                         }
                     }
                 }

@@ -8,6 +8,7 @@ mod feishu_utils;
 mod feishu_webhook;
 mod helpers;
 mod i18n;
+mod mcp_file_delivery;
 mod proto;
 mod shutdown;
 mod telegram_flow;

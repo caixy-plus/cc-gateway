@@ -31,17 +31,32 @@ fn webui_channel_id() -> Option<String> {
         .map(|c| c.id)
 }
 
-async fn get_work_dir_async(_session_id: Option<&str>) -> String {
+async fn get_work_dir_async(session_id: Option<&str>) -> String {
     if let Some(channel_id) = webui_channel_id() {
         if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
             if let Some(ref active) = runtime.active_claude {
-                let ctrl = active.controller.lock().await;
-                let wd = ctrl.get_work_dir().await;
-                if !wd.is_empty() {
-                    return wd;
+                if session_id
+                    .map(|id| id == active.claude_session.id)
+                    .unwrap_or(true)
+                {
+                    let ctrl = active.controller.lock().await;
+                    let wd = ctrl.get_work_dir().await;
+                    if !wd.is_empty() {
+                        return wd;
+                    }
+                }
+            }
+            if let Some(session_id) = session_id {
+                if let Some(session) = GLOBAL_CHANNEL_SESSIONS.get_claude_session(session_id) {
+                    return session.work_dir;
                 }
             }
             return runtime.channel_session.work_dir.clone();
+        }
+    }
+    if let Some(session_id) = session_id {
+        if let Some(session) = GLOBAL_CHANNEL_SESSIONS.get_claude_session(session_id) {
+            return session.work_dir;
         }
     }
     std::env::current_dir()
@@ -49,12 +64,20 @@ async fn get_work_dir_async(_session_id: Option<&str>) -> String {
         .unwrap_or_else(|_| "~".to_string())
 }
 
-async fn set_session_work_dir(_session_id: Option<&str>, dir: String) {
+async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
+    if let Some(session_id) = session_id {
+        GLOBAL_CHANNEL_SESSIONS.update_claude_session_work_dir(session_id, &dir);
+    }
     if let Some(channel_id) = webui_channel_id() {
         if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
             if let Some(ref active) = runtime.active_claude {
-                let ctrl = active.controller.lock().await;
-                ctrl.init_work_dir(dir.clone()).await;
+                if session_id
+                    .map(|id| id == active.claude_session.id)
+                    .unwrap_or(true)
+                {
+                    let ctrl = active.controller.lock().await;
+                    ctrl.init_work_dir(dir.clone()).await;
+                }
             }
             let _ = GLOBAL_CHANNEL_SESSIONS
                 .switch_work_dir(&channel_id, std::path::PathBuf::from(&dir))

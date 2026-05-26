@@ -96,7 +96,7 @@ pub async fn handle_list_sessions(
                 "source": channel.map(|c| c.source.to_string()).unwrap_or_else(|| "webui".to_string()),
                 "platform": channel.map(|c| c.platform.clone()).unwrap_or_else(|| "webui".to_string()),
                 "chat_id": s.channel_session_id,
-                "work_dir": channel.map(|c| c.work_dir.clone()).unwrap_or_else(|| s.work_dir.clone()),
+                "work_dir": s.work_dir,
                 "active": s.active,
                 "claude_session_id": s.claude_session_id,
                 "created_at": created_at_local.to_rfc3339(),
@@ -114,6 +114,7 @@ pub async fn handle_list_sessions(
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {
     pub(crate) title: Option<String>,
+    #[serde(alias = "workDir")]
     pub(crate) work_dir: Option<String>,
 }
 
@@ -129,7 +130,10 @@ pub async fn handle_create_session(
         }
     };
     let title = req.title.unwrap_or_else(|| "WebUI Session".to_string());
-    let work_dir = req.work_dir.unwrap_or_else(|| state.default_dir.clone());
+    let work_dir = req
+        .work_dir
+        .filter(|dir| dir.trim() != "~")
+        .unwrap_or_else(|| state.default_dir.clone());
     let expanded = shellexpand::tilde(&work_dir).to_string();
 
     match GLOBAL_CHANNEL_SESSIONS.create_claude_session_only(&channel_id, &title, &expanded) {

@@ -5,10 +5,11 @@ use axum::http::StatusCode;
 use crate::db;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::channel_model::ClaudeSessionState;
+use crate::web::handlers::cmd::{handle_cd, CdRequest};
 use crate::web::handlers::session::{
     handle_create_session, handle_delete_session, handle_get_history, handle_list_sessions,
-    handle_send_message, handle_stop_session, AppState, CreateSessionRequest, ListSessionsQuery,
-    SendMessageRequest,
+    handle_send_message, handle_start_session, handle_stop_session, AppState, CreateSessionRequest,
+    ListSessionsQuery, SendMessageRequest,
 };
 use crate::web::state::EVENT_BUS;
 
@@ -300,6 +301,110 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
         .get_claude_session(&session_id)
         .is_none());
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_created_session_keeps_selected_work_dir_when_listed_and_started() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let default_dir = env.home();
+    let selected_dir = env.home().join("Downloads");
+    std::fs::create_dir_all(&selected_dir)?;
+    let state = AppState {
+        claude_config: env.fake_claude_config(),
+        show_thinking: false,
+        default_dir: default_dir.to_string_lossy().to_string(),
+    };
+
+    let (status, body) = handle_create_session(
+        State(state.clone()),
+        Json(CreateSessionRequest {
+            title: Some("Selected download dir".to_string()),
+            work_dir: Some(default_dir.to_string_lossy().to_string()),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    let session_id = body["session"]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        body["session"]["work_dir"].as_str().unwrap(),
+        default_dir.to_str().unwrap()
+    );
+
+    let (status, body) = handle_cd(Json(CdRequest {
+        session_id: Some(session_id.clone()),
+        path: selected_dir.to_string_lossy().to_string(),
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body)?["dir"]
+            .as_str()
+            .unwrap(),
+        selected_dir.to_str().unwrap()
+    );
+
+    let listed = handle_list_sessions(Query(ListSessionsQuery {
+        source: Some("webui".to_string()),
+    }))
+    .await
+    .0;
+    let listed_session = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == session_id)
+        .unwrap();
+    assert_eq!(
+        listed_session["work_dir"].as_str().unwrap(),
+        selected_dir.to_str().unwrap()
+    );
+
+    let (status, body) = short_timeout(
+        "start selected work dir session",
+        handle_start_session(State(state), Path(session_id.clone())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(
+        body["session"]["work_dir"].as_str().unwrap(),
+        selected_dir.to_str().unwrap()
+    );
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webui_create_session_treats_tilde_as_config_default_dir() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let default_dir = env.home().join("configured-default");
+    std::fs::create_dir_all(&default_dir)?;
+    let state = AppState {
+        claude_config: env.fake_claude_config(),
+        show_thinking: false,
+        default_dir: default_dir.to_string_lossy().to_string(),
+    };
+
+    let (status, body) = handle_create_session(
+        State(state),
+        Json(CreateSessionRequest {
+            title: Some("Default dir session".to_string()),
+            work_dir: Some("~".to_string()),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(
+        body["session"]["work_dir"].as_str().unwrap(),
+        default_dir.to_str().unwrap()
+    );
     Ok(())
 }
 

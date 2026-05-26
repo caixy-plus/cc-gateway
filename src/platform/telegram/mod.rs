@@ -2,7 +2,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
@@ -25,6 +25,12 @@ pub(crate) struct TelegramChannelRuntime {
     pub(crate) active_claude: Option<ActiveClaudeRuntime>,
     /// Ensures only one poll loop runs per chat at a time.
     poll_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone)]
+enum TelegramCallbackAction {
+    ChangeDir { chat_id: String, path: String },
+    ResumeSession { chat_id: String, session_id: String },
 }
 
 impl TelegramChannelRuntime {
@@ -126,6 +132,8 @@ pub struct TelegramPlatform {
     http_client: reqwest::Client,
     channels: Arc<DashMap<String, TelegramChannelRuntime>>,
     offset: Arc<AtomicI64>,
+    callbacks: Arc<DashMap<String, TelegramCallbackAction>>,
+    callback_counter: Arc<AtomicU64>,
 }
 
 impl TelegramPlatform {
@@ -143,6 +151,8 @@ impl TelegramPlatform {
             http_client: reqwest::Client::new(),
             channels: Arc::new(DashMap::new()),
             offset: Arc::new(AtomicI64::new(0)),
+            callbacks: Arc::new(DashMap::new()),
+            callback_counter: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -151,6 +161,54 @@ impl TelegramPlatform {
             "https://api.telegram.org/bot{}/{}",
             self.config.bot_token, method
         )
+    }
+
+    pub(crate) fn mcp_context_for_chat(
+        &self,
+        chat_id: &str,
+    ) -> crate::claude::mcp_server::McpContext {
+        crate::claude::mcp_server::McpContext {
+            delivery: crate::claude::file_delivery::McpDeliveryTarget::Telegram(
+                crate::claude::file_delivery::TelegramFileTarget {
+                    bot_token: self.config.bot_token.clone(),
+                    chat_id: chat_id.to_string(),
+                },
+            ),
+        }
+    }
+
+    pub(crate) fn bot_commands_payload() -> Value {
+        json!({
+            "commands": [
+                { "command": "help", "description": crate::t!("telegram.command_help") },
+                { "command": "pwd", "description": crate::t!("telegram.command_pwd") },
+                { "command": "ll", "description": crate::t!("telegram.command_ll") },
+                { "command": "cd_up", "description": crate::t!("telegram.command_cd_up") },
+                { "command": "cd_default", "description": crate::t!("telegram.command_cd_default") },
+                { "command": "mkdir", "description": crate::t!("telegram.command_mkdir") },
+                { "command": "claude", "description": crate::t!("telegram.command_claude") },
+                { "command": "claude_history", "description": crate::t!("telegram.command_claude_history") },
+                { "command": "show_thinking", "description": crate::t!("telegram.command_show_thinking") },
+                { "command": "hide_thinking", "description": crate::t!("telegram.command_hide_thinking") },
+                { "command": "quit", "description": crate::t!("telegram.command_quit") },
+            ]
+        })
+    }
+
+    async fn set_bot_commands(&self) -> Result<()> {
+        let url = self.api_url("setMyCommands");
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&Self::bot_commands_payload())
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await?;
+            anyhow::bail!("Telegram setMyCommands failed: {}", body);
+        }
+        Ok(())
     }
 
     async fn get_updates(&self) -> Result<Vec<Update>> {
@@ -191,7 +249,103 @@ impl TelegramPlatform {
         Ok(())
     }
 
+    async fn send_message_with_markup(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_markup: Value,
+    ) -> Result<()> {
+        let url = self.api_url("sendMessage");
+        let payload = json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": reply_markup,
+        });
+
+        let resp = self.http_client.post(&url).json(&payload).send().await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await?;
+            anyhow::bail!("Telegram sendMessage failed: {}", body);
+        }
+        Ok(())
+    }
+
+    async fn answer_callback_query(&self, callback_id: &str, text: Option<&str>) -> Result<()> {
+        let url = self.api_url("answerCallbackQuery");
+        let mut payload = json!({
+            "callback_query_id": callback_id,
+        });
+        if let Some(text) = text {
+            payload["text"] = json!(text);
+        }
+
+        let resp = self.http_client.post(&url).json(&payload).send().await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await?;
+            anyhow::bail!("Telegram answerCallbackQuery failed: {}", body);
+        }
+        Ok(())
+    }
+
+    fn register_callback(&self, action: TelegramCallbackAction) -> String {
+        let id = self.callback_counter.fetch_add(1, Ordering::SeqCst);
+        let token = format!("cg:{}", id);
+        self.callbacks.insert(token.clone(), action);
+        token
+    }
+
+    pub(crate) fn directory_reply_markup(&self, chat_id: &str, dirs: &[(String, String)]) -> Value {
+        let rows: Vec<Value> = dirs
+            .iter()
+            .map(|(name, path)| {
+                let callback_data = self.register_callback(TelegramCallbackAction::ChangeDir {
+                    chat_id: chat_id.to_string(),
+                    path: path.clone(),
+                });
+                json!([{
+                    "text": format!("{}/", name),
+                    "callback_data": callback_data,
+                }])
+            })
+            .collect();
+
+        json!({ "inline_keyboard": rows })
+    }
+
+    pub(crate) fn history_reply_markup(
+        &self,
+        chat_id: &str,
+        sessions: &[crate::session::channel_model::ClaudeSession],
+    ) -> Value {
+        let rows: Vec<Value> = sessions
+            .iter()
+            .map(|session| {
+                let status = if session.active {
+                    crate::t!("feishu.status_active")
+                } else {
+                    crate::t!("feishu.status_inactive")
+                };
+                let callback_data = self.register_callback(TelegramCallbackAction::ResumeSession {
+                    chat_id: chat_id.to_string(),
+                    session_id: session.id.clone(),
+                });
+                json!([{
+                    "text": format!("{} ({})", session.title, status),
+                    "callback_data": callback_data,
+                }])
+            })
+            .collect();
+
+        json!({ "inline_keyboard": rows })
+    }
+
     async fn handle_update(&self, update: Update) -> Result<()> {
+        if let Some(callback_query) = update.callback_query {
+            return self.handle_callback_query(callback_query).await;
+        }
+
         let msg = match update.message {
             Some(m) => m,
             None => return Ok(()),
@@ -252,7 +406,8 @@ impl TelegramPlatform {
             format!("Telegram {}", chat_id),
             runtime.channel_session.work_dir.clone(),
             runtime.active_claude.clone(),
-        );
+        )
+        .with_mcp_context(self.mcp_context_for_chat(&chat_id_str));
         let outcome = executor.execute(&mut context, action).await?;
 
         if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
@@ -283,13 +438,11 @@ impl TelegramPlatform {
                     self.send_message(chat_id, crate::t!("builtin.no_subdirs"))
                         .await?;
                 } else {
-                    let lines: Vec<String> = dirs
-                        .iter()
-                        .map(|(name, _)| format!("  {}/", name))
-                        .collect();
-                    self.send_message(
+                    let markup = self.directory_reply_markup(&chat_id_str, &dirs);
+                    self.send_message_with_markup(
                         chat_id,
-                        &format!("Directories in {}:\n{}", dir, lines.join("\n")),
+                        &crate::t_fmt!("telegram.choose_directory", DIR = dir),
+                        markup,
                     )
                     .await?;
                 }
@@ -307,21 +460,18 @@ impl TelegramPlatform {
                 .await?;
             }
             ChatCommandOutcome::History { sessions } => {
-                let text = if sessions.is_empty() {
-                    crate::t!("feishu.no_sessions").to_string()
+                if sessions.is_empty() {
+                    self.send_message(chat_id, crate::t!("feishu.no_sessions"))
+                        .await?;
                 } else {
-                    let mut lines = vec![crate::t!("feishu.session_history_title").to_string()];
-                    for (i, s) in sessions.iter().enumerate() {
-                        let status = if s.active {
-                            crate::t!("feishu.status_active")
-                        } else {
-                            crate::t!("feishu.status_inactive")
-                        };
-                        lines.push(format!("{}. {} ({})", i + 1, s.title, status));
-                    }
-                    lines.join("\n")
-                };
-                self.send_message(chat_id, &text).await?;
+                    let markup = self.history_reply_markup(&chat_id_str, &sessions);
+                    self.send_message_with_markup(
+                        chat_id,
+                        crate::t!("telegram.choose_history"),
+                        markup,
+                    )
+                    .await?;
+                }
             }
             ChatCommandOutcome::ForwardToClaude { active, text } => {
                 let _guard = runtime.poll_lock.lock().await;
@@ -333,6 +483,124 @@ impl TelegramPlatform {
                 GLOBAL_CHANNEL_SESSIONS
                     .send_and_poll_active_runtime(&active, &text, &mut sink)
                     .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_callback_query(&self, callback_query: CallbackQuery) -> Result<()> {
+        let Some(message) = callback_query.message else {
+            let _ = self
+                .answer_callback_query(
+                    &callback_query.id,
+                    Some(crate::t!("telegram.callback_expired")),
+                )
+                .await;
+            return Ok(());
+        };
+        let Some(data) = callback_query.data else {
+            let _ = self.answer_callback_query(&callback_query.id, None).await;
+            return Ok(());
+        };
+
+        let chat_id = message.chat.id;
+        let chat_id_str = chat_id.to_string();
+        let user_id = callback_query.from.id;
+        let username = callback_query.from.username.unwrap_or_default();
+
+        if !self.is_allowed_sender(user_id, &username) {
+            debug!(
+                "Telegram callback from unauthorized user: {} (@{})",
+                user_id, username
+            );
+            let _ = self
+                .answer_callback_query(
+                    &callback_query.id,
+                    Some(crate::t!("telegram.callback_expired")),
+                )
+                .await;
+            return Ok(());
+        }
+
+        if message.chat.chat_type != "private" {
+            self.send_message(chat_id, crate::t!("telegram.private_chat_only"))
+                .await?;
+            return Ok(());
+        }
+
+        let Some((_, action)) = self.callbacks.remove(&data) else {
+            let _ = self
+                .answer_callback_query(
+                    &callback_query.id,
+                    Some(crate::t!("telegram.callback_expired")),
+                )
+                .await;
+            return Ok(());
+        };
+
+        match action {
+            TelegramCallbackAction::ChangeDir {
+                chat_id: action_chat_id,
+                path,
+            } => {
+                if action_chat_id != chat_id_str {
+                    let _ = self
+                        .answer_callback_query(
+                            &callback_query.id,
+                            Some(crate::t!("telegram.callback_expired")),
+                        )
+                        .await;
+                    return Ok(());
+                }
+
+                let runtime = self.get_channel(&chat_id_str).await;
+                GLOBAL_CHANNEL_SESSIONS
+                    .switch_work_dir(&runtime.channel_session.id, std::path::PathBuf::from(&path))
+                    .await?;
+                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
+                    rt.channel_session.work_dir = path.clone();
+                }
+                let _ = self.answer_callback_query(&callback_query.id, None).await;
+                self.send_message(chat_id, &crate::t_fmt!("builtin.dir_changed", PATH = path))
+                    .await?;
+            }
+            TelegramCallbackAction::ResumeSession {
+                chat_id: action_chat_id,
+                session_id,
+            } => {
+                if action_chat_id != chat_id_str {
+                    let _ = self
+                        .answer_callback_query(
+                            &callback_query.id,
+                            Some(crate::t!("telegram.callback_expired")),
+                        )
+                        .await;
+                    return Ok(());
+                }
+
+                let runtime = self.get_channel(&chat_id_str).await;
+                let active = GLOBAL_CHANNEL_SESSIONS
+                    .resume_claude_session_for_platform(
+                        &session_id,
+                        &self.default_dir,
+                        self.claude_config.clone(),
+                        self.show_thinking,
+                        Some(runtime.channel_session.work_dir.clone()),
+                        Some(self.mcp_context_for_chat(&chat_id_str)),
+                    )
+                    .await?;
+                let work_dir = active.claude_session.work_dir.clone();
+                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
+                    rt.channel_session.work_dir = work_dir.clone();
+                    rt.active_claude = Some(active);
+                }
+                let _ = self.answer_callback_query(&callback_query.id, None).await;
+                self.send_message(
+                    chat_id,
+                    &crate::t_fmt!("telegram.session_resumed", DIR = work_dir),
+                )
+                .await?;
             }
         }
 
@@ -401,6 +669,9 @@ impl TelegramPlatform {
 impl Platform for TelegramPlatform {
     async fn run(&self) -> Result<()> {
         info!("Starting Telegram platform...");
+        if let Err(e) = self.set_bot_commands().await {
+            warn!("[Telegram] Failed to set bot commands: {}", e);
+        }
         self.spawn_deliver_listener();
         loop {
             match self.get_updates().await {
@@ -435,6 +706,7 @@ struct Update {
     #[serde(rename = "update_id")]
     update_id: i64,
     message: Option<Message>,
+    callback_query: Option<CallbackQuery>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -459,4 +731,17 @@ struct Chat {
     id: i64,
     #[serde(rename = "type")]
     chat_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CallbackQuery {
+    id: String,
+    from: User,
+    message: Option<CallbackMessage>,
+    data: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CallbackMessage {
+    chat: Chat,
 }

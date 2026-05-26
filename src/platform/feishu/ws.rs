@@ -404,12 +404,7 @@ impl FeishuPlatform {
         };
 
         let action = router.route(&msg.content).await;
-        let mcp_ctx = crate::claude::mcp_server::McpContext {
-            feishu_app_id: self.config.app_id.clone(),
-            feishu_app_secret: self.config.app_secret.clone(),
-            chat_id: receive_id.clone(),
-            receive_id_type: receive_id_type.clone(),
-        };
+        let mcp_ctx = self.mcp_context_for_receive(&receive_id, &receive_id_type);
         let channel_work_dir = GLOBAL_CHANNEL_SESSIONS
             .get_channel(&runtime.channel_session.id)
             .map(|c| c.work_dir)
@@ -863,12 +858,7 @@ impl FeishuPlatform {
                             .and_then(|v| v.as_str())
                             .unwrap_or(&default_work_dir);
 
-                        let mcp_ctx = crate::claude::mcp_server::McpContext {
-                            feishu_app_id: self.config.app_id.clone(),
-                            feishu_app_secret: self.config.app_secret.clone(),
-                            chat_id: receive_id.clone(),
-                            receive_id_type: receive_id_type.clone(),
-                        };
+                        let mcp_ctx = self.mcp_context_for_receive(&receive_id, &receive_id_type);
                         match crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
                             .resume_claude_session_for_platform(
                                 session_id,

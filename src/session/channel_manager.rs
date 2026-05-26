@@ -223,6 +223,18 @@ impl ChannelManager {
         self.claude_sessions.get(id).map(|e| e.clone())
     }
 
+    pub fn update_claude_session_work_dir(&self, id: &str, work_dir: &str) -> bool {
+        let Some(mut session) = self.get_claude_session(id) else {
+            return false;
+        };
+        session.work_dir = work_dir.to_string();
+        session.updated_at = Some(Utc::now());
+        self.claude_sessions
+            .insert(session.id.clone(), session.clone());
+        crate::db::insert_claude_session(&session);
+        true
+    }
+
     pub fn get_active_claude_session(&self, channel_id: &str) -> Option<ClaudeSession> {
         self.claude_sessions
             .iter()
