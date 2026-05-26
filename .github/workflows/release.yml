@@ -40,12 +40,21 @@ jobs:
           node-version: '20'
 
       - name: Build frontend
+        shell: bash
         run: |
           cd webui-src
           npm ci
           npm run build
+          rm -rf ../webui/dist
           mkdir -p ../webui/dist
-          cp -r dist/* ../webui/dist/
+          cp -a dist/* ../webui/dist/
+          # Verify frontend was built and copied successfully
+          test -f ../webui/dist/index.html || {
+            echo "ERROR: webui/dist/index.html not found after frontend build"
+            ls -la dist/ || true
+            ls -la ../webui/dist/ || true
+            exit 1
+          }
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
