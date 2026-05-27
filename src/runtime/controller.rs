@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{debug, info};
+use tracing::info;
 
-use crate::claude::mcp_server::McpContext;
-use crate::claude::protocol::{
-    build_permission_allow, build_user_message, InputMessage, OutputEvent,
-};
-use crate::claude::session::ClaudeSession;
-use crate::config::model::ClaudeConfig;
+use crate::agent::event::AgentEvent;
+pub use crate::agent::event::QuestionItem;
+use crate::agent::session::AgentRuntime;
+use crate::runtime::mcp_server::McpContext;
+use crate::runtime::protocol::{build_permission_allow, build_permission_deny, InputMessage};
+use crate::config::model::{AgentProvider, AgentProfiles};
 use crate::{t, t_fmt};
 
 /// Validate that a path is allowed.
@@ -145,21 +145,6 @@ pub enum ControllerEvent {
     Done,
 }
 
-#[derive(Debug, Clone)]
-pub struct QuestionItem {
-    pub question: String,
-    pub header: String,
-    pub options: Vec<QuestionOption>,
-    #[allow(dead_code)]
-    pub multi_select: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct QuestionOption {
-    pub label: String,
-    pub description: String,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum SessionState {
     Inactive,
@@ -167,24 +152,30 @@ enum SessionState {
     Active,
 }
 
-pub struct ClaudeController {
-    config: ClaudeConfig,
+pub struct AgentController {
+    config: AgentProfiles,
     show_thinking: Arc<AtomicBool>,
-    session: Arc<RwLock<Option<ClaudeSession>>>,
+    session: Arc<RwLock<Option<AgentRuntime>>>,
     event_tx: mpsc::UnboundedSender<ControllerEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
     work_dir: Arc<RwLock<String>>,
     pending_permission: Arc<RwLock<Option<(String, String)>>>,
     session_state: Arc<RwLock<SessionState>>,
     message_buffer: Arc<Mutex<Vec<String>>>,
-    claude_session_id: Arc<RwLock<Option<String>>>,
+    provider_session_id: Arc<RwLock<Option<String>>>,
+    active_provider: Arc<RwLock<Option<String>>>,
     pending_resume_session_id: Arc<RwLock<Option<String>>>,
+    pending_resume_provider: Arc<RwLock<Option<AgentProvider>>>,
     pending_resume_record_id: Arc<RwLock<Option<String>>>,
     mcp_context: Arc<RwLock<Option<McpContext>>>,
 }
 
-impl ClaudeController {
-    pub fn new(config: ClaudeConfig, show_thinking: bool) -> Self {
+impl AgentController {
+    pub fn agent_profiles(&self) -> &AgentProfiles {
+        &self.config
+    }
+
+    pub fn new(config: AgentProfiles, show_thinking: bool) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
             config,
@@ -196,8 +187,10 @@ impl ClaudeController {
             pending_permission: Arc::new(RwLock::new(None)),
             session_state: Arc::new(RwLock::new(SessionState::Inactive)),
             message_buffer: Arc::new(Mutex::new(Vec::new())),
-            claude_session_id: Arc::new(RwLock::new(None)),
+            provider_session_id: Arc::new(RwLock::new(None)),
+            active_provider: Arc::new(RwLock::new(None)),
             pending_resume_session_id: Arc::new(RwLock::new(None)),
+            pending_resume_provider: Arc::new(RwLock::new(None)),
             pending_resume_record_id: Arc::new(RwLock::new(None)),
             mcp_context: Arc::new(RwLock::new(None)),
         }
@@ -208,10 +201,27 @@ impl ClaudeController {
         *wd = dir;
     }
 
+    #[cfg(test)]
     pub async fn start_session(&self, work_dir: String, extra_args: Vec<String>) -> Result<()> {
+        self.start_session_with_provider(work_dir, extra_args, None)
+            .await
+    }
+
+    pub async fn start_session_with_provider(
+        &self,
+        work_dir: String,
+        extra_args: Vec<String>,
+        provider: Option<AgentProvider>,
+    ) -> Result<()> {
         // Stop existing session if any
         self.stop_session().await?;
 
+        let provider = if provider.is_some() {
+            provider
+        } else {
+            self.pending_resume_provider.write().await.take()
+        };
+        let config = self.config.config_for_provider(provider);
         let validated = ensure_under_home(&work_dir)?;
 
         let resume_id = {
@@ -223,12 +233,12 @@ impl ClaudeController {
             let ctx = self.mcp_context.read().await;
             ctx.clone()
         };
-        let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
-        let (mut session, claude_session_id) = ClaudeSession::spawn(
+        let (agent_tx, mut agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let (mut session, spawned_provider_session_id) = AgentRuntime::spawn(
             validated.clone(),
             extra_args,
-            &self.config,
-            claude_tx,
+            &config,
+            agent_tx,
             resume_id,
             mcp_ctx,
         )
@@ -255,8 +265,12 @@ impl ClaudeController {
             *s = Some(session);
         }
         {
-            let mut sid = self.claude_session_id.write().await;
-            *sid = claude_session_id.clone();
+            let mut sid = self.provider_session_id.write().await;
+            *sid = spawned_provider_session_id.clone();
+        }
+        {
+            let mut provider = self.active_provider.write().await;
+            *provider = Some(config.provider.to_string());
         }
         {
             let mut wd = self.work_dir.write().await;
@@ -281,22 +295,22 @@ impl ClaudeController {
         // Spawn event processor
         let event_tx = self.event_tx.clone();
         let pending_perm = self.pending_permission.clone();
-        let work_dir = validated.clone();
         let session_arc = self.session.clone();
         let session_state = self.session_state.clone();
         let message_buffer = self.message_buffer.clone();
         let show_thinking = self.show_thinking.clone();
-        let claude_session_id_arc = self.claude_session_id.clone();
+        let permission_policy = config.permission.clone();
+        let provider_session_id_arc = self.provider_session_id.clone();
         tokio::spawn(async move {
-            while let Some(event) = claude_rx.recv().await {
-                Self::process_claude_event(
+            while let Some(event) = agent_rx.recv().await {
+                Self::process_agent_event(
                     &event_tx,
                     &pending_perm,
-                    &work_dir,
                     &session_arc,
-                    &claude_session_id_arc,
+                    &provider_session_id_arc,
                     event,
                     &show_thinking,
+                    &permission_policy,
                 )
                 .await;
             }
@@ -339,8 +353,7 @@ impl ClaudeController {
         for msg in messages {
             let mut s = self.session.write().await;
             if let Some(ref mut session) = *s {
-                let user_msg = build_user_message(&msg);
-                let _ = session.send(user_msg).await;
+                let _ = session.send_message(&msg).await;
             }
             drop(s);
         }
@@ -364,8 +377,8 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        // NOTE: we intentionally keep claude_session_id here so that a
-        // subsequent /claude can resume the same Claude session.
+        // NOTE: we intentionally keep provider_session_id here so that a
+        // subsequent /agent can resume the same provider session.
         Ok(())
     }
 
@@ -381,10 +394,9 @@ impl ClaudeController {
                 Ok(())
             }
             SessionState::Active => {
-                let msg = build_user_message(text);
                 let mut s = self.session.write().await;
                 if let Some(ref mut session) = *s {
-                    session.send(msg).await?;
+                    session.send_message(text).await?;
                     Ok(())
                 } else {
                     anyhow::bail!("{}", t!("controller.no_active_session"))
@@ -406,7 +418,7 @@ impl ClaudeController {
             SessionState::Active => {
                 let mut s = self.session.write().await;
                 if let Some(ref mut session) = *s {
-                    session.send(msg).await?;
+                    session.send_input(msg).await?;
                     Ok(())
                 } else {
                     anyhow::bail!("{}", t!("controller.no_active_session"))
@@ -440,14 +452,31 @@ impl ClaudeController {
         self.show_thinking.store(value, Ordering::Relaxed);
     }
 
-    pub async fn get_claude_session_id(&self) -> Option<String> {
-        let sid = self.claude_session_id.read().await;
+    pub async fn get_provider_session_id(&self) -> Option<String> {
+        let sid = self.provider_session_id.read().await;
         sid.clone()
+    }
+
+    pub async fn provider_name(&self) -> String {
+        self.active_provider
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| self.config.effective_config().provider.to_string())
     }
 
     pub async fn set_pending_resume_session_id(&self, id: Option<String>) {
         let mut sid = self.pending_resume_session_id.write().await;
         *sid = id;
+    }
+
+    pub async fn set_pending_resume_provider(&self, provider: Option<AgentProvider>) {
+        let mut p = self.pending_resume_provider.write().await;
+        *p = provider;
+    }
+
+    pub async fn take_pending_resume_provider(&self) -> Option<AgentProvider> {
+        self.pending_resume_provider.write().await.take()
     }
 
     pub async fn set_pending_resume_record_id(&self, id: Option<String>) {
@@ -468,209 +497,113 @@ impl ClaudeController {
         *c = Some(ctx);
     }
 
-    pub(crate) async fn process_claude_event(
+    pub(crate) async fn process_agent_event(
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
         pending_perm: &Arc<RwLock<Option<(String, String)>>>,
-        _work_dir: &str,
-        session_arc: &Arc<RwLock<Option<ClaudeSession>>>,
-        claude_session_id: &Arc<RwLock<Option<String>>>,
-        event: OutputEvent,
+        session_arc: &Arc<RwLock<Option<AgentRuntime>>>,
+        provider_session_id: &Arc<RwLock<Option<String>>>,
+        event: AgentEvent,
         show_thinking: &Arc<AtomicBool>,
+        permission_policy: &str,
     ) {
-        match &event {
-            OutputEvent::System { session_id } => {
-                if let Some(id) = session_id {
-                    debug!("Claude session ID: {}", id);
-                    let mut sid = claude_session_id.write().await;
-                    *sid = Some(id.clone());
-                }
+        match event {
+            AgentEvent::SessionId(id) => {
+                tracing::debug!("Agent session ID: {}", id);
+                let mut sid = provider_session_id.write().await;
+                *sid = Some(id);
             }
-            OutputEvent::Assistant { message } => {
-                for block in &message.content {
-                    match block {
-                        crate::claude::protocol::ContentBlock::Text { text } => {
-                            let _ = event_tx.send(ControllerEvent::Text(text.clone()));
-                        }
-                        crate::claude::protocol::ContentBlock::Thinking { thinking } => {
-                            let content = if show_thinking.load(Ordering::Relaxed) {
-                                thinking.clone()
-                            } else {
-                                String::new()
-                            };
-                            let _ = event_tx.send(ControllerEvent::Thinking(content));
-                        }
-                        crate::claude::protocol::ContentBlock::ToolUse { name, input } => {
-                            let input_str = serde_json::to_string(input).unwrap_or_default();
-                            let _ =
-                                event_tx.send(ControllerEvent::ToolUse(name.clone(), input_str));
-                        }
-                        crate::claude::protocol::ContentBlock::ToolResult { content, is_error } => {
-                            let text = content.clone().unwrap_or_default();
-                            let _ = event_tx.send(ControllerEvent::ToolResult(text, *is_error));
-                        }
-                        crate::claude::protocol::ContentBlock::Image { source } => {
-                            let text = format!(
-                                "[Image: {} {} ({} bytes)]",
-                                source.source_type,
-                                source.media_type,
-                                source.data.len()
-                            );
-                            let _ = event_tx.send(ControllerEvent::Text(text));
-                        }
+            AgentEvent::Text(text) => {
+                let _ = event_tx.send(ControllerEvent::Text(text));
+            }
+            AgentEvent::Thinking(thinking) => {
+                let content = if show_thinking.load(Ordering::Relaxed) {
+                    thinking
+                } else {
+                    String::new()
+                };
+                let _ = event_tx.send(ControllerEvent::Thinking(content));
+            }
+            AgentEvent::ToolUse(name, input) => {
+                let _ = event_tx.send(ControllerEvent::ToolUse(name, input));
+            }
+            AgentEvent::ToolResult(text, is_error) => {
+                let _ = event_tx.send(ControllerEvent::ToolResult(text, is_error));
+            }
+            AgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+            } => {
+                // Auto-approve MCP send_file tool — no user interaction needed.
+                if tool_name == "mcp__cc-gateway__send_file" {
+                    let mut s = session_arc.write().await;
+                    if let Some(ref mut session) = *s {
+                        let allow_msg = build_permission_allow(&request_id);
+                        let _ = session.send_input(allow_msg).await;
+                    }
+                    if permission_policy == "allow" || permission_policy == "deny" {
+                        return;
                     }
                 }
+                if permission_policy == "allow" || permission_policy == "deny" {
+                    let mut s = session_arc.write().await;
+                    if let Some(ref mut session) = *s {
+                        let msg = if permission_policy == "allow" {
+                            build_permission_allow(&request_id)
+                        } else {
+                            build_permission_deny(&request_id, "Denied by cc-gateway config")
+                        };
+                        let _ = session.send_input(msg).await;
+                    }
+                    return;
+                }
+                let _ = event_tx.send(ControllerEvent::PermissionRequest {
+                    request_id: request_id.clone(),
+                    tool_name: tool_name.clone(),
+                    input,
+                });
+                let pp = pending_perm.clone();
+                tokio::spawn(async move {
+                    let mut p = pp.write().await;
+                    *p = Some((request_id, tool_name));
+                });
             }
-            OutputEvent::Result {
-                result: _result,
-                usage,
+            AgentEvent::ConfirmRequest {
+                request_id,
+                prompt,
+                options,
             } => {
-                // The result text is the complete assembled response, but we already
-                // streamed it via Assistant::Text blocks. Emitting it again here would
-                // duplicate the content in the accumulator, causing Feishu users to
-                // receive every answer twice.
-                if let Some(u) = usage {
-                    debug!(
-                        "Usage: input={} output={}",
-                        u.input_tokens.unwrap_or(0),
-                        u.output_tokens.unwrap_or(0)
-                    );
-                }
+                let _ = event_tx.send(ControllerEvent::ConfirmRequest {
+                    request_id,
+                    prompt,
+                    options,
+                });
+            }
+            AgentEvent::SelectRequest {
+                request_id,
+                prompt,
+                options,
+            } => {
+                let _ = event_tx.send(ControllerEvent::SelectRequest {
+                    request_id,
+                    prompt,
+                    options,
+                });
+            }
+            AgentEvent::QuestionRequest {
+                request_id,
+                questions,
+            } => {
+                let _ = event_tx.send(ControllerEvent::QuestionRequest {
+                    request_id,
+                    questions,
+                });
+            }
+            AgentEvent::Error(error) => {
+                let _ = event_tx.send(ControllerEvent::Error(error));
+            }
+            AgentEvent::Done => {
                 let _ = event_tx.send(ControllerEvent::Done);
-            }
-            OutputEvent::ControlRequest { .. } => {
-                if let Some((req_id, tool_name, input)) = event.is_permission_request() {
-                    let subtype = event.extract_control_subtype().unwrap_or_default();
-
-                    let dispatched = if tool_name == "AskUserQuestion" {
-                        if let Some(ref val) = input {
-                            if let Some(questions) = val.get("questions").and_then(|q| q.as_array())
-                            {
-                                let parsed: Vec<QuestionItem> = questions
-                                    .iter()
-                                    .filter_map(|q| {
-                                        let question = q.get("question")?.as_str()?.to_string();
-                                        let header = q.get("header")?.as_str()?.to_string();
-                                        let multi_select = q
-                                            .get("multi_select")
-                                            .and_then(|m| m.as_bool())
-                                            .unwrap_or(false);
-                                        let options = q.get("options")?.as_array()?;
-                                        let parsed_options: Vec<QuestionOption> = options
-                                            .iter()
-                                            .filter_map(|o| {
-                                                let label = o.get("label")?.as_str()?.to_string();
-                                                let description =
-                                                    o.get("description")?.as_str()?.to_string();
-                                                Some(QuestionOption { label, description })
-                                            })
-                                            .collect();
-                                        Some(QuestionItem {
-                                            question,
-                                            header,
-                                            options: parsed_options,
-                                            multi_select,
-                                        })
-                                    })
-                                    .collect();
-                                if !parsed.is_empty() {
-                                    Some(ControllerEvent::QuestionRequest {
-                                        request_id: req_id.clone(),
-                                        questions: parsed,
-                                    })
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else if subtype == "confirm" {
-                        if let Some(ref val) = input {
-                            let prompt = val
-                                .get("prompt")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let options: Vec<String> = val
-                                .get("options")
-                                .and_then(|o| o.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            Some(ControllerEvent::ConfirmRequest {
-                                request_id: req_id.clone(),
-                                prompt,
-                                options,
-                            })
-                        } else {
-                            None
-                        }
-                    } else if subtype == "select_option" {
-                        if let Some(ref val) = input {
-                            let prompt = val
-                                .get("prompt")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let options: Vec<String> = val
-                                .get("options")
-                                .and_then(|o| o.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            Some(ControllerEvent::SelectRequest {
-                                request_id: req_id.clone(),
-                                prompt,
-                                options,
-                            })
-                        } else {
-                            None
-                        }
-                    } else {
-                        // Auto-approve MCP send_file tool — no user interaction needed
-                        if tool_name == "mcp__cc-gateway__send_file" {
-                            let mut s = session_arc.write().await;
-                            if let Some(ref mut session) = *s {
-                                let allow_msg = build_permission_allow(&req_id);
-                                let _ = session.send(allow_msg).await;
-                            }
-                        }
-                        Some(ControllerEvent::PermissionRequest {
-                            request_id: req_id.clone(),
-                            tool_name: tool_name.clone(),
-                            input: input.clone(),
-                        })
-                    };
-
-                    let ev = dispatched.unwrap_or_else(|| ControllerEvent::PermissionRequest {
-                        request_id: req_id.clone(),
-                        tool_name: tool_name.clone(),
-                        input: input.clone(),
-                    });
-
-                    let _ = event_tx.send(ev);
-                    let pp = pending_perm.clone();
-                    let req_id = req_id.clone();
-                    let tool_name = tool_name.clone();
-                    tokio::spawn(async move {
-                        let mut p = pp.write().await;
-                        *p = Some((req_id, tool_name));
-                    });
-                }
-            }
-            OutputEvent::Error { error } => {
-                let _ = event_tx.send(ControllerEvent::Error(error.clone()));
-            }
-            OutputEvent::User { .. } => {
-                // Ignore user echo events
             }
         }
     }

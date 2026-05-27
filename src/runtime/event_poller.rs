@@ -3,7 +3,35 @@ use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
-use crate::claude::controller::{ClaudeController, ControllerEvent};
+use crate::runtime::controller::{AgentController, ControllerEvent};
+
+/// Buffers assistant text for one agent turn; platforms flush on `Done` / errors.
+#[derive(Default)]
+pub struct TurnTextBuffer {
+    inner: String,
+}
+
+impl TurnTextBuffer {
+    pub fn push(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.inner.push_str(text);
+        }
+    }
+
+    pub fn take_nonempty(&mut self) -> Option<String> {
+        if self.inner.trim().is_empty() {
+            self.inner.clear();
+            None
+        } else {
+            Some(std::mem::take(&mut self.inner))
+        }
+    }
+}
+
+/// Whether buffered assistant text should be delivered to the user now.
+pub fn should_flush_turn_buffer(text: &str, is_done: bool) -> bool {
+    is_done || text.starts_with("Error:")
+}
 
 /// Sink trait for consuming Claude events during a poll cycle.
 /// Each platform/TUI provides its own implementation.
@@ -41,20 +69,20 @@ pub trait EventPollSink: Send {
     async fn on_question_request(
         &mut self,
         request_id: &str,
-        questions: &[crate::claude::controller::QuestionItem],
+        questions: &[crate::runtime::controller::QuestionItem],
     ) -> Result<()>;
 }
 
-/// Polls ClaudeController events and dispatches them to an EventPollSink.
-pub struct ClaudeEventPoller {
+/// Polls AgentController events and dispatches them to an EventPollSink.
+pub struct AgentEventPoller {
     event_rx: std::sync::Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
 }
 
-impl ClaudeEventPoller {
+impl AgentEventPoller {
     /// Create a poller from an existing controller reference.
     /// Clones the controller's event receiver so the poller can listen
     /// independently after the controller lock is released.
-    pub fn from_controller(controller: &ClaudeController) -> Self {
+    pub fn from_controller(controller: &AgentController) -> Self {
         Self {
             event_rx: controller.event_rx_clone(),
         }
@@ -178,7 +206,28 @@ impl ClaudeEventPoller {
             }
         }
 
-        debug!("ClaudeEventPoller: poll loop ended");
+        debug!("AgentEventPoller: poll loop ended");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_text_buffer_accumulates_until_take() {
+        let mut buf = TurnTextBuffer::default();
+        buf.push("line1\n");
+        buf.push("line2\n");
+        assert_eq!(buf.take_nonempty().as_deref(), Some("line1\nline2\n"));
+        assert!(buf.take_nonempty().is_none());
+    }
+
+    #[test]
+    fn should_flush_on_done_or_error() {
+        assert!(!should_flush_turn_buffer("partial", false));
+        assert!(should_flush_turn_buffer("", true));
+        assert!(should_flush_turn_buffer("Error: boom", false));
     }
 }

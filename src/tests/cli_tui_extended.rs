@@ -36,7 +36,7 @@ fn test_app_new_state() {
     assert_eq!(app.commands.len(), 11);
     assert!(app.commands.contains(&"/help".to_string()));
     assert!(app.commands.contains(&"/quit".to_string()));
-    assert!(app.commands.contains(&"/claude".to_string()));
+    assert!(app.commands.contains(&"/agent".to_string()));
     // Completion state initialized
     assert!(app.completion_matches.is_empty());
     assert_eq!(app.completion_index, 0);
@@ -315,23 +315,20 @@ fn test_app_compute_inline_hint_exact_match_no_hint() {
 }
 
 #[test]
-fn test_app_compute_inline_hint_slash_claude() {
+fn test_app_compute_inline_hint_slash_agent() {
     let mut app = App::new("ch1".to_string());
-    app.input = "/clau".to_string();
+    app.input = "/agen".to_string();
     let hint = app.compute_inline_hint();
-    assert_eq!(hint, Some("de".to_string())); // completes to "/claude"
+    assert_eq!(hint, Some("t".to_string())); // completes to "/agent"
 }
 
 #[test]
 fn test_app_compute_inline_hint_multiple_matches_returns_first() {
     let mut app = App::new("ch1".to_string());
-    // "/cl" could match "/claude"
-    // We have a deterministic set of commands, so first match in list order wins
-    app.input = "/cl".to_string();
+    app.input = "/a".to_string();
     let hint = app.compute_inline_hint();
     assert!(hint.is_some());
-    // Should complete to "/claude" (first in list that starts with "/cl")
-    assert_eq!(hint.unwrap(), "aude".to_string());
+    assert_eq!(hint.unwrap(), "gent".to_string());
 }
 
 #[test]

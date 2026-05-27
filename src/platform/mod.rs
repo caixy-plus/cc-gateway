@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 pub mod feishu;
+pub mod inbound_media;
 pub mod proto;
 pub mod telegram;
 

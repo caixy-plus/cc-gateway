@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 
 use crate::db;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
-use crate::session::channel_model::ClaudeSessionState;
+use crate::session::channel_model::AgentSessionState;
 use crate::web::handlers::cmd::{handle_cd, CdRequest};
 use crate::web::handlers::session::{
     handle_create_session, handle_delete_session, handle_get_history, handle_list_sessions,
@@ -79,7 +79,7 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
     let work_dir = env.home().join("webui-project");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        agent_settings: env.fake_agent_profiles().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -89,24 +89,25 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
         .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &runtime.channel_session.id,
             "WebUI flow",
             work_dir.to_str().unwrap(),
-            state.claude_config.clone(),
+            state.agent_settings.clone(),
             state.show_thinking,
             vec![],
             None,
             None,
             None,
+            None,
         )
         .await?;
-    let session_id = active.claude_session.id.clone();
+    let session_id = active.agent_session.id.clone();
     GLOBAL_CHANNEL_SESSIONS
-        .set_webui_active_claude(&runtime.channel_session.id, Some(active.clone()));
+        .set_webui_active_agent(&runtime.channel_session.id, Some(active.clone()));
     assert!(
         GLOBAL_CHANNEL_SESSIONS
-            .get_claude_session(&session_id)
+            .get_agent_session(&session_id)
             .unwrap()
             .active
     );
@@ -134,10 +135,10 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
     let (status, _) = short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
     assert_eq!(status, StatusCode::OK);
     let stored = GLOBAL_CHANNEL_SESSIONS
-        .get_claude_session(&session_id)
+        .get_agent_session(&session_id)
         .expect("session should remain persisted after stop");
     assert!(!stored.active);
-    assert_eq!(stored.state, ClaudeSessionState::Stopped);
+    assert_eq!(stored.state, AgentSessionState::Stopped);
 
     Ok(())
 }
@@ -149,7 +150,7 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
     let work_dir = env.home().join("webui-active-no-poller");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        agent_settings: env.fake_agent_profiles().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -159,20 +160,21 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
         .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &runtime.channel_session.id,
             "Active without poller",
             work_dir.to_str().unwrap(),
-            state.claude_config.clone(),
+            state.agent_settings.clone(),
             state.show_thinking,
             vec![],
             None,
             None,
             None,
+            None,
         )
         .await?;
-    let session_id = active.claude_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&runtime.channel_session.id, Some(active));
+    let session_id = active.agent_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
 
     let mut rx = EVENT_BUS.subscribe();
     let (status, body) = short_timeout(
@@ -205,7 +207,7 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
     let work_dir = env.home().join("webui-empty-assistant");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        agent_settings: env.fake_agent_profiles().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -215,20 +217,21 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
         .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &runtime.channel_session.id,
             "No empty assistant event",
             work_dir.to_str().unwrap(),
-            state.claude_config.clone(),
+            state.agent_settings.clone(),
             state.show_thinking,
             vec![],
             None,
             None,
             None,
+            None,
         )
         .await?;
-    let session_id = active.claude_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&runtime.channel_session.id, Some(active));
+    let session_id = active.agent_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
 
     let mut rx = EVENT_BUS.subscribe();
     let (status, body) = short_timeout(
@@ -262,7 +265,7 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
     let work_dir = env.home().join("webui-list-delete");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        agent_settings: env.fake_agent_profiles().into(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -302,7 +305,7 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
         "deleted"
     );
     assert!(GLOBAL_CHANNEL_SESSIONS
-        .get_claude_session(&session_id)
+        .get_agent_session(&session_id)
         .is_none());
 
     Ok(())
@@ -316,7 +319,7 @@ async fn webui_created_session_keeps_selected_work_dir_when_listed_and_started()
     let selected_dir = env.home().join("Downloads");
     std::fs::create_dir_all(&selected_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        agent_settings: env.fake_agent_profiles().into(),
         show_thinking: false,
         default_dir: default_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -390,7 +393,7 @@ async fn webui_create_session_treats_tilde_as_config_default_dir() -> Result<()>
     let default_dir = env.home().join("configured-default");
     std::fs::create_dir_all(&default_dir)?;
     let state = AppState {
-        claude_config: env.fake_claude_config(),
+        agent_settings: env.fake_agent_profiles().into(),
         show_thinking: false,
         default_dir: default_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -425,20 +428,21 @@ async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Re
         .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &runtime.channel_session.id,
             "Active delete protection",
             work_dir.to_str().unwrap(),
-            env.fake_claude_config(),
+            env.fake_agent_profiles(),
             false,
             vec![],
             None,
             None,
             None,
+            None,
         )
         .await?;
-    let session_id = active.claude_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_claude(&runtime.channel_session.id, Some(active));
+    let session_id = active.agent_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
 
     let (status, body) = handle_delete_session(Path(session_id.clone())).await;
 
@@ -449,14 +453,14 @@ async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Re
     );
     assert!(
         GLOBAL_CHANNEL_SESSIONS
-            .get_claude_session(&session_id)
+            .get_agent_session(&session_id)
             .unwrap()
             .active
     );
     assert!(GLOBAL_CHANNEL_SESSIONS
         .get_webui_runtime(&runtime.channel_session.id)
         .unwrap()
-        .active_claude
+        .active_agent
         .is_some());
 
     let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;

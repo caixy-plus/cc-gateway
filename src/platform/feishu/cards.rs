@@ -123,10 +123,71 @@ pub fn build_dir_picker_card(
     })
 }
 
+/// Build an agent-provider picker card (channel default for `/agent`).
+pub fn build_agent_picker_card(
+    options: &[(String, String)],
+    current: &crate::config::model::AgentProvider,
+    chat_id: &str,
+    receive_id_type: &str,
+    receive_id: &str,
+) -> Value {
+    let mut elements: Vec<Value> = Vec::new();
+    elements.push(json!({
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": crate::t!("feishu.choose_agent")
+        }
+    }));
+
+    for (provider_id, display_name) in options {
+        let is_current = provider_id == &current.to_string();
+        let label = if is_current {
+            crate::t_fmt!("feishu.agent_option_default", NAME = display_name)
+        } else {
+            display_name.clone()
+        };
+        elements.push(json!({
+            "tag": "button",
+            "text": {
+                "tag": "plain_text",
+                "content": label
+            },
+            "type": if is_current { "default" } else { "primary" },
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "cmd": "set_agent",
+                        "provider": provider_id,
+                        "chat_id": chat_id,
+                        "receive_id_type": receive_id_type,
+                        "receive_id": receive_id
+                    }
+                }
+            ]
+        }));
+    }
+
+    json!({
+        "schema": "2.0",
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": crate::t!("feishu.select_agent_title")
+            },
+            "template": "purple"
+        },
+        "body": {
+            "elements": elements
+        }
+    })
+}
+
 /// Build a session-history card with resume / new-session / delete buttons.
 /// Matches main branch `build_session_history_card`.
 pub fn build_session_history_card(
-    sessions: &[crate::session::channel_model::ClaudeSession],
+    sessions: &[crate::session::channel_model::AgentSession],
     chat_id: &str,
     receive_id_type: &str,
     receive_id: &str,
@@ -154,10 +215,11 @@ pub fn build_session_history_card(
             .to_string();
         let mut info_parts = vec![
             format!("**{}** {}", status_dot, session.title),
+            format!("[{}]", session.provider),
             format!("\u{1F4C1} {}", session.work_dir),
             format!("\u{1F552} {}", time),
         ];
-        if let Some(ref csid) = session.claude_session_id {
+        if let Some(ref csid) = session.provider_session_id {
             info_parts.push(format!("\u{1F511} `{}`", csid));
         }
         let info_text = info_parts.join("\n");

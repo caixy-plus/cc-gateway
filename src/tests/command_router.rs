@@ -3,19 +3,19 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::claude::controller::ClaudeController;
+use crate::runtime::controller::AgentController;
 use crate::command::router::{CommandAction, CommandRouter};
-use crate::config::model::ClaudeConfig;
+use crate::config::model::{AgentProvider, AgentProfiles};
 
 use super::helpers::TestEnv;
 
-fn test_router() -> (CommandRouter, Arc<Mutex<ClaudeController>>) {
+fn test_router() -> (CommandRouter, Arc<Mutex<AgentController>>) {
     test_router_with_default("~")
 }
 
-fn test_router_with_default(default_dir: &str) -> (CommandRouter, Arc<Mutex<ClaudeController>>) {
-    let controller = Arc::new(Mutex::new(ClaudeController::new(
-        ClaudeConfig::default(),
+fn test_router_with_default(default_dir: &str) -> (CommandRouter, Arc<Mutex<AgentController>>) {
+    let controller = Arc::new(Mutex::new(AgentController::new(
+        AgentProfiles::default(),
         false,
     )));
     (
@@ -31,13 +31,13 @@ fn display_path(path: &std::path::Path) -> String {
 }
 
 #[tokio::test]
-async fn routes_claude_history_with_index_argument() {
+async fn routes_agent_history_with_index_argument() {
     let (router, _) = test_router();
-    let action = router.route("/claude-history 2").await;
+    let action = router.route("/agent-history 2").await;
 
     match action {
-        CommandAction::ShowClaudeHistory { arg } => assert_eq!(arg, "2"),
-        other => panic!("expected ShowClaudeHistory action, got {:?}", other),
+        CommandAction::ShowAgentHistory { arg } => assert_eq!(arg, "2"),
+        other => panic!("expected ShowAgentHistory action, got {:?}", other),
     }
 }
 
@@ -46,8 +46,8 @@ async fn routes_telegram_menu_aliases_with_underscores() {
     let (router, _) = test_router();
 
     assert!(matches!(
-        router.route("/claude_history 2").await,
-        CommandAction::ShowClaudeHistory { arg } if arg == "2"
+        router.route("/agent_history 2").await,
+        CommandAction::ShowAgentHistory { arg } if arg == "2"
     ));
     assert!(matches!(
         router.route("/cd_up").await,
@@ -122,8 +122,36 @@ async fn parses_core_commands_without_starting_claude() {
         CommandAction::ListDir { path: Some(_) }
     ));
     assert!(matches!(
-        router.route("/claude --model sonnet").await,
-        CommandAction::StartSession { args, .. } if args == vec!["--model", "sonnet"]
+        router.route("/agent --model sonnet").await,
+        CommandAction::StartSession { provider: None, args, .. } if args == vec!["--model", "sonnet"]
+    ));
+    assert!(matches!(
+        router.route("/cd").await,
+        CommandAction::ListDir { path: None }
+    ));
+    assert!(matches!(
+        router.route("/agent_claude").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::Claude), args, .. } if args.is_empty()
+    ));
+    assert!(matches!(
+        router.route("/agents_cursor").await,
+        CommandAction::SelectChannelAgent { provider: Some(AgentProvider::Cursor) }
+    ));
+    assert!(matches!(
+        router.route("/agent cursor --force").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::Cursor), args, .. } if args == vec!["--force"]
+    ));
+    assert!(matches!(
+        router.route("/agent claude --model sonnet").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::Claude), args, .. } if args == vec!["--model", "sonnet"]
+    ));
+    assert!(matches!(
+        router.route("/agents").await,
+        CommandAction::SelectChannelAgent { provider: None }
+    ));
+    assert!(matches!(
+        router.route("/agents cursor").await,
+        CommandAction::SelectChannelAgent { provider: Some(AgentProvider::Cursor) }
     ));
     assert!(matches!(
         router.route("/pwd").await,
@@ -136,7 +164,7 @@ async fn parses_core_commands_without_starting_claude() {
 }
 
 #[tokio::test]
-async fn active_claude_session_forwards_slash_commands_except_gateway_controls() {
+async fn active_agent_session_forwards_slash_commands_except_gateway_controls() {
     let env = TestEnv::new();
     let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
     {
@@ -160,23 +188,23 @@ async fn active_claude_session_forwards_slash_commands_except_gateway_controls()
     ));
     assert!(matches!(
         router.route("/pwd").await,
-        CommandAction::ForwardToClaude(text) if text == "/pwd"
+        CommandAction::ForwardToAgent(text) if text == "/pwd"
     ));
     assert!(matches!(
         router.route("/cd ..").await,
-        CommandAction::ForwardToClaude(text) if text == "/cd .."
+        CommandAction::ForwardToAgent(text) if text == "/cd .."
     ));
     assert!(matches!(
         router.route("/ll src").await,
-        CommandAction::ForwardToClaude(text) if text == "/ll src"
+        CommandAction::ForwardToAgent(text) if text == "/ll src"
     ));
     assert!(matches!(
-        router.route("/claude-history").await,
-        CommandAction::ForwardToClaude(text) if text == "/claude-history"
+        router.route("/agent-history").await,
+        CommandAction::ForwardToAgent(text) if text == "/agent-history"
     ));
     assert!(matches!(
         router.route("/some-new-claude-command").await,
-        CommandAction::ForwardToClaude(text) if text == "/some-new-claude-command"
+        CommandAction::ForwardToAgent(text) if text == "/some-new-claude-command"
     ));
 
     {

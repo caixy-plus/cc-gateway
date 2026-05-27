@@ -59,7 +59,7 @@ impl DaemonEngine {
             let platform = FeishuPlatform::new(
                 self.config.feishu.clone(),
                 &self.config.default_dir,
-                self.config.claude.clone(),
+                self.config.effective_agent_settings(),
                 self.config.show_thinking,
             );
             let platform_for_spawn = platform.clone();
@@ -75,7 +75,7 @@ impl DaemonEngine {
             let platform = TelegramPlatform::new(
                 self.config.telegram.clone(),
                 &self.config.default_dir,
-                self.config.claude.clone(),
+                self.config.effective_agent_settings(),
                 self.config.show_thinking,
             );
             let platform_for_spawn = platform.clone();

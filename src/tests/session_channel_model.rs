@@ -1,5 +1,5 @@
 use crate::session::channel_model::{
-    ChannelSession, ClaudeSession, ClaudeSessionState, SessionSource,
+    ChannelSession, AgentSession, AgentSessionState, SessionSource,
 };
 
 // ------------------------------------------------------------------
@@ -51,58 +51,58 @@ fn test_channel_session_new_tui() {
 }
 
 // ------------------------------------------------------------------
-// ClaudeSession construction
+// AgentSession construction
 // ------------------------------------------------------------------
 
 #[test]
 fn test_claude_session_new() {
-    let s = ClaudeSession::new("channel-1", "Session A", "/home/user");
+    let s = AgentSession::new("channel-1", "Session A", "/home/user");
     assert_eq!(s.channel_session_id, "channel-1");
     assert_eq!(s.title, "Session A");
     assert_eq!(s.work_dir, "/home/user");
     assert!(!s.active);
-    assert_eq!(s.state, ClaudeSessionState::Stopped);
-    assert!(s.claude_session_id.is_none());
+    assert_eq!(s.state, AgentSessionState::Stopped);
+    assert!(s.provider_session_id.is_none());
     assert!(s.stopped_at.is_none());
     assert!(!s.id.is_empty());
 }
 
 // ------------------------------------------------------------------
-// ClaudeSessionState Display / FromStr
+// AgentSessionState Display / FromStr
 // ------------------------------------------------------------------
 
 #[test]
 fn test_claude_session_state_display() {
-    assert_eq!(ClaudeSessionState::Active.to_string(), "active");
-    assert_eq!(ClaudeSessionState::Stopped.to_string(), "stopped");
-    assert_eq!(ClaudeSessionState::Dead.to_string(), "dead");
+    assert_eq!(AgentSessionState::Active.to_string(), "active");
+    assert_eq!(AgentSessionState::Stopped.to_string(), "stopped");
+    assert_eq!(AgentSessionState::Dead.to_string(), "dead");
 }
 
 #[test]
 fn test_claude_session_state_from_str() {
     assert_eq!(
-        "active".parse::<ClaudeSessionState>().unwrap(),
-        ClaudeSessionState::Active
+        "active".parse::<AgentSessionState>().unwrap(),
+        AgentSessionState::Active
     );
     assert_eq!(
-        "stopped".parse::<ClaudeSessionState>().unwrap(),
-        ClaudeSessionState::Stopped
+        "stopped".parse::<AgentSessionState>().unwrap(),
+        AgentSessionState::Stopped
     );
     assert_eq!(
-        "dead".parse::<ClaudeSessionState>().unwrap(),
-        ClaudeSessionState::Dead
+        "dead".parse::<AgentSessionState>().unwrap(),
+        AgentSessionState::Dead
     );
 }
 
 #[test]
 fn test_claude_session_state_from_str_unknown() {
-    assert!("unknown".parse::<ClaudeSessionState>().is_err());
+    assert!("unknown".parse::<AgentSessionState>().is_err());
 }
 
 #[test]
 fn test_claude_session_state_partial_eq() {
-    assert_eq!(ClaudeSessionState::Active, ClaudeSessionState::Active);
-    assert_ne!(ClaudeSessionState::Active, ClaudeSessionState::Stopped);
+    assert_eq!(AgentSessionState::Active, AgentSessionState::Active);
+    assert_ne!(AgentSessionState::Active, AgentSessionState::Stopped);
 }
 
 // ------------------------------------------------------------------

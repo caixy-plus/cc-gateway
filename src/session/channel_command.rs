@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::claude::mcp_server::McpContext;
+use crate::runtime::mcp_server::McpContext;
 use crate::command::router::CommandAction;
-use crate::config::model::ClaudeConfig;
-use crate::session::channel_manager::{ActiveClaudeRuntime, GLOBAL_CHANNEL_SESSIONS};
-use crate::session::channel_model::ClaudeSession;
+use crate::config::model::{AgentProvider, AgentProfiles};
+use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
+use crate::session::channel_model::AgentSession;
 use crate::{t, t_fmt};
 
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub(crate) struct ChatCommandContext {
     pub(crate) channel_id: String,
     pub(crate) title: String,
     pub(crate) channel_work_dir: String,
-    pub(crate) active_claude: Option<ActiveClaudeRuntime>,
+    pub(crate) active_agent: Option<ActiveAgentRuntime>,
     pub(crate) mcp_context: Option<McpContext>,
 }
 
@@ -23,13 +23,13 @@ impl ChatCommandContext {
         channel_id: String,
         title: String,
         channel_work_dir: String,
-        active_claude: Option<ActiveClaudeRuntime>,
+        active_agent: Option<ActiveAgentRuntime>,
     ) -> Self {
         Self {
             channel_id,
             title,
             channel_work_dir,
-            active_claude,
+            active_agent,
             mcp_context: None,
         }
     }
@@ -64,20 +64,22 @@ pub(crate) enum ChatCommandOutcome {
         dir: String,
         dirs: Vec<(String, String)>,
     },
+    SelectAgent {
+        current: AgentProvider,
+        options: Vec<(String, String)>,
+    },
     DirCreated {
         path: String,
         message: String,
     },
     Started {
-        active: ActiveClaudeRuntime,
-        work_dir: String,
         message: String,
     },
     History {
-        sessions: Vec<ClaudeSession>,
+        sessions: Vec<AgentSession>,
     },
-    ForwardToClaude {
-        active: ActiveClaudeRuntime,
+    ForwardToAgent {
+        active: ActiveAgentRuntime,
         text: String,
     },
     Error(String),
@@ -85,15 +87,19 @@ pub(crate) enum ChatCommandOutcome {
 
 pub(crate) struct ChatCommandExecutor {
     default_dir: String,
-    claude_config: ClaudeConfig,
+    agent_settings: AgentProfiles,
     show_thinking: bool,
 }
 
 impl ChatCommandExecutor {
-    pub(crate) fn new(default_dir: &str, claude_config: ClaudeConfig, show_thinking: bool) -> Self {
+    pub(crate) fn new<C: Into<AgentProfiles>>(
+        default_dir: &str,
+        agent_settings: C,
+        show_thinking: bool,
+    ) -> Self {
         Self {
             default_dir: default_dir.to_string(),
-            claude_config,
+            agent_settings: agent_settings.into(),
             show_thinking,
         }
     }
@@ -110,19 +116,29 @@ impl ChatCommandExecutor {
                 crate::t!("feishu.unknown_command").to_string(),
             )),
             CommandAction::StopSession => {
+                let stopped_provider = context
+                    .active_agent
+                    .as_ref()
+                    .map(|a| a.agent_session.stored_provider());
                 GLOBAL_CHANNEL_SESSIONS
                     .stop_active_runtime_for_channel(
                         &context.channel_id,
-                        context.active_claude.as_ref(),
+                        context.active_agent.as_ref(),
                     )
                     .await?;
-                context.active_claude = None;
-                Ok(ChatCommandOutcome::Stopped {
-                    message: t!("builtin.session_stopped").to_string(),
-                })
+                context.active_agent = None;
+                let message = stopped_provider
+                    .map(|p| crate::command::agents::session_stopped_message(&p))
+                    .unwrap_or_else(|| {
+                        t_fmt!(
+                            "builtin.session_stopped",
+                            NAME = t!("builtin.agent_fallback_name")
+                        )
+                    });
+                Ok(ChatCommandOutcome::Stopped { message })
             }
             CommandAction::ShowThinking => {
-                if let Some(ref active) = context.active_claude {
+                if let Some(ref active) = context.active_agent {
                     let ctrl = active.controller.lock().await;
                     ctrl.set_show_thinking(true);
                 }
@@ -131,7 +147,7 @@ impl ChatCommandExecutor {
                 })
             }
             CommandAction::HideThinking => {
-                if let Some(ref active) = context.active_claude {
+                if let Some(ref active) = context.active_agent {
                     let ctrl = active.controller.lock().await;
                     ctrl.set_show_thinking(false);
                 }
@@ -179,7 +195,7 @@ impl ChatCommandExecutor {
                 );
                 let target = PathBuf::from(&base).join(&path);
                 let target_str = target.to_string_lossy().to_string();
-                if let Err(e) = crate::claude::controller::ensure_under_home(&target_str) {
+                if let Err(e) = crate::runtime::controller::ensure_under_home(&target_str) {
                     return Ok(ChatCommandOutcome::Error(e.to_string()));
                 }
                 match std::fs::create_dir_all(&target) {
@@ -193,7 +209,51 @@ impl ChatCommandExecutor {
                     ))),
                 }
             }
-            CommandAction::StartSession { work_dir, args } => {
+            CommandAction::SelectChannelAgent { provider: explicit } => {
+                if let Some(selected) = explicit {
+                    let name = crate::command::agents::provider_display_name(&selected);
+                    match GLOBAL_CHANNEL_SESSIONS.set_channel_default_provider(
+                        &context.channel_id,
+                        selected,
+                    ) {
+                        Ok(()) => Ok(ChatCommandOutcome::Reply(t_fmt!(
+                            "builtin.channel_agent_set",
+                            NAME = name
+                        ))),
+                        Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                            "builtin.failed_set_channel_agent",
+                            ERR = e
+                        ))),
+                    }
+                } else {
+                    let current = GLOBAL_CHANNEL_SESSIONS.effective_channel_provider(
+                        &context.channel_id,
+                        &self.agent_settings,
+                    );
+                    let options: Vec<(String, String)> =
+                        crate::command::agents::available_providers()
+                            .into_iter()
+                            .map(|p| {
+                                (
+                                    p.to_string(),
+                                    crate::command::agents::provider_display_name(&p).to_string(),
+                                )
+                            })
+                            .collect();
+                    Ok(ChatCommandOutcome::SelectAgent { current, options })
+                }
+            }
+            CommandAction::StartSession {
+                work_dir,
+                provider,
+                args,
+            } => {
+                let resolved_provider = GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
+                    &context.channel_id,
+                    &self.agent_settings,
+                    provider,
+                );
+                let provider = Some(resolved_provider.clone());
                 let effective_dir = work_dir
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string())
@@ -204,41 +264,45 @@ impl ChatCommandExecutor {
                         )
                     });
                 match GLOBAL_CHANNEL_SESSIONS
-                    .start_claude_session_for_platform(
+                    .start_agent_session_for_platform(
                         &context.channel_id,
                         &context.title,
                         &self.default_dir,
-                        self.claude_config.clone(),
+                        self.agent_settings.clone(),
                         self.show_thinking,
                         args,
                         None,
                         Some(effective_dir.clone()),
                         context.mcp_context.clone(),
+                        provider,
                     )
                     .await
                 {
                     Ok(active) => {
-                        context.channel_work_dir = active.claude_session.work_dir.clone();
-                        context.active_claude = Some(active.clone());
+                        context.channel_work_dir = active.agent_session.work_dir.clone();
+                        context.active_agent = Some(active.clone());
                         Ok(ChatCommandOutcome::Started {
-                            active,
-                            work_dir: context.channel_work_dir.clone(),
-                            message: t_fmt!("builtin.session_started", DIR = effective_dir),
+                            message: crate::command::agents::session_started_message(
+                                &resolved_provider,
+                                &effective_dir,
+                            ),
                         })
                     }
-                    Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
-                        "builtin.failed_start_claude",
-                        ERR = e
-                    ))),
+                    Err(e) => Ok(ChatCommandOutcome::Error(
+                        crate::command::agents::failed_start_agent_message(
+                            &resolved_provider,
+                            e,
+                        ),
+                    )),
                 }
             }
-            CommandAction::ShowClaudeHistory { .. } => {
+            CommandAction::ShowAgentHistory { .. } => {
                 let sessions = GLOBAL_CHANNEL_SESSIONS
-                    .list_claude_sessions_by_channel(&context.channel_id, Some(10));
+                    .list_agent_sessions_by_channel(&context.channel_id, Some(10));
                 Ok(ChatCommandOutcome::History { sessions })
             }
-            CommandAction::ForwardToClaude(text) => {
-                let active = match context.active_claude.clone() {
+            CommandAction::ForwardToAgent(text) => {
+                let active = match context.active_agent.clone() {
                     Some(active) => {
                         let ctrl = active.controller.lock().await;
                         if ctrl.is_session_active().await {
@@ -250,32 +314,40 @@ impl ChatCommandExecutor {
                                 &context.channel_work_dir,
                                 &self.default_dir,
                             );
+                            let auto_provider = GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
+                                &context.channel_id,
+                                &self.agent_settings,
+                                None,
+                            );
                             match GLOBAL_CHANNEL_SESSIONS
-                                .start_claude_session_for_platform(
+                                .start_agent_session_for_platform(
                                     &context.channel_id,
                                     &context.title,
                                     &self.default_dir,
-                                    self.claude_config.clone(),
+                                    self.agent_settings.clone(),
                                     self.show_thinking,
                                     vec![],
                                     None,
                                     Some(work_dir),
                                     context.mcp_context.clone(),
+                                    Some(auto_provider.clone()),
                                 )
                                 .await
                             {
                                 Ok(active) => {
                                     context.channel_work_dir =
-                                        active.claude_session.work_dir.clone();
-                                    context.active_claude = Some(active.clone());
+                                        active.agent_session.work_dir.clone();
+                                    context.active_agent = Some(active.clone());
                                     active
                                 }
                                 Err(e) => {
-                                    context.active_claude = None;
-                                    return Ok(ChatCommandOutcome::Error(t_fmt!(
-                                        "builtin.failed_start_claude",
-                                        ERR = e
-                                    )));
+                                    context.active_agent = None;
+                                    return Ok(ChatCommandOutcome::Error(
+                                        crate::command::agents::failed_start_agent_message(
+                                            &auto_provider,
+                                            e,
+                                        ),
+                                    ));
                                 }
                             }
                         }
@@ -286,7 +358,7 @@ impl ChatCommandExecutor {
                         ));
                     }
                 };
-                Ok(ChatCommandOutcome::ForwardToClaude { active, text })
+                Ok(ChatCommandOutcome::ForwardToAgent { active, text })
             }
         }
     }
@@ -313,4 +385,5 @@ impl ChatCommandExecutor {
             work_dir,
         })
     }
+
 }

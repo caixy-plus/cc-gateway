@@ -34,9 +34,9 @@ fn webui_channel_id() -> Option<String> {
 async fn get_work_dir_async(session_id: Option<&str>) -> String {
     if let Some(channel_id) = webui_channel_id() {
         if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
-            if let Some(ref active) = runtime.active_claude {
+            if let Some(ref active) = runtime.active_agent {
                 if session_id
-                    .map(|id| id == active.claude_session.id)
+                    .map(|id| id == active.agent_session.id)
                     .unwrap_or(true)
                 {
                     let ctrl = active.controller.lock().await;
@@ -47,7 +47,7 @@ async fn get_work_dir_async(session_id: Option<&str>) -> String {
                 }
             }
             if let Some(session_id) = session_id {
-                if let Some(session) = GLOBAL_CHANNEL_SESSIONS.get_claude_session(session_id) {
+                if let Some(session) = GLOBAL_CHANNEL_SESSIONS.get_agent_session(session_id) {
                     return session.work_dir;
                 }
             }
@@ -55,7 +55,7 @@ async fn get_work_dir_async(session_id: Option<&str>) -> String {
         }
     }
     if let Some(session_id) = session_id {
-        if let Some(session) = GLOBAL_CHANNEL_SESSIONS.get_claude_session(session_id) {
+        if let Some(session) = GLOBAL_CHANNEL_SESSIONS.get_agent_session(session_id) {
             return session.work_dir;
         }
     }
@@ -66,13 +66,13 @@ async fn get_work_dir_async(session_id: Option<&str>) -> String {
 
 async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
     if let Some(session_id) = session_id {
-        GLOBAL_CHANNEL_SESSIONS.update_claude_session_work_dir(session_id, &dir);
+        GLOBAL_CHANNEL_SESSIONS.update_agent_session_work_dir(session_id, &dir);
     }
     if let Some(channel_id) = webui_channel_id() {
         if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
-            if let Some(ref active) = runtime.active_claude {
+            if let Some(ref active) = runtime.active_agent {
                 if session_id
-                    .map(|id| id == active.claude_session.id)
+                    .map(|id| id == active.agent_session.id)
                     .unwrap_or(true)
                 {
                     let ctrl = active.controller.lock().await;
@@ -170,10 +170,11 @@ pub async fn handle_cd_default(Json(req): Json<SessionCmdRequest>) -> (StatusCod
 pub async fn handle_help() -> (StatusCode, String) {
     let commands = json!([
         { "cmd": "/help", "desc": "Show available commands" },
-        { "cmd": "/quit", "desc": "Quit current Claude session" },
+        { "cmd": "/quit", "desc": "Quit current agent session" },
         { "cmd": "/cd <path>", "desc": "Change working directory" },
         { "cmd": "/cd_default", "desc": "Reset to default directory" },
-        { "cmd": "/claude [args...]", "desc": "Start a new Claude session" },
+        { "cmd": "/agent [args...]", "desc": "Start a new agent session" },
+        { "cmd": "/agents", "desc": "Set this channel default agent" },
         { "cmd": "/pwd", "desc": "Show current working directory" },
         { "cmd": "/ll", "desc": "List directory contents" },
     ]);

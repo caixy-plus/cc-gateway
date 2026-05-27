@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
+use reqwest_middleware::ClientWithMiddleware;
 use serde_json::Value;
+
+use crate::platform::inbound_media::{self, SavedInboundMedia};
 
 /// Extract image keys from a Feishu post / image message content JSON.
 pub fn extract_image_keys(content_str: &str) -> Vec<String> {
@@ -152,4 +155,60 @@ pub async fn upload_file(bytes: Vec<u8>, filename: &str, token: &str) -> Result<
         .ok_or_else(|| anyhow::anyhow!("Upload file response missing file_key"))?;
 
     Ok(file_key.to_string())
+}
+
+/// Download a message attachment via Feishu `messages/{id}/resources/{key}` API.
+pub async fn download_message_resource(
+    http_client: &ClientWithMiddleware,
+    token: &str,
+    message_id: &str,
+    file_key: &str,
+    resource_type: &str,
+) -> Result<(Vec<u8>, String)> {
+    let url = format!(
+        "https://open.feishu.cn/open-apis/im/v1/messages/{}/resources/{}",
+        message_id, file_key
+    );
+    let resp = http_client
+        .get(&url)
+        .query(&[("type", resource_type)])
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to download Feishu {} resource {}",
+                resource_type, file_key
+            )
+        })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Feishu resource download failed: {} - {}", status, body);
+    }
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .split(';')
+        .next()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let bytes = resp
+        .bytes()
+        .await
+        .context("Failed to read Feishu resource bytes")?
+        .to_vec();
+    Ok((bytes, content_type))
+}
+
+pub async fn save_downloaded_resource(
+    bytes: Vec<u8>,
+    content_type: &str,
+) -> Result<SavedInboundMedia> {
+    inbound_media::save_bytes_to_media_dir(&bytes, Some(content_type)).await
 }

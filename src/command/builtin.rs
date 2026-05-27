@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::claude::controller::ClaudeController;
+use crate::runtime::controller::AgentController;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
 
@@ -22,11 +22,11 @@ pub(crate) enum SelectAction {
 }
 
 pub struct BuiltinCommands {
-    controller: Arc<Mutex<ClaudeController>>,
+    controller: Arc<Mutex<AgentController>>,
 }
 
 impl BuiltinCommands {
-    pub fn new(controller: Arc<Mutex<ClaudeController>>, _default_dir: &str) -> Self {
+    pub fn new(controller: Arc<Mutex<AgentController>>, _default_dir: &str) -> Self {
         Self { controller }
     }
 
@@ -34,7 +34,7 @@ impl BuiltinCommands {
         t!("builtin.help").to_string()
     }
 
-    pub async fn claude_history(&self, arg: &str) -> String {
+    pub async fn agent_history(&self, arg: &str) -> String {
         let mut sorted = load_tui_db_sessions();
 
         if sorted.is_empty() {
@@ -47,9 +47,12 @@ impl BuiltinCommands {
             }
             let target = sorted[idx - 1].clone();
             let target_sid = target.session_id.clone();
+            let resume_provider = target.stored_provider();
             let ctrl = self.controller.lock().await;
             ctrl.init_work_dir(target.project).await;
             ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
+                .await;
+            ctrl.set_pending_resume_provider(Some(resume_provider))
                 .await;
             ctrl.set_pending_resume_session_id(
                 target
@@ -87,8 +90,9 @@ impl BuiltinCommands {
                             })
                             .unwrap_or_else(|| "unknown".to_string());
                     let label = format!(
-                        "{}. {}... (project: {}, {} messages, last: {})",
+                        "{}. [{}] {}... (project: {}, {} messages, last: {})",
                         i + 1,
+                        info.stored_provider(),
                         short_sid,
                         info.project,
                         info.message_count,
@@ -113,9 +117,12 @@ impl BuiltinCommands {
                 SelectAction::Selected(idx) => {
                     let target = sorted[idx].clone();
                     let target_sid = target.session_id.clone();
+                    let resume_provider = target.stored_provider();
                     let ctrl = self.controller.lock().await;
                     ctrl.init_work_dir(target.project).await;
                     ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
+                        .await;
+                    ctrl.set_pending_resume_provider(Some(resume_provider))
                         .await;
                     ctrl.set_pending_resume_session_id(
                         target
@@ -138,7 +145,7 @@ impl BuiltinCommands {
                 SelectAction::Deleted(idx) => {
                     if let Some(ref cc_id) = sorted[idx].cc_gateway_id {
                         // Delete from DB and memory
-                        if GLOBAL_CHANNEL_SESSIONS.remove_claude_session(cc_id) {
+                        if GLOBAL_CHANNEL_SESSIONS.remove_agent_session(cc_id) {
                             // Delete history file only after the session record is deleted.
                             let file_id = sorted[idx].session_id.clone();
                             if let Some(home) = dirs::home_dir() {
@@ -352,9 +359,16 @@ pub(crate) struct HistorySessionInfo {
     pub session_id: String,
     pub resume_session_id: Option<String>,
     pub cc_gateway_id: Option<String>,
+    pub provider: String,
     pub project: String,
     pub last_timestamp: i64,
     pub message_count: usize,
+}
+
+impl HistorySessionInfo {
+    pub(crate) fn stored_provider(&self) -> crate::config::model::AgentProvider {
+        crate::config::model::AgentProvider::parse_str(&self.provider)
+    }
 }
 
 /// Load TUI-created Claude sessions from the cc-gateway database.
@@ -366,13 +380,14 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
         if channel.platform != "tui" {
             continue;
         }
-        let sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
+        let sessions = crate::db::load_agent_sessions_by_channel_id(&channel.id);
         for s in sessions {
-            let resume_session_id = s.claude_session_id.clone();
+            let resume_session_id = s.provider_session_id.clone();
             result.push(HistorySessionInfo {
                 session_id: resume_session_id.clone().unwrap_or_else(|| s.id.clone()),
                 resume_session_id,
                 cc_gateway_id: Some(s.id),
+                provider: s.provider.clone(),
                 project: s.work_dir,
                 last_timestamp: s.updated_at.unwrap_or(s.created_at).timestamp(),
                 message_count: 0,
@@ -392,7 +407,7 @@ pub(crate) fn interactive_select_for_history(items: &[(String, bool)]) -> Select
     interactive_select_with_prompt(items, crate::t!("builtin.select_history_prompt"))
 }
 
-fn interactive_select_with_prompt(items: &[(String, bool)], prompt: &str) -> SelectAction {
+pub(crate) fn interactive_select_with_prompt(items: &[(String, bool)], prompt: &str) -> SelectAction {
     struct PauseGuard;
     impl Drop for PauseGuard {
         fn drop(&mut self) {

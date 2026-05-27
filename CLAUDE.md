@@ -59,7 +59,7 @@ cargo run -- start        # Start daemon (spawns background process)
 
 - **`claude/session.rs`**: Spawns the `claude` subprocess with `--input-format stream-json --output-format stream-json --permission-prompt-tool stdio` plus any `default_args` from config. Reads stdout line-by-line, deserializes into `OutputEvent`, and sends them over an async channel. Writes `InputMessage` JSON lines to stdin. Extra args from `/claude <args>` are appended after config defaults.
 - **`claude/protocol.rs`**: Defines the `stream-json` protocol types. `InputMessage` (user messages, permission responses) and `OutputEvent` (system, assistant, result, control_request, error). Key helper: `is_permission_request()` detects tool permission requests.
-- **`claude/controller.rs`**: Owns the active `ClaudeSession`, exposes `start_session`, `stop_session`, `send_message`. Emits `ControllerEvent` (Text, Thinking, ToolUse, ToolResult, PermissionRequest, Error, Done) over an async channel. Manages `work_dir` and `pending_permission` state. Validates all paths are under the user's home directory via `ensure_under_home`.
+- **`claude/controller.rs`**: Owns the active `AgentSession`, exposes `start_session`, `stop_session`, `send_message`. Emits `ControllerEvent` (Text, Thinking, ToolUse, ToolResult, PermissionRequest, Error, Done) over an async channel. Manages `work_dir` and `pending_permission` state. Validates all paths are under the user's home directory via `ensure_under_home`.
 
 ### Command Routing (`src/command/`)
 
@@ -70,7 +70,7 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Platform Layer (`src/platform/`)
 
 - **`platform/mod.rs`**: Defines the `Platform` trait (`run()` and `shutdown()`). All platform integrations implement this trait so `DaemonEngine` is platform-agnostic.
-- **`platform/feishu/mod.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Gets tenant access token, connects to WS endpoint, handles heartbeats, deduplicates messages, normalizes events into `NormalizedMessage`, routes through `CommandRouter`, and polls `ClaudeController` events to reply back. Each chat gets its own `ChatSession` (isolated Claude subprocess).
+- **`platform/feishu/mod.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Gets tenant access token, connects to WS endpoint, handles heartbeats, deduplicates messages, normalizes events into `NormalizedMessage`, routes through `CommandRouter`, and polls `AgentController` events to reply back. Each chat gets its own `ChatSession` (isolated Claude subprocess).
   - `/ll` in Feishu is intercepted before routing: sends an interactive card listing folders from `default_dir`. Card buttons carry `value: { "cmd": "cd", "path": "...", "chat_id": "..." }`.
   - `/cd` in Feishu is intercepted before routing: resolves and canonicalizes the path, enforces that the result stays within `default_dir`, then calls `set_work_dir`.
   - Card callbacks with `cmd == "cd"` are handled directly: call `controller.init_work_dir(path)` and reply with confirmation text.
@@ -106,7 +106,7 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Session Management (`src/session/`)
 
 - **`session/manager.rs`**: `SessionManager` holds all sessions in a `DashMap<String, Session>`. WebUI sessions also have a `WebUISessionRuntime` (controller + router) stored separately. `GLOBAL_SESSIONS` is the process-wide singleton.
-- **`session/model.rs`**: `Session` struct with `id`, `source` (`WebUI` / `Feishu` / `Telegram`), `platform`, `chat_id`, `title`, `work_dir`, `active`, `claude_session_id`, `created_at`.
+- **`session/model.rs`**: `Session` struct with `id`, `source` (`WebUI` / `Feishu` / `Telegram`), `platform`, `chat_id`, `title`, `work_dir`, `active`, `provider_session_id`, `created_at`.
 - **Persistence**: All sessions are persisted to SQLite (`src/db/`). On daemon restart, previously active sessions are marked inactive because their Claude subprocesses are gone.
 
 ### History Recording
@@ -126,7 +126,7 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Claude Session ID & Resume (`src/claude/session.rs`)
 
 - After spawning the `claude` subprocess, the code reads `~/.claude/sessions/{pid}.json` with retries to extract Claude's internal session ID.
-- This ID is stored in `Session.claude_session_id` and passed back via `--resume` on the next `/claude` invocation so Claude Code resumes the same conversation.
+- This ID is stored in `Session.agent_session_id` and passed back via `--resume` on the next `/claude` invocation so Claude Code resumes the same conversation.
 
 ## Testing Patterns
 
@@ -145,7 +145,7 @@ This pattern lets unit tests verify layout math, scroll behavior, selection stat
 
 - **Session switching**: `/claude` starts a session and changes the prompt to `💬 ~/Workspace ▶`. Everything except `/quit` is forwarded to Claude. `/quit` stops the session in gateway; exits the program when no session is active.
 - **Stream-json protocol**: All Claude communication is newline-delimited JSON. Each line is one event. Claude must be launched with `--input-format stream-json --output-format stream-json`.
-- **Event channels**: `ClaudeController` uses an `mpsc::unbounded_channel` to decouple the stdout reader from the consumer (CLI or platform). Consumers poll `recv_event()`.
+- **Event channels**: `AgentController` uses an `mpsc::unbounded_channel` to decouple the stdout reader from the consumer (CLI or platform). Consumers poll `recv_event()`.
 - **Detached daemon**: The daemon is a separate OS process. `start()` spawns `cc-gateway _daemon` with stdin/stdout/stderr nulled and a new process group (Unix).
 - **Config dir**: `~/.cc-gateway/` holds `config.json`, `daemon.pid`, `logs/`, and `skills/`.
 

@@ -35,37 +35,37 @@ pub fn start_recorder() {
 
 async fn record_event(event: &Event) -> anyhow::Result<()> {
     // event.session_id may be:
-    // - WebUI: ClaudeSession.id
+    // - WebUI: AgentSession.id
     // - Feishu/Telegram: chat_id (ChannelSession.channel_id)
     // Try all three lookup strategies.
-    let claude_session =
-        // 1) WebUI passes ClaudeSession.id directly
-        GLOBAL_CHANNEL_SESSIONS.get_claude_session(&event.session_id)
+    let agent_session =
+        // 1) WebUI passes AgentSession.id directly
+        GLOBAL_CHANNEL_SESSIONS.get_agent_session(&event.session_id)
         .or_else(|| {
             // 2) session_id might be ChannelSession.id
-            GLOBAL_CHANNEL_SESSIONS.get_active_claude_session(&event.session_id)
+            GLOBAL_CHANNEL_SESSIONS.get_active_agent_session(&event.session_id)
         })
         .or_else(|| {
             // 3) Feishu/Telegram pass chat_id; find ChannelSession by channel_id
             GLOBAL_CHANNEL_SESSIONS.list_channels()
                 .into_iter()
                 .find(|c| c.channel_id == event.session_id && c.platform == event.platform)
-                .and_then(|c| GLOBAL_CHANNEL_SESSIONS.get_active_claude_session(&c.id))
+                .and_then(|c| GLOBAL_CHANNEL_SESSIONS.get_active_agent_session(&c.id))
         });
 
-    let claude_session = match claude_session {
-        Some(cs) => cs,
+    let agent_session = match agent_session {
+        Some(s) => s,
         None => {
             // No active session for this channel; skip recording.
             return Ok(());
         }
     };
 
-    // Use the ClaudeSession's own id as the history file name.
-    let history_file_id = claude_session
-        .claude_session_id
+    // Use the provider's own session id as the history file name when available.
+    let history_file_id = agent_session
+        .provider_session_id
         .as_deref()
-        .unwrap_or(&claude_session.id);
+        .unwrap_or(&agent_session.id);
 
     let history_dir = get_history_dir()?;
     fs::create_dir_all(&history_dir)?;

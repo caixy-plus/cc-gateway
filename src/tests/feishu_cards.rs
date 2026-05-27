@@ -2,7 +2,7 @@ use crate::platform::feishu::cards::{
     build_dir_picker_card, build_permission_card, build_select_card, build_session_history_card,
     build_text_card,
 };
-use crate::session::channel_model::{ClaudeSession, ClaudeSessionState};
+use crate::session::channel_model::{AgentSession, AgentSessionState};
 
 #[test]
 fn dir_picker_pagination_preserves_channel_and_receive_ids() {
@@ -49,14 +49,15 @@ fn permission_select_and_text_cards_have_expected_schema() {
 #[test]
 fn session_history_resume_preserves_chat_and_receive_ids() {
     let now = chrono::Utc::now();
-    let session = ClaudeSession {
+    let session = AgentSession {
         id: "session-1".to_string(),
         channel_session_id: "channel-internal-id".to_string(),
+        provider: "claude".to_string(),
         title: "Past work".to_string(),
         work_dir: "/tmp/project".to_string(),
         active: false,
-        state: ClaudeSessionState::Stopped,
-        claude_session_id: Some("claude-session-1".to_string()),
+        state: AgentSessionState::Stopped,
+        provider_session_id: Some("claude-session-1".to_string()),
         created_at: now,
         stopped_at: Some(now),
         updated_at: Some(now),

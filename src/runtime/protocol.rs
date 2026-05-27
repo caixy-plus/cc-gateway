@@ -183,6 +183,7 @@ impl OutputEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_permission_request(&self) -> Option<(String, String, Option<Value>)> {
         match self {
             OutputEvent::ControlRequest {
@@ -199,6 +200,7 @@ impl OutputEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn extract_control_subtype(&self) -> Option<String> {
         match self {
             OutputEvent::ControlRequest { request, .. } => Some(request.subtype.clone()),

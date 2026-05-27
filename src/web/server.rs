@@ -18,7 +18,7 @@ pub fn create_app_with_config_path(
     config_path: Option<std::path::PathBuf>,
 ) -> Router {
     let state = AppState {
-        claude_config: config.claude.clone(),
+        agent_settings: config.effective_agent_settings(),
         show_thinking: config.show_thinking,
         default_dir: config.default_dir.clone(),
         daemon_config_path: config_path,

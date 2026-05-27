@@ -18,14 +18,14 @@ use super::{
     FEISHU_CHUNK_DELAY_MS, FEISHU_MAX_TEXT_CHARS, METHOD_CONTROL, REACTION_FAILURE,
     REACTION_TYPING,
 };
-use crate::config::model::{ClaudeConfig, FeishuConfig};
+use crate::config::model::{AgentProfiles, FeishuConfig};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 impl FeishuPlatform {
-    pub fn new(
+    pub fn new<C: Into<AgentProfiles>>(
         config: FeishuConfig,
         default_dir: &str,
-        claude_config: ClaudeConfig,
+        agent_settings: C,
         show_thinking: bool,
     ) -> Self {
         let token_manager = auth_middleware::TokenManager::new(config.clone());
@@ -37,7 +37,7 @@ impl FeishuPlatform {
         Self {
             config,
             default_dir: default_dir.to_string(),
-            claude_config,
+            agent_settings: agent_settings.into(),
             show_thinking: Arc::new(AtomicBool::new(show_thinking)),
             http_client,
             dedup_cache: Arc::new(DedupCache::new(300)),
@@ -56,10 +56,10 @@ impl FeishuPlatform {
         &self,
         receive_id: &str,
         receive_id_type: &str,
-    ) -> crate::claude::mcp_server::McpContext {
-        crate::claude::mcp_server::McpContext {
-            delivery: crate::claude::file_delivery::McpDeliveryTarget::Feishu(
-                crate::claude::file_delivery::FeishuFileTarget {
+    ) -> crate::runtime::mcp_server::McpContext {
+        crate::runtime::mcp_server::McpContext {
+            delivery: crate::runtime::file_delivery::McpDeliveryTarget::Feishu(
+                crate::runtime::file_delivery::FeishuFileTarget {
                     app_id: self.config.app_id.clone(),
                     app_secret: self.config.app_secret.clone(),
                     chat_id: receive_id.to_string(),
@@ -407,7 +407,7 @@ impl FeishuPlatform {
                     )
                     .await;
 
-                let Some(ref active) = runtime.active_claude else {
+                let Some(ref active) = runtime.active_agent else {
                     continue;
                 };
                 let ctrl = active.controller.lock().await;

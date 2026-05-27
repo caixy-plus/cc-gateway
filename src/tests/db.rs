@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::session::channel_model::{ChannelSession, ClaudeSession, ClaudeSessionState};
+use crate::session::channel_model::{ChannelSession, AgentSession, AgentSessionState};
 
 // Tests touch SQLite on a temp path, so serialize them.
 static DB_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -21,6 +21,7 @@ fn insert_test_channel(id: &str) -> ChannelSession {
         platform: "webui".to_string(),
         channel_id: id.to_string(),
         work_dir: "/tmp".to_string(),
+        default_provider: None,
         created_at: chrono::Utc::now(),
     };
     crate::db::insert_channel_session(&cs);
@@ -93,7 +94,7 @@ fn test_update_channel_work_dir() {
 }
 
 // ------------------------------------------------------------------
-// ClaudeSession CRUD
+// AgentSession CRUD
 // ------------------------------------------------------------------
 
 #[test]
@@ -102,94 +103,94 @@ fn test_insert_and_load_claude_session() {
     let _temp = setup_temp_db();
 
     insert_test_channel("chan-1");
-    let s = ClaudeSession::new("chan-1", "S1", "/tmp");
-    crate::db::insert_claude_session(&s);
+    let s = AgentSession::new("chan-1", "S1", "/tmp");
+    crate::db::insert_agent_session(&s);
 
-    let loaded = crate::db::load_all_claude_sessions();
+    let loaded = crate::db::load_all_agent_sessions();
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].id, s.id);
     assert_eq!(loaded[0].title, "S1");
-    assert_eq!(loaded[0].state, ClaudeSessionState::Stopped);
+    assert_eq!(loaded[0].state, AgentSessionState::Stopped);
     assert!(!loaded[0].active);
 }
 
 #[test]
-fn test_load_claude_sessions_by_channel_id() {
+fn test_load_agent_sessions_by_channel_id() {
     let _guard = DB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _temp = setup_temp_db();
 
     insert_test_channel("chan-a");
     insert_test_channel("chan-b");
-    let s1 = ClaudeSession::new("chan-a", "S1", "/tmp");
-    let s2 = ClaudeSession::new("chan-a", "S2", "/tmp");
-    let s3 = ClaudeSession::new("chan-b", "S3", "/tmp");
-    crate::db::insert_claude_session(&s1);
-    crate::db::insert_claude_session(&s2);
-    crate::db::insert_claude_session(&s3);
+    let s1 = AgentSession::new("chan-a", "S1", "/tmp");
+    let s2 = AgentSession::new("chan-a", "S2", "/tmp");
+    let s3 = AgentSession::new("chan-b", "S3", "/tmp");
+    crate::db::insert_agent_session(&s1);
+    crate::db::insert_agent_session(&s2);
+    crate::db::insert_agent_session(&s3);
 
-    let a = crate::db::load_claude_sessions_by_channel_id("chan-a");
+    let a = crate::db::load_agent_sessions_by_channel_id("chan-a");
     assert_eq!(a.len(), 2);
 
-    let b = crate::db::load_claude_sessions_by_channel_id("chan-b");
+    let b = crate::db::load_agent_sessions_by_channel_id("chan-b");
     assert_eq!(b.len(), 1);
 
-    let c = crate::db::load_claude_sessions_by_channel_id("chan-none");
+    let c = crate::db::load_agent_sessions_by_channel_id("chan-none");
     assert!(c.is_empty());
 }
 
 #[test]
-fn test_delete_claude_session() {
+fn test_delete_agent_session() {
     let _guard = DB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _temp = setup_temp_db();
 
     insert_test_channel("chan-1");
-    let s = ClaudeSession::new("chan-1", "S1", "/tmp");
-    crate::db::insert_claude_session(&s);
-    assert_eq!(crate::db::load_all_claude_sessions().len(), 1);
+    let s = AgentSession::new("chan-1", "S1", "/tmp");
+    crate::db::insert_agent_session(&s);
+    assert_eq!(crate::db::load_all_agent_sessions().len(), 1);
 
-    crate::db::delete_claude_session(&s.id);
-    assert!(crate::db::load_all_claude_sessions().is_empty());
+    crate::db::delete_agent_session(&s.id);
+    assert!(crate::db::load_all_agent_sessions().is_empty());
 }
 
 #[test]
-fn test_update_claude_session_active() {
+fn test_update_agent_session_active() {
     let _guard = DB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _temp = setup_temp_db();
 
     insert_test_channel("chan-1");
-    let s = ClaudeSession::new("chan-1", "S1", "/tmp");
-    crate::db::insert_claude_session(&s);
+    let s = AgentSession::new("chan-1", "S1", "/tmp");
+    crate::db::insert_agent_session(&s);
 
-    crate::db::update_claude_session_active(&s.id, true);
-    let loaded = crate::db::load_all_claude_sessions().pop().unwrap();
+    crate::db::update_agent_session_active(&s.id, true);
+    let loaded = crate::db::load_all_agent_sessions().pop().unwrap();
     assert!(loaded.active);
 }
 
 #[test]
-fn test_update_claude_session_state() {
+fn test_update_agent_session_state() {
     let _guard = DB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _temp = setup_temp_db();
 
     insert_test_channel("chan-1");
-    let s = ClaudeSession::new("chan-1", "S1", "/tmp");
-    crate::db::insert_claude_session(&s);
+    let s = AgentSession::new("chan-1", "S1", "/tmp");
+    crate::db::insert_agent_session(&s);
 
-    crate::db::update_claude_session_state(&s.id, "dead");
-    let loaded = crate::db::load_all_claude_sessions().pop().unwrap();
-    assert_eq!(loaded.state, ClaudeSessionState::Dead);
+    crate::db::update_agent_session_state(&s.id, "dead");
+    let loaded = crate::db::load_all_agent_sessions().pop().unwrap();
+    assert_eq!(loaded.state, AgentSessionState::Dead);
 }
 
 #[test]
-fn test_update_claude_session_stopped_at() {
+fn test_update_agent_session_stopped_at() {
     let _guard = DB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _temp = setup_temp_db();
 
     insert_test_channel("chan-1");
-    let s = ClaudeSession::new("chan-1", "S1", "/tmp");
-    crate::db::insert_claude_session(&s);
+    let s = AgentSession::new("chan-1", "S1", "/tmp");
+    crate::db::insert_agent_session(&s);
 
     let now = chrono::Utc::now();
-    crate::db::update_claude_session_stopped_at(&s.id, Some(now));
-    let loaded = crate::db::load_all_claude_sessions().pop().unwrap();
+    crate::db::update_agent_session_stopped_at(&s.id, Some(now));
+    let loaded = crate::db::load_all_agent_sessions().pop().unwrap();
     assert!(loaded.stopped_at.is_some());
 }

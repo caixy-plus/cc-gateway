@@ -1,4 +1,4 @@
-use crate::claude::protocol::{
+use crate::runtime::protocol::{
     build_permission_allow, build_permission_deny, build_user_message, ContentBlock, OutputEvent,
 };
 use serde_json::json;
@@ -33,7 +33,7 @@ fn test_build_permission_deny() {
 #[test]
 fn test_extract_text_from_assistant() {
     let event = OutputEvent::Assistant {
-        message: crate::claude::protocol::AssistantMessage {
+        message: crate::runtime::protocol::AssistantMessage {
             role: "assistant".to_string(),
             content: vec![
                 ContentBlock::Text {
@@ -68,7 +68,7 @@ fn test_extract_text_from_error() {
 #[test]
 fn test_extract_thinking() {
     let event = OutputEvent::Assistant {
-        message: crate::claude::protocol::AssistantMessage {
+        message: crate::runtime::protocol::AssistantMessage {
             role: "assistant".to_string(),
             content: vec![
                 ContentBlock::Thinking {
@@ -86,7 +86,7 @@ fn test_extract_thinking() {
 #[test]
 fn test_extract_tool_use() {
     let event = OutputEvent::Assistant {
-        message: crate::claude::protocol::AssistantMessage {
+        message: crate::runtime::protocol::AssistantMessage {
             role: "assistant".to_string(),
             content: vec![ContentBlock::ToolUse {
                 name: "Bash".to_string(),
@@ -103,7 +103,7 @@ fn test_extract_tool_use() {
 fn test_is_permission_request_tool() {
     let event = OutputEvent::ControlRequest {
         request_id: "req-1".to_string(),
-        request: crate::claude::protocol::ControlRequestBody {
+        request: crate::runtime::protocol::ControlRequestBody {
             subtype: "can_use_tool".to_string(),
             tool_name: Some("Bash".to_string()),
             input: Some(json!({"command":"ls"})),
@@ -119,7 +119,7 @@ fn test_is_permission_request_tool() {
 fn test_is_permission_request_non_tool_subtype() {
     let event = OutputEvent::ControlRequest {
         request_id: "req-1".to_string(),
-        request: crate::claude::protocol::ControlRequestBody {
+        request: crate::runtime::protocol::ControlRequestBody {
             subtype: "confirm".to_string(),
             tool_name: None,
             input: Some(json!({"options": ["yes", "no"]})),
@@ -135,7 +135,7 @@ fn test_is_permission_request_non_tool_subtype() {
 fn test_is_permission_request_select_options() {
     let event = OutputEvent::ControlRequest {
         request_id: "req-select".to_string(),
-        request: crate::claude::protocol::ControlRequestBody {
+        request: crate::runtime::protocol::ControlRequestBody {
             subtype: "select_option".to_string(),
             tool_name: None,
             input: Some(json!({"options": ["A", "B", "C"], "prompt": "Choose one"})),

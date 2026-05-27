@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::claude::controller::ClaudeController;
+use crate::runtime::controller::AgentController;
 use crate::config::loader::ConfigLoader;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::t;
@@ -34,9 +34,9 @@ pub async fn run_interactive() -> Result<()> {
     let channel_id = channel.id.clone();
 
     // Create a controller without auto-starting a Claude session.
-    // The user must type /claude to start one.
-    let controller = Arc::new(Mutex::new(ClaudeController::new(
-        config.claude.clone(),
+    // The user must type /agent to start one.
+    let controller = Arc::new(Mutex::new(AgentController::new(
+        config.effective_agent_settings(),
         config.show_thinking,
     )));
 
@@ -49,7 +49,8 @@ pub async fn run_interactive() -> Result<()> {
         ctrl.init_work_dir(cwd).await;
     }
 
-    let router = crate::command::router::CommandRouter::new(controller.clone(), &default_dir);
+    let router = crate::command::router::CommandRouter::new(controller.clone(), &default_dir)
+        .with_channel_id(channel_id.clone());
 
     crate::cli::tui::run_tui(controller, router, channel_id).await
 }

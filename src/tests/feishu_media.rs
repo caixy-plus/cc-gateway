@@ -25,7 +25,7 @@ fn make_test_platform() -> FeishuPlatform {
     FeishuPlatform::new(
         config,
         &gateway_config.default_dir,
-        gateway_config.claude.clone(),
+        gateway_config.agent.clone(),
         gateway_config.show_thinking,
     )
 }
@@ -60,29 +60,7 @@ fn test_media_cache_dir_is_absolute() {
 // Content-type to extension mapping (extracted logic test)
 // ---------------------------------------------------------------------------
 
-/// The content-type-to-extension mapping embedded in download_message_resource.
-/// We replicate it here to verify correctness independently.
-fn content_type_to_extension(content_type: &str) -> &'static str {
-    let base = content_type
-        .split(';')
-        .next()
-        .unwrap_or("application/octet-stream");
-    match base {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "audio/mpeg" | "audio/mp3" => "mp3",
-        "audio/ogg" => "ogg",
-        "audio/wav" => "wav",
-        "audio/mp4" => "m4a",
-        "video/mp4" => "mp4",
-        "text/plain" => "txt",
-        "text/markdown" => "md",
-        "application/pdf" => "pdf",
-        _ => "bin",
-    }
-}
+use crate::platform::inbound_media::content_type_to_extension;
 
 #[test]
 fn test_content_type_to_ext_image_jpeg() {
@@ -162,32 +140,6 @@ fn test_content_type_to_ext_with_extra_params() {
         content_type_to_extension("image/png; charset=binary; foo=bar"),
         "png"
     );
-}
-
-// ---------------------------------------------------------------------------
-// Media filename construction
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_media_filename_format() {
-    // The filename pattern is: {resource_type}_{file_key}.{ext}
-    // e.g., "image_img_001.jpg"
-    let resource_type = "image";
-    let file_key = "img_abc123";
-    let ext = "jpg";
-    let filename = format!("{}_{}.{}", resource_type, file_key, ext);
-    assert_eq!(filename, "image_img_abc123.jpg");
-}
-
-#[test]
-fn test_media_filename_with_underscores_in_key() {
-    let resource_type = "file";
-    let file_key = "key_with_underscores_001";
-    let ext = "pdf";
-    let filename = format!("{}_{}.{}", resource_type, file_key, ext);
-    // The resource_type is separated from file_key by the first underscore;
-    // subsequent underscores in file_key are preserved
-    assert_eq!(filename, "file_key_with_underscores_001.pdf");
 }
 
 // ---------------------------------------------------------------------------

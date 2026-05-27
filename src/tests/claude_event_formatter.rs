@@ -1,5 +1,5 @@
-use crate::claude::controller::ControllerEvent;
-use crate::claude::event_formatter::{
+use crate::runtime::controller::ControllerEvent;
+use crate::runtime::event_formatter::{
     format_error, format_permission_request, format_thinking, format_tool_result, format_tool_use,
     EventAccumulator,
 };

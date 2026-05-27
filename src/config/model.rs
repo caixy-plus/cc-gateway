@@ -4,22 +4,16 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct GatewayConfig {
     pub log: LogConfig,
-    pub claude: ClaudeConfig,
+    pub agent: AgentProfiles,
     pub feishu: FeishuConfig,
     pub telegram: TelegramConfig,
     /// Default working directory for gateway sessions.
-    /// Used by /ll, /cd_default, and as the Feishu directory boundary.
     pub default_dir: String,
-    /// Whether to display Claude's Thinking blocks in output.
+    /// Whether to display agent Thinking blocks in output.
     pub show_thinking: bool,
-    /// Number of days to retain downloaded media files (images/files/audio).
-    /// Files older than this will be cleaned up every 8 hours. Default: 30.
     pub media_retention_days: u64,
-    /// Max Claude sessions kept per channel by the background cleaner. Default: 30.
-    /// Values below 10 are treated as 10; above 100 as 100 (no error).
+    /// Max agent sessions kept per channel by the background cleaner.
     pub session_retention_per_channel: u64,
-    /// Local port bound by the daemon to enforce a single instance.
-    /// If the port is already in use, the daemon refuses to start.
     pub port: u16,
 }
 
@@ -32,11 +26,42 @@ pub struct LogConfig {
     pub max_size_mb: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentProvider {
+    Claude,
+    Cursor,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ClaudeConfig {
+pub struct AgentConfig {
+    pub provider: AgentProvider,
     pub cli_path: String,
     pub default_args: String,
+    pub mode: String,
+    pub permission: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentProfiles {
+    pub default: AgentProvider,
+    pub claude: AgentProviderConfig,
+    pub cursor: AgentProviderConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_args: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,9 +72,7 @@ pub struct FeishuConfig {
     pub app_secret: String,
     pub allow_from: String,
     pub encrypt_key: String,
-    /// "websocket" or "webhook"
     pub mode: String,
-    /// Bind address for webhook server (e.g. "0.0.0.0:3000")
     pub webhook_bind: String,
 }
 
@@ -59,7 +82,6 @@ pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: String,
     pub allow_from: String,
-    /// If set, use webhook mode instead of long-polling.
     pub webhook_url: String,
 }
 
@@ -67,7 +89,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             log: LogConfig::default(),
-            claude: ClaudeConfig::default(),
+            agent: AgentProfiles::default(),
             feishu: FeishuConfig::default(),
             telegram: TelegramConfig::default(),
             default_dir: "~".to_string(),
@@ -79,13 +101,9 @@ impl Default for GatewayConfig {
     }
 }
 
-/// Minimum `session_retention_per_channel` enforced by the session cleaner.
 pub const MIN_SESSION_RETENTION_PER_CHANNEL: u64 = 10;
-
-/// Maximum `session_retention_per_channel` enforced by the session cleaner.
 pub const MAX_SESSION_RETENTION_PER_CHANNEL: u64 = 100;
 
-/// Resolve configured per-channel session cap (silently clamps to 10..=100).
 pub fn effective_session_retention_per_channel(configured: u64) -> usize {
     configured
         .clamp(
@@ -105,12 +123,135 @@ impl Default for LogConfig {
     }
 }
 
-impl Default for ClaudeConfig {
+impl Default for AgentProvider {
+    fn default() -> Self {
+        AgentProvider::Claude
+    }
+}
+
+impl std::fmt::Display for AgentProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentProvider::Claude => write!(f, "claude"),
+            AgentProvider::Cursor => write!(f, "cursor"),
+        }
+    }
+}
+
+impl AgentProvider {
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cursor" => AgentProvider::Cursor,
+            _ => AgentProvider::Claude,
+        }
+    }
+}
+
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
+            provider: AgentProvider::Claude,
             cli_path: "claude".to_string(),
             default_args: "--dangerously-skip-permissions".to_string(),
+            mode: "agent".to_string(),
+            permission: "prompt".to_string(),
         }
+    }
+}
+
+impl Default for AgentProfiles {
+    fn default() -> Self {
+        Self {
+            default: AgentProvider::Claude,
+            claude: AgentProviderConfig::default(),
+            cursor: AgentProviderConfig::default(),
+        }
+    }
+}
+
+impl AgentConfig {
+    pub fn default_for_provider(provider: AgentProvider) -> Self {
+        match provider {
+            AgentProvider::Claude => Self::default(),
+            AgentProvider::Cursor => Self {
+                provider: AgentProvider::Cursor,
+                cli_path: "agent".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_provider_override(&self, provider: Option<AgentProvider>) -> Self {
+        let Some(provider) = provider else {
+            return self.clone().normalized();
+        };
+        if provider == self.provider {
+            return self.clone().normalized();
+        }
+        let mut config = Self::default_for_provider(provider);
+        config.mode = self.mode.clone();
+        config.permission = self.permission.clone();
+        config.normalized()
+    }
+
+    pub fn normalized(mut self) -> Self {
+        if matches!(self.provider, AgentProvider::Cursor) {
+            if self.cli_path.is_empty() || self.cli_path == "claude" {
+                self.cli_path = "agent".to_string();
+            }
+            if self.default_args == "--dangerously-skip-permissions" {
+                self.default_args.clear();
+            }
+        }
+        if self.cli_path.is_empty() {
+            self.cli_path = match self.provider {
+                AgentProvider::Claude => "claude".to_string(),
+                AgentProvider::Cursor => "agent".to_string(),
+            };
+        }
+        self
+    }
+}
+
+impl AgentProfiles {
+    pub fn effective_config(&self) -> AgentConfig {
+        self.config_for_provider(None)
+    }
+
+    pub fn config_for_provider(&self, provider: Option<AgentProvider>) -> AgentConfig {
+        let selected = provider.unwrap_or_else(|| self.default.clone());
+        let mut config = AgentConfig::default_for_provider(selected.clone());
+        let profile = match selected {
+            AgentProvider::Claude => &self.claude,
+            AgentProvider::Cursor => &self.cursor,
+        };
+        if let Some(ref cli_path) = profile.cli_path {
+            config.cli_path = cli_path.clone();
+        }
+        if let Some(ref default_args) = profile.default_args {
+            config.default_args = default_args.clone();
+        }
+        if let Some(ref mode) = profile.mode {
+            config.mode = mode.clone();
+        }
+        if let Some(ref permission) = profile.permission {
+            config.permission = permission.clone();
+        }
+        config.normalized()
+    }
+}
+
+impl GatewayConfig {
+    pub fn effective_agent_settings(&self) -> AgentProfiles {
+        self.agent.clone()
+    }
+
+    #[cfg(test)]
+    pub fn effective_agent_config(&self) -> AgentConfig {
+        self.agent.effective_config()
     }
 }
 

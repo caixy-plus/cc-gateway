@@ -4,11 +4,11 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info, warn};
 
-use crate::claude::file_delivery::{
+use crate::runtime::file_delivery::{
     validate_outbound_file, FileDelivery, MAX_OUTBOUND_FILE_BYTES, MCP_TARGET_ENV,
 };
 
-pub use crate::claude::file_delivery::McpContext;
+pub use crate::runtime::file_delivery::McpContext;
 
 pub(crate) fn send_file_tool_schema() -> Value {
     let max_mb = MAX_OUTBOUND_FILE_BYTES / 1024 / 1024;

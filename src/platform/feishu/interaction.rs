@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use serde_json::Value;
 
-use crate::claude::protocol::{ControlResponseBody, InputMessage, PermissionResult};
+use crate::runtime::protocol::{ControlResponseBody, InputMessage, PermissionResult};
 
 /// Type of interactive request from Claude Code.
 #[derive(Debug, Clone)]

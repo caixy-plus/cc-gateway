@@ -9,18 +9,18 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::claude::file_delivery::MCP_TARGET_ENV;
-use crate::claude::mcp_server::McpContext;
-use crate::claude::protocol::{InputMessage, OutputEvent};
-use crate::config::model::ClaudeConfig;
+use crate::runtime::file_delivery::MCP_TARGET_ENV;
+use crate::runtime::mcp_server::McpContext;
+use crate::runtime::protocol::{InputMessage, OutputEvent};
+use crate::config::model::AgentConfig;
 
 #[derive(Debug, Deserialize)]
-struct ClaudeSessionFile {
+struct AgentSessionFile {
     #[serde(rename = "sessionId")]
     session_id: String,
 }
 
-pub struct ClaudeSession {
+pub struct StreamJsonSession {
     child: Child,
     stdin: tokio::process::ChildStdin,
     #[allow(dead_code)]
@@ -100,11 +100,11 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     config_path.to_string()
 }
 
-impl ClaudeSession {
+impl StreamJsonSession {
     pub async fn spawn(
         work_dir: String,
         extra_args: Vec<String>,
-        config: &ClaudeConfig,
+        config: &AgentConfig,
         event_tx: mpsc::UnboundedSender<OutputEvent>,
         resume_session_id: Option<String>,
         mcp_context: Option<McpContext>,
@@ -160,7 +160,7 @@ impl ClaudeSession {
             None
         };
 
-        // Append any extra args passed via /claude <cmd>
+        // Append any extra args passed via /agent <args>
         for arg in extra_args {
             args.push(arg);
         }
@@ -208,7 +208,7 @@ impl ClaudeSession {
         tokio::spawn(Self::stdout_reader(stdout, tx));
 
         // Try to extract Claude session id from the sessions file
-        let claude_session_id = if let Some(pid) = pid {
+        let provider_session_id = if let Some(pid) = pid {
             Self::extract_session_id_with_retry(pid).await
         } else {
             None
@@ -222,7 +222,7 @@ impl ClaudeSession {
                 mcp_config_path,
                 stderr_lines,
             },
-            claude_session_id,
+            provider_session_id,
         ))
     }
 
@@ -241,7 +241,7 @@ impl ClaudeSession {
                 match tokio::fs::read_to_string(&session_path).await {
                     Ok(content) => {
                         if let Ok(session_file) =
-                            serde_json::from_str::<ClaudeSessionFile>(&content)
+                            serde_json::from_str::<AgentSessionFile>(&content)
                         {
                             info!(
                                 "Extracted Claude session id: {} from pid {}",

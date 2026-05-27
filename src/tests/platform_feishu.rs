@@ -17,7 +17,7 @@ fn test_platform() -> FeishuPlatform {
     FeishuPlatform::new(
         config,
         default_dir,
-        gateway_config.claude.clone(),
+        gateway_config.agent.clone(),
         gateway_config.show_thinking,
     )
 }

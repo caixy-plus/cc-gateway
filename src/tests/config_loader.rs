@@ -51,9 +51,13 @@ fn test_load_from_valid_json() {
             "level": "debug",
             "file": "/tmp/test.log"
         },
-        "claude": {
-            "cli_path": "claude",
-            "default_args": "--dangerously-skip-permissions"
+        "agent": {
+            "default": "claude",
+            "claude": {
+                "cli_path": "claude",
+                "default_args": "--dangerously-skip-permissions"
+            },
+            "cursor": {}
         },
         "feishu": {
             "enabled": false,
@@ -72,7 +76,10 @@ fn test_load_from_valid_json() {
     let _ = fs::remove_file(&tmp_path);
     assert_eq!(config.log.level, "debug");
     assert_eq!(config.log.file, "/tmp/test.log");
-    assert_eq!(config.claude.cli_path, "claude");
+    assert_eq!(
+        config.agent.claude.cli_path.as_deref(),
+        Some("claude")
+    );
     assert!(!config.feishu.enabled);
     assert_eq!(config.default_dir, "~/TestWorkspace");
 }
@@ -89,9 +96,10 @@ fn test_load_from_env_var_substitution() {
             "level": "info",
             "file": "${CCG_TEST_DIR}/gateway.log"
         },
-        "claude": {
-            "cli_path": "claude",
-            "default_args": ""
+        "agent": {
+            "default": "claude",
+            "claude": { "cli_path": "claude", "default_args": "" },
+            "cursor": {}
         },
         "feishu": {
             "enabled": true,
@@ -114,4 +122,27 @@ fn test_load_from_env_var_substitution() {
 
     env::remove_var("CCG_TEST_KEY");
     env::remove_var("CCG_TEST_DIR");
+}
+
+#[test]
+fn load_from_upgrades_legacy_top_level_claude_block() {
+    let tmp_path = std::env::temp_dir().join(format!("cc-gateway-migrate-{}.json", std::process::id()));
+    let json = r#"{
+        "claude": {
+            "cli_path": "legacy-claude",
+            "default_args": "--legacy"
+        }
+    }"#;
+    {
+        let mut file = fs::File::create(&tmp_path).unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+    }
+    let config = ConfigLoader::load_from(&tmp_path).unwrap();
+    let _ = fs::remove_file(&tmp_path);
+
+    assert_eq!(
+        config.agent.claude.cli_path.as_deref(),
+        Some("legacy-claude")
+    );
+    assert_eq!(config.agent.claude.default_args.as_deref(), Some("--legacy"));
 }
