@@ -15,6 +15,10 @@ This is a **frontend/backend split** project:
 
 Workflow: edit frontend → `npm run build` in `cc-gateway-webui` → copy `dist/` into this repo's `webui/dist/` → rebuild Rust binary.
 
+Notes:
+- The frontend repo is expected to be a **sibling directory** (one level up from this repo). If `../cc-gateway-webui` is missing, clone it first.
+- If `webui/dist/` is missing (or not embedded in the Rust binary), the WebUI will show a fallback page indicating the frontend artifacts were not embedded.
+
 ## Local Development Install
 
 Platform-specific scripts that build from source (including the frontend) and install locally:
