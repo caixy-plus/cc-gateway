@@ -95,6 +95,16 @@ cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
 | `allow_from` | string | `"*"` | 允许的用户 ID 或用户名，逗号分隔; `"*"` = 允许所有 |
 | `webhook_url` | string | `""` | Telegram Bot API 的 Webhook URL (留空则使用长轮询) |
 
+说明：
+
+- `allow_from` 支持用英文逗号分隔的白名单：
+  - 数字用户 ID（例如 `12345678`）
+  - 用户名（不带 `@`，例如 `alice`）
+  - `"*"` 表示允许所有（不建议公开机器人使用）
+- `webhook_url`：
+  - 留空使用长轮询（`getUpdates`）
+  - 配置为 HTTPS URL 切换为 webhook 模式（需要对外暴露公网可访问地址）
+
 ### `feishu`
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -117,6 +127,7 @@ cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
 2. 将 bot token 复制到配置中的 `telegram.bot_token`
 3. 将 `telegram.enabled` 设为 `true`
 4. 可选: 设置 `telegram.allow_from` 限制哪些用户可以与机器人交互
+5. `telegram.webhook_url` 留空使用长轮询；如需 webhook 模式则配置为 HTTPS URL
 
 ## 飞书设置
 

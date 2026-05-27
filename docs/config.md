@@ -95,6 +95,16 @@ You can override or append arguments per session via `/agent [provider] <args>`.
 | `allow_from` | string | `"*"` | Allowed user IDs or usernames, comma-separated; `"*"` = all |
 | `webhook_url` | string | `""` | Webhook URL for Telegram Bot API (empty = long-polling) |
 
+Notes:
+
+- `allow_from` accepts a comma-separated allowlist:
+  - numeric user id (e.g. `12345678`)
+  - username without `@` (e.g. `alice`)
+  - `"*"` to allow all (not recommended for public bots)
+- `webhook_url`:
+  - empty string uses long-polling (`getUpdates`)
+  - set to an HTTPS URL to switch to webhook mode (you must expose a public endpoint)
+
 ### `feishu`
 
 | Field | Type | Default | Description |
@@ -115,8 +125,9 @@ You can override or append arguments per session via `/agent [provider] <args>`.
 
 1. Message [@BotFather](https://t.me/BotFather) on Telegram and create a new bot
 2. Copy the bot token to `telegram.bot_token` in your config
-3. Set `platform` to `"telegram"` and `telegram.enabled` to `true`
+3. Set `telegram.enabled` to `true`
 4. Optionally set `telegram.allow_from` to restrict which users can interact with the bot
+5. Leave `telegram.webhook_url` empty for long-polling, or set it to switch to webhook mode
 
 ## Feishu Setup
 
