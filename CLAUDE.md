@@ -18,6 +18,7 @@ Workflow: edit frontend → `npm run build` in `cc-gateway-webui` → copy `dist
 Notes:
 - The frontend repo is expected to be a **sibling directory** (one level up from this repo). If `../cc-gateway-webui` is missing, clone it first.
 - If `webui/dist/` is missing (or not embedded in the Rust binary), the WebUI will show a fallback page indicating the frontend artifacts were not embedded.
+- The WebUI frontend (`../cc-gateway-webui`) is an **auxiliary repo** for this project. Before cutting a release tag, ensure any WebUI changes have been **committed and pushed** in the frontend repo; the release workflow builds the frontend from that repo, so unpushed changes will not be included in the release artifacts.
 
 ## Local Development Install
 
