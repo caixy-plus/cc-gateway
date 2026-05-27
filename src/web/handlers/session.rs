@@ -26,6 +26,7 @@ pub struct AppState {
     pub claude_config: ClaudeConfig,
     pub show_thinking: bool,
     pub default_dir: String,
+    pub daemon_config_path: Option<PathBuf>,
 }
 
 async fn ensure_webui_channel(default_dir: &str) -> anyhow::Result<String> {

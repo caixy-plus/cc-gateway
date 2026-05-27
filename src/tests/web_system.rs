@@ -1,5 +1,8 @@
 use crate::update::GitHubRelease;
-use crate::web::handlers::system::build_update_check_body;
+use crate::web::handlers::system::{
+    build_daemon_command_args, build_update_check_body, DaemonCommand,
+};
+use std::path::Path;
 
 #[test]
 fn update_check_reports_up_to_date_as_success() {
@@ -34,4 +37,30 @@ fn update_check_reports_available_when_latest_is_newer() {
     assert_eq!(body["status"], "available");
     assert_eq!(body["update_available"], true);
     assert_eq!(body["release_notes"], "New release");
+}
+
+#[test]
+fn restart_command_preserves_explicit_config_path() {
+    let args = build_daemon_command_args(
+        DaemonCommand::Restart,
+        Some(Path::new("/tmp/cc-gateway/custom.json")),
+    );
+
+    assert_eq!(
+        args,
+        vec!["restart", "--config", "/tmp/cc-gateway/custom.json"]
+    );
+}
+
+#[test]
+fn update_command_preserves_explicit_config_path() {
+    let args = build_daemon_command_args(
+        DaemonCommand::Update,
+        Some(Path::new("/tmp/cc-gateway/custom.json")),
+    );
+
+    assert_eq!(
+        args,
+        vec!["update", "--yes", "--config", "/tmp/cc-gateway/custom.json"]
+    );
 }

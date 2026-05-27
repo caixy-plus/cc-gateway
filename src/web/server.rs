@@ -8,11 +8,20 @@ use crate::config::model::GatewayConfig;
 use crate::web::handlers;
 use crate::web::handlers::session::AppState;
 
+#[allow(dead_code)]
 pub fn create_app(config: &GatewayConfig) -> Router {
+    create_app_with_config_path(config, None)
+}
+
+pub fn create_app_with_config_path(
+    config: &GatewayConfig,
+    config_path: Option<std::path::PathBuf>,
+) -> Router {
     let state = AppState {
         claude_config: config.claude.clone(),
         show_thinking: config.show_thinking,
         default_dir: config.default_dir.clone(),
+        daemon_config_path: config_path,
     };
 
     Router::new()

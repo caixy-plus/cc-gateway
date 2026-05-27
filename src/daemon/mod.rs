@@ -226,7 +226,7 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     info!("Starting cc-gateway daemon (PID: {})", pid);
 
     // Start the daemon engine
-    let engine = engine::DaemonEngine::new(config);
+    let engine = engine::DaemonEngine::new_with_config_path(config, config_path);
     engine.run(tokio_listener).await?;
 
     // Cleanup: lock is released when pid_lock drops.

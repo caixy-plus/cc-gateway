@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use std::path::PathBuf;
 use tokio::sync::Notify;
 use tracing::{error, info};
 
@@ -11,11 +12,23 @@ use crate::platform::Platform;
 
 pub struct DaemonEngine {
     config: GatewayConfig,
+    config_path: Option<PathBuf>,
 }
 
 impl DaemonEngine {
+    #[allow(dead_code)]
     pub fn new(config: GatewayConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            config_path: None,
+        }
+    }
+
+    pub fn new_with_config_path(config: GatewayConfig, config_path: Option<PathBuf>) -> Self {
+        Self {
+            config,
+            config_path,
+        }
     }
 
     pub async fn run(self, listener: tokio::net::TcpListener) -> Result<()> {
@@ -76,7 +89,8 @@ impl DaemonEngine {
         let shutdown_notify = Arc::new(Notify::new());
 
         // Start HTTP server on the singleton port
-        let app = crate::web::server::create_app(&self.config);
+        let app =
+            crate::web::server::create_app_with_config_path(&self.config, self.config_path.clone());
         let shutdown_for_server = shutdown_notify.clone();
         let server_handle = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {

@@ -1,9 +1,34 @@
+use axum::extract::State;
 use axum::http::StatusCode;
 use serde_json::json;
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::web::handlers::session::AppState;
+
 const UPDATE_REPO: &str = "caixy-plus/cc-gateway";
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DaemonCommand {
+    Restart,
+    Update,
+}
+
+pub(crate) fn build_daemon_command_args(
+    command: DaemonCommand,
+    config_path: Option<&Path>,
+) -> Vec<String> {
+    let mut args = match command {
+        DaemonCommand::Restart => vec!["restart".to_string()],
+        DaemonCommand::Update => vec!["update".to_string(), "--yes".to_string()],
+    };
+    if let Some(path) = config_path {
+        args.push("--config".to_string());
+        args.push(path.to_string_lossy().to_string());
+    }
+    args
+}
 
 pub(crate) fn build_update_check_body(
     current: &str,
@@ -75,7 +100,7 @@ pub async fn handle_update_check() -> (StatusCode, String) {
     (StatusCode::OK, body.to_string())
 }
 
-pub async fn handle_restart() -> (StatusCode, String) {
+pub async fn handle_restart(State(state): State<AppState>) -> (StatusCode, String) {
     let exe = match std::env::current_exe() {
         Ok(path) => path,
         Err(e) => {
@@ -86,8 +111,10 @@ pub async fn handle_restart() -> (StatusCode, String) {
 
     // Spawn a detached child that waits a moment then restarts the daemon.
     // The parent daemon will exit before the child runs, so the restart works.
+    let args =
+        build_daemon_command_args(DaemonCommand::Restart, state.daemon_config_path.as_deref());
     if let Err(e) = Command::new(&exe)
-        .args(["restart"])
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -100,12 +127,12 @@ pub async fn handle_restart() -> (StatusCode, String) {
 
     let body = json!({
         "status": "restarting",
-        "command": format!("{} restart", exe.display())
+        "command": format!("{} {}", exe.display(), args.join(" "))
     });
     (StatusCode::OK, body.to_string())
 }
 
-pub async fn handle_update() -> (StatusCode, String) {
+pub async fn handle_update(State(state): State<AppState>) -> (StatusCode, String) {
     let exe = match std::env::current_exe() {
         Ok(path) => path,
         Err(e) => {
@@ -114,8 +141,10 @@ pub async fn handle_update() -> (StatusCode, String) {
         }
     };
 
+    let args =
+        build_daemon_command_args(DaemonCommand::Update, state.daemon_config_path.as_deref());
     if let Err(e) = Command::new(&exe)
-        .args(["update", "--yes"])
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -128,7 +157,7 @@ pub async fn handle_update() -> (StatusCode, String) {
 
     let body = json!({
         "status": "updating",
-        "command": format!("{} update --yes", exe.display())
+        "command": format!("{} {}", exe.display(), args.join(" "))
     });
     (StatusCode::ACCEPTED, body.to_string())
 }

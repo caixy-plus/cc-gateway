@@ -5,7 +5,9 @@ use anyhow::Result;
 use crate::t_fmt;
 
 fn expand_tilde(path: &str) -> String {
-    if path == "~" || path.starts_with("~/") || path.starts_with(r"~\") {
+    let is_home_relative =
+        path == "~" || path.starts_with("~/") || cfg!(windows) && path.starts_with(r"~\");
+    if is_home_relative {
         let home = std::env::var_os("HOME").filter(|h| !h.is_empty());
         #[cfg(windows)]
         let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()));

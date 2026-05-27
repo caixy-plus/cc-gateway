@@ -385,20 +385,18 @@ fn render(f: &mut Frame, app: &App) {
     // --- Input bar ---
     let prompt = app.prompt_prefix();
     let input_block = Block::default().borders(Borders::NONE);
-    let before_cursor = if app.input_cursor <= app.input.len() {
-        &app.input[..app.input_cursor]
+    let mut cursor_idx = app.input_cursor.min(app.input.len());
+    while cursor_idx > 0 && !app.input.is_char_boundary(cursor_idx) {
+        cursor_idx -= 1;
+    }
+    let before_cursor = &app.input[..cursor_idx];
+    let (at_cursor, after_cursor) = if cursor_idx < app.input.len() {
+        let mut chars = app.input[cursor_idx..].chars();
+        let ch = chars.next().unwrap_or(' ');
+        let next_idx = cursor_idx + ch.len_utf8();
+        (ch.to_string(), &app.input[next_idx..])
     } else {
-        &app.input[..]
-    };
-    let at_cursor = if app.input_cursor < app.input.len() {
-        app.input.as_bytes()[app.input_cursor] as char
-    } else {
-        ' '
-    };
-    let after_cursor = if app.input_cursor < app.input.len() {
-        &app.input[app.input_cursor + 1..]
-    } else {
-        ""
+        (" ".to_string(), "")
     };
 
     let hint = app.compute_inline_hint().unwrap_or_default();
@@ -407,7 +405,7 @@ fn render(f: &mut Frame, app: &App) {
         Span::styled(prompt.clone(), Style::default().fg(Color::Gray)),
         Span::styled(before_cursor.to_string(), Style::default()),
         Span::styled(
-            at_cursor.to_string(),
+            at_cursor,
             Style::default().fg(Color::Black).bg(Color::White),
         ),
         Span::styled(after_cursor.to_string(), Style::default()),
@@ -433,7 +431,7 @@ enum KeyAction {
 }
 
 fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
-    if key.kind != KeyEventKind::Press {
+    if !should_handle_key_event(key) {
         return KeyAction::Continue;
     }
 
@@ -544,6 +542,38 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
             KeyAction::Continue
         }
         _ => KeyAction::Continue,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn repeat_key_events_are_handled_like_presses() {
+        let mut app = App::new("test-channel".to_string());
+        app.messages
+            .push(ChatMessage::new(MsgRole::System, "line one\nline two"));
+
+        let key = KeyEvent::new_with_kind(KeyCode::Up, KeyModifiers::NONE, KeyEventKind::Repeat);
+        let action = handle_key(&key, &mut app);
+
+        assert!(matches!(action, KeyAction::Continue));
+        assert_eq!(app.scroll_offset, 1);
+    }
+
+    #[test]
+    fn render_input_with_multibyte_cursor_does_not_panic() {
+        let mut app = App::new("test-channel".to_string());
+        app.input = "你好".to_string();
+        app.input_cursor = 0;
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
     }
 }
 

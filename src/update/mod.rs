@@ -280,17 +280,26 @@ fn schedule_windows_self_replace(
     tmp_path: &Path,
     target: &Path,
     restart_daemon: bool,
+    config_path: Option<&Path>,
 ) -> Result<()> {
     let updater_pid = std::process::id();
     let tmp = powershell_quote(&tmp_path.to_string_lossy());
     let target_quoted = powershell_quote(&target.to_string_lossy());
     let restart = if restart_daemon { "$true" } else { "$false" };
+    let restart_args = match config_path {
+        Some(path) => format!(
+            "@('start','--config',{})",
+            powershell_quote(&path.to_string_lossy())
+        ),
+        None => "@('start')".to_string(),
+    };
     let script = format!(
-        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $tmp = {tmp}; $target = {target}; $restart = {restart}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $moved = $false; for ($i = 0; $i -lt 120; $i++) {{ try {{ Move-Item -LiteralPath $tmp -Destination $target -Force; $moved = $true; break }} catch {{ Start-Sleep -Milliseconds 500 }} }}; if (-not $moved) {{ throw "failed to replace binary after waiting for locks" }}; if ($restart) {{ Start-Process -FilePath $target -ArgumentList 'start' -WindowStyle Hidden }}"#,
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $tmp = {tmp}; $target = {target}; $restart = {restart}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $moved = $false; for ($i = 0; $i -lt 120; $i++) {{ try {{ Move-Item -LiteralPath $tmp -Destination $target -Force; $moved = $true; break }} catch {{ Start-Sleep -Milliseconds 500 }} }}; if (-not $moved) {{ throw "failed to replace binary after waiting for locks" }}; if ($restart) {{ Start-Process -FilePath $target -ArgumentList $restartArgs -WindowStyle Hidden }}"#,
         updater_pid = updater_pid,
         tmp = tmp,
         target = target_quoted,
-        restart = restart
+        restart = restart,
+        restart_args = restart_args
     );
 
     std::process::Command::new("powershell")
@@ -357,15 +366,21 @@ async fn download_and_schedule_windows_replace(
     url: &str,
     target: &Path,
     restart_daemon: bool,
+    config_path: Option<&Path>,
 ) -> Result<()> {
     let binary = download_binary(client, url).await?;
     let tmp_path = update_tmp_path(target);
     std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
-    schedule_windows_self_replace(&tmp_path, target, restart_daemon)
+    schedule_windows_self_replace(&tmp_path, target, restart_daemon, config_path)
 }
 
 /// CLI entry point for `cc-gateway update`.
-pub async fn run(check_only: bool, force: bool, yes: bool) -> Result<()> {
+pub async fn run(
+    check_only: bool,
+    force: bool,
+    yes: bool,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
     let repo = "caixy-plus/cc-gateway";
     let current = env!("CARGO_PKG_VERSION");
 
@@ -432,9 +447,15 @@ pub async fn run(check_only: bool, force: bool, yes: bool) -> Result<()> {
     {
         println!("Stopping daemon before replacing the Windows executable...");
         let _ = crate::daemon::stop().await;
-        download_and_schedule_windows_replace(&client, &info.url, &exe, true)
-            .await
-            .context("failed to schedule Windows binary replacement")?;
+        download_and_schedule_windows_replace(
+            &client,
+            &info.url,
+            &exe,
+            true,
+            config_path.as_deref(),
+        )
+        .await
+        .context("failed to schedule Windows binary replacement")?;
         println!("Binary downloaded. It will be replaced after this updater exits, then the daemon will restart.");
         Ok(())
     }
@@ -446,6 +467,6 @@ pub async fn run(check_only: bool, force: bool, yes: bool) -> Result<()> {
             .context("failed to download and replace binary")?;
 
         println!("Binary updated. Restarting daemon...");
-        crate::daemon::restart(None).await
+        crate::daemon::restart(config_path).await
     }
 }
