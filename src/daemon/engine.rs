@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use std::path::PathBuf;
 use tokio::sync::Notify;
 use tracing::{error, info};
 
@@ -11,11 +12,23 @@ use crate::platform::Platform;
 
 pub struct DaemonEngine {
     config: GatewayConfig,
+    config_path: Option<PathBuf>,
 }
 
 impl DaemonEngine {
+    #[allow(dead_code)]
     pub fn new(config: GatewayConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            config_path: None,
+        }
+    }
+
+    pub fn new_with_config_path(config: GatewayConfig, config_path: Option<PathBuf>) -> Self {
+        Self {
+            config,
+            config_path,
+        }
     }
 
     pub async fn run(self, listener: tokio::net::TcpListener) -> Result<()> {
@@ -25,6 +38,9 @@ impl DaemonEngine {
             self.config.log.max_lines,
             self.config.log.max_size_mb,
             self.config.media_retention_days,
+            crate::config::model::effective_session_retention_per_channel(
+                self.config.session_retention_per_channel,
+            ),
         );
 
         // Start history recorder for WebUI sessions
@@ -76,7 +92,8 @@ impl DaemonEngine {
         let shutdown_notify = Arc::new(Notify::new());
 
         // Start HTTP server on the singleton port
-        let app = crate::web::server::create_app(&self.config);
+        let app =
+            crate::web::server::create_app_with_config_path(&self.config, self.config_path.clone());
         let shutdown_for_server = shutdown_notify.clone();
         let server_handle = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
@@ -140,14 +157,37 @@ impl DaemonEngine {
 
     #[cfg(windows)]
     async fn wait_shutdown_signal(&self, shutdown_notify: Arc<Notify>) -> Result<()> {
-        let mut ctrl_c = tokio::signal::windows::ctrl_c()?;
-        let mut ctrl_break = tokio::signal::windows::ctrl_break()?;
+        // On Windows, when the daemon is spawned with DETACHED_PROCESS, there is
+        // no console and SetConsoleCtrlHandler fails.  Fall back to listening
+        // only for the internal shutdown signal (triggered by HTTP server failure
+        // or the shutdown API).
+        let ctrl_c = tokio::signal::windows::ctrl_c().ok();
+        let ctrl_break = tokio::signal::windows::ctrl_break().ok();
+
+        if ctrl_c.is_none() && ctrl_break.is_none() {
+            info!("No console attached – shutdown only via stop command or HTTP API");
+            shutdown_notify.notified().await;
+            info!("Internal shutdown triggered, shutting down...");
+            return Ok(());
+        }
 
         tokio::select! {
-            _ = ctrl_c.recv() => {
+            _ = async {
+                if let Some(mut c) = ctrl_c {
+                    let _ = c.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
                 info!("Received Ctrl+C, shutting down...");
             }
-            _ = ctrl_break.recv() => {
+            _ = async {
+                if let Some(mut b) = ctrl_break {
+                    let _ = b.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
                 info!("Received Ctrl+Break, shutting down...");
             }
             _ = shutdown_notify.notified() => {

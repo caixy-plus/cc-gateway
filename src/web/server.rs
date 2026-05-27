@@ -8,11 +8,20 @@ use crate::config::model::GatewayConfig;
 use crate::web::handlers;
 use crate::web::handlers::session::AppState;
 
+#[allow(dead_code)]
 pub fn create_app(config: &GatewayConfig) -> Router {
+    create_app_with_config_path(config, None)
+}
+
+pub fn create_app_with_config_path(
+    config: &GatewayConfig,
+    config_path: Option<std::path::PathBuf>,
+) -> Router {
     let state = AppState {
         claude_config: config.effective_agent_settings(),
         show_thinking: config.show_thinking,
         default_dir: config.default_dir.clone(),
+        daemon_config_path: config_path,
     };
 
     Router::new()
@@ -65,6 +74,18 @@ pub fn create_app(config: &GatewayConfig) -> Router {
             get(handlers::config::handle_get_platforms),
         )
         .route("/api/version", get(handlers::system::handle_version))
+        .route(
+            "/api/version/check",
+            get(handlers::system::handle_update_check),
+        )
+        .route(
+            "/api/update/check",
+            get(handlers::system::handle_update_check),
+        )
+        .route(
+            "/api/update",
+            get(handlers::system::handle_update_check).post(handlers::system::handle_update),
+        )
         .route("/api/restart", post(handlers::system::handle_restart))
         // WebUI static files
         .route("/", get(handlers::ui::serve_index))

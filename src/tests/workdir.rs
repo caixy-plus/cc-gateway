@@ -2,6 +2,12 @@ use std::path::Path;
 
 use super::helpers::TestEnv;
 
+fn display_path(path: &std::path::Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
+}
+
 #[test]
 fn resolves_relative_target_from_current_work_dir() {
     let env = TestEnv::new();
@@ -16,7 +22,7 @@ fn resolves_relative_target_from_current_work_dir() {
     )
     .unwrap();
 
-    assert_eq!(resolved, root.canonicalize().unwrap().to_string_lossy());
+    assert_eq!(resolved, display_path(&root.canonicalize().unwrap()));
 }
 
 #[test]
@@ -47,5 +53,22 @@ fn expands_tilde_current_work_dir_before_resolving_relative_target() {
     )
     .unwrap();
 
-    assert_eq!(resolved, project.canonicalize().unwrap().to_string_lossy());
+    assert_eq!(resolved, display_path(&project.canonicalize().unwrap()));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn unix_tilde_backslash_is_treated_as_literal_path_component() {
+    let env = TestEnv::new();
+    let literal = env.home().join(r"~\project");
+    std::fs::create_dir_all(&literal).unwrap();
+
+    let resolved = crate::command::workdir::resolve_work_dir_target(
+        env.home().to_str().unwrap(),
+        env.home().to_str().unwrap(),
+        Path::new(r"~\project"),
+    )
+    .unwrap();
+
+    assert_eq!(resolved, display_path(&literal.canonicalize().unwrap()));
 }

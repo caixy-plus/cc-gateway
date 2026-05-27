@@ -57,14 +57,19 @@ fn test_detect_platform_not_empty() {
     let platform = detect_platform();
     assert!(!platform.is_empty());
     assert!(!platform.contains("unknown"));
+    assert!(platform.ends_with(".tar.gz") || platform.ends_with(".zip"));
 }
 
 #[test]
 fn test_build_download_url() {
-    let url = build_download_url("caixy-plus/cc-gateway", "v1.1.0", "darwin-arm64");
+    let url = build_download_url(
+        "caixy-plus/cc-gateway",
+        "v1.1.0",
+        "aarch64-apple-darwin.tar.gz",
+    );
     assert_eq!(
         url,
-        "https://github.com/caixy-plus/cc-gateway/releases/download/v1.1.0/cc-gateway-darwin-arm64"
+        "https://github.com/caixy-plus/cc-gateway/releases/download/v1.1.0/cc-gateway-aarch64-apple-darwin.tar.gz"
     );
 }
 
@@ -77,7 +82,9 @@ async fn test_download_and_replace() {
     tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nABCD";
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+            let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nABCD";
             let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
         }
     });
@@ -96,4 +103,34 @@ async fn test_download_and_replace() {
     assert_eq!(content, b"ABCD");
 
     let _ = std::fs::remove_file(&target_path);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_install_downloaded_binary_applies_macos_install_steps() {
+    let dir = tempfile::tempdir().unwrap();
+    let target_path = dir.path().join("cc-gateway-test-update-install");
+    std::fs::write(&target_path, b"OLD").unwrap();
+
+    let xattr_status = std::process::Command::new("xattr")
+        .arg("-w")
+        .arg("com.apple.quarantine")
+        .arg("0081;00000000;cc-gateway-test;")
+        .arg(&target_path)
+        .status()
+        .unwrap();
+    assert!(xattr_status.success());
+
+    crate::update::install_downloaded_binary(&target_path, b"NEW").unwrap();
+
+    let content = std::fs::read(&target_path).unwrap();
+    assert_eq!(content, b"NEW");
+
+    let output = std::process::Command::new("xattr")
+        .arg("-p")
+        .arg("com.apple.quarantine")
+        .arg(&target_path)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
 }

@@ -33,6 +33,10 @@ use crate::t_fmt;
 // Helpers
 // ---------------------------------------------------------------------------
 
+pub(crate) fn should_handle_key_event(key: &KeyEvent) -> bool {
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
 /// Strip ANSI escape sequences so text renders cleanly in ratatui.
 pub(crate) fn strip_ansi(s: &str) -> String {
     thread_local! {
@@ -339,7 +343,9 @@ fn render(f: &mut Frame, app: &App) {
             all_lines.push((color, line.as_str()));
         }
     }
-
+    if app.claude_busy && app.needs_claude_response {
+        all_lines.push((Some(Color::DarkGray), "..."));
+    }
     let area_height = msg_area.height as usize;
     let total = all_lines.len();
     let visible_start = if app.scroll_offset >= total {
@@ -381,20 +387,18 @@ fn render(f: &mut Frame, app: &App) {
     // --- Input bar ---
     let prompt = app.prompt_prefix();
     let input_block = Block::default().borders(Borders::NONE);
-    let before_cursor = if app.input_cursor <= app.input.len() {
-        &app.input[..app.input_cursor]
+    let mut cursor_idx = app.input_cursor.min(app.input.len());
+    while cursor_idx > 0 && !app.input.is_char_boundary(cursor_idx) {
+        cursor_idx -= 1;
+    }
+    let before_cursor = &app.input[..cursor_idx];
+    let (at_cursor, after_cursor) = if cursor_idx < app.input.len() {
+        let mut chars = app.input[cursor_idx..].chars();
+        let ch = chars.next().unwrap_or(' ');
+        let next_idx = cursor_idx + ch.len_utf8();
+        (ch.to_string(), &app.input[next_idx..])
     } else {
-        &app.input[..]
-    };
-    let at_cursor = if app.input_cursor < app.input.len() {
-        app.input.as_bytes()[app.input_cursor] as char
-    } else {
-        ' '
-    };
-    let after_cursor = if app.input_cursor < app.input.len() {
-        &app.input[app.input_cursor + 1..]
-    } else {
-        ""
+        (" ".to_string(), "")
     };
 
     let hint = app.compute_inline_hint().unwrap_or_default();
@@ -403,7 +407,7 @@ fn render(f: &mut Frame, app: &App) {
         Span::styled(prompt.clone(), Style::default().fg(Color::Gray)),
         Span::styled(before_cursor.to_string(), Style::default()),
         Span::styled(
-            at_cursor.to_string(),
+            at_cursor,
             Style::default().fg(Color::Black).bg(Color::White),
         ),
         Span::styled(after_cursor.to_string(), Style::default()),
@@ -429,7 +433,7 @@ enum KeyAction {
 }
 
 fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
-    if key.kind != KeyEventKind::Press {
+    if !should_handle_key_event(key) {
         return KeyAction::Continue;
     }
 
@@ -543,6 +547,139 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRouter;
+    use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+    use crate::session::channel_model::{ClaudeSession as StoredClaudeSession, ClaudeSessionState};
+    use crate::tests::helpers::TestEnv;
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn repeat_key_events_are_handled_like_presses() {
+        let mut app = App::new("test-channel".to_string());
+        app.messages
+            .push(ChatMessage::new(MsgRole::System, "line one\nline two"));
+
+        let key = KeyEvent::new_with_kind(KeyCode::Up, KeyModifiers::NONE, KeyEventKind::Repeat);
+        let action = handle_key(&key, &mut app);
+
+        assert!(matches!(action, KeyAction::Continue));
+        assert_eq!(app.scroll_offset, 1);
+    }
+
+    #[test]
+    fn render_input_with_multibyte_cursor_does_not_panic() {
+        let mut app = App::new("test-channel".to_string());
+        app.input = "你好".to_string();
+        app.input_cursor = 0;
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn claude_history_resume_reuses_existing_tui_session_record() {
+        let env = TestEnv::new();
+        crate::db::init_schema().unwrap();
+        let work_dir = env.home().join("resume-project");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let channel = GLOBAL_CHANNEL_SESSIONS
+            .get_or_create_platform_channel("tui", "tui-history", work_dir.to_str().unwrap())
+            .await;
+        let now = Utc::now();
+        let stored = StoredClaudeSession {
+            id: "stored-session".to_string(),
+            channel_session_id: channel.id.clone(),
+            provider: "claude".to_string(),
+            title: "TUI Session".to_string(),
+            work_dir: work_dir.to_string_lossy().to_string(),
+            active: false,
+            state: ClaudeSessionState::Stopped,
+            provider_session_id: Some("resume-session-id".to_string()),
+            claude_session_id: Some("resume-session-id".to_string()),
+            created_at: now,
+            stopped_at: Some(now),
+            updated_at: Some(now),
+        };
+        crate::db::insert_claude_session(&stored);
+        GLOBAL_CHANNEL_SESSIONS.load_from_db();
+
+        let controller = Arc::new(Mutex::new(ClaudeController::new(
+            env.fake_claude_config(),
+            false,
+        )));
+        let router = CommandRouter::new(controller.clone(), work_dir.to_str().unwrap());
+        let mut app = App::new(channel.id.clone());
+
+        process_submit("/claude-history 1", &mut app, &router, &controller)
+            .await
+            .unwrap();
+
+        let sessions = GLOBAL_CHANNEL_SESSIONS.list_claude_sessions_by_channel(&channel.id, None);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "stored-session");
+        assert!(sessions[0].active);
+        assert_eq!(
+            sessions[0].claude_session_id.as_deref(),
+            Some("resume-session-id")
+        );
+        assert!(app.session_active);
+
+        let ctrl = controller.lock().await;
+        ctrl.stop_session().await.unwrap();
+    }
+
+    #[test]
+    fn render_shows_ellipsis_while_waiting_for_first_claude_output() {
+        let mut app = App::new("test-channel".to_string());
+        app.add_message(MsgRole::User, "hello");
+        app.claude_busy = true;
+        app.needs_claude_response = true;
+
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let rendered =
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .fold(String::new(), |mut acc, cell| {
+                    acc.push_str(cell.symbol());
+                    acc
+                });
+
+        assert!(rendered.contains("..."));
+        assert_eq!(app.messages.len(), 1);
+    }
+
+    #[test]
+    fn first_claude_chunk_replaces_transient_waiting_display() {
+        let mut app = App::new("test-channel".to_string());
+        app.add_message(MsgRole::User, "hello");
+        app.needs_claude_response = true;
+
+        let done = handle_poll_event(
+            &TuiPollEvent::Flush("real answer".to_string(), false),
+            &mut app,
+        );
+
+        assert!(!done);
+        assert!(!app.needs_claude_response);
+        assert_eq!(app.messages.len(), 2);
+        assert_eq!(app.messages[1].role, MsgRole::Claude);
+        assert_eq!(app.messages[1].lines, vec!["real answer"]);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Event loop — async helpers
 // ---------------------------------------------------------------------------
@@ -568,6 +705,9 @@ async fn process_submit(
         }
 
         CommandAction::StopSession => {
+            GLOBAL_CHANNEL_SESSIONS
+                .refresh_active_controller_session(&app.channel_id, controller)
+                .await;
             if let Some(reply) = router.execute(CommandAction::StopSession).await {
                 app.add_message(MsgRole::System, &reply);
             }
@@ -601,6 +741,65 @@ async fn process_submit(
                 app.session_active = true;
                 app.poller_running = false;
             }
+            Ok(SubmitResult { poll_claude: false })
+        }
+
+        CommandAction::ShowClaudeHistory { arg } => {
+            if let Some(reply) = router
+                .execute(CommandAction::ShowClaudeHistory { arg })
+                .await
+            {
+                app.add_message(MsgRole::System, &reply);
+            }
+
+            let pending_record_id = {
+                let ctrl = controller.lock().await;
+                ctrl.take_pending_resume_record_id().await
+            };
+            if let Some(record_id) = pending_record_id {
+                match GLOBAL_CHANNEL_SESSIONS
+                    .resume_claude_session_with_controller(&record_id, controller)
+                    .await
+                {
+                    Ok(_) => {
+                        app.session_active = true;
+                        app.poller_running = false;
+                    }
+                    Err(e) => {
+                        app.add_message(
+                            MsgRole::System,
+                            &t_fmt!("builtin.failed_start_claude", ERR = e),
+                        );
+                    }
+                }
+                return Ok(SubmitResult { poll_claude: false });
+            }
+
+            let has_pending_resume = {
+                let ctrl = controller.lock().await;
+                ctrl.has_pending_resume_session_id().await
+            };
+            if has_pending_resume {
+                let result = router
+                    .execute(CommandAction::StartSession {
+                        work_dir: None,
+                        provider: None,
+                        args: Vec::new(),
+                    })
+                    .await;
+                if let Some(ref reply) = result {
+                    app.add_message(MsgRole::System, reply);
+                }
+                if GLOBAL_CHANNEL_SESSIONS
+                    .record_active_controller_session(&app.channel_id, "TUI Session", controller)
+                    .await?
+                    .is_some()
+                {
+                    app.session_active = true;
+                    app.poller_running = false;
+                }
+            }
+
             Ok(SubmitResult { poll_claude: false })
         }
 
@@ -652,6 +851,7 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
     match event {
         TuiPollEvent::Flush(text, _is_done) => {
             app.last_was_thinking = false;
+            app.needs_claude_response = false;
             app.update_last_message(MsgRole::Claude, text);
             false
         }
@@ -746,7 +946,7 @@ pub async fn run_tui(
         }
         if let Ok(true) = event::poll(std::time::Duration::from_millis(10)) {
             if let Ok(Event::Key(key)) = event::read() {
-                if key_tx.send(key).is_err() {
+                if should_handle_key_event(&key) && key_tx.send(key).is_err() {
                     break;
                 }
             }

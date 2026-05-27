@@ -33,18 +33,49 @@ fn strip_verbatim_prefix(path: &std::path::Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+#[cfg(windows)]
+fn path_starts_with(path: &std::path::Path, base: &std::path::Path) -> bool {
+    fn normalize(path: &std::path::Path) -> String {
+        let clean = strip_verbatim_prefix(path);
+        clean
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    }
+
+    let path = normalize(path);
+    let base = normalize(base);
+    path == base || path.starts_with(&format!("{}\\", base))
+}
+
+#[cfg(not(windows))]
+fn path_starts_with(path: &std::path::Path, base: &std::path::Path) -> bool {
+    path.starts_with(base)
+}
+
+fn home_dir_for_validation() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+    #[cfg(windows)]
+    if let Some(home) = std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+    dirs::home_dir().context("Could not determine home directory")
+}
+
 pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
     let expanded = shellexpand::tilde(path).to_string();
     let path_buf = PathBuf::from(&expanded);
     let canonical = path_buf.canonicalize().unwrap_or(path_buf);
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-
-    let canonical_clean = strip_verbatim_prefix(&canonical);
-    let home_clean = strip_verbatim_prefix(&home);
+    let home = home_dir_for_validation()?;
 
     // Home directory is always allowed on all platforms.
-    if canonical_clean.starts_with(&home_clean) {
-        return Ok(canonical.to_string_lossy().to_string());
+    if path_starts_with(&canonical, &home) {
+        return Ok(strip_verbatim_prefix(&canonical)
+            .to_string_lossy()
+            .to_string());
     }
 
     // On Windows, also allow paths on non-system drives.
@@ -52,7 +83,9 @@ pub(crate) fn ensure_under_home(path: &str) -> Result<String> {
     {
         if let Some(system_drive) = get_system_drive() {
             if !is_on_drive(&canonical, &system_drive) {
-                return Ok(canonical.to_string_lossy().to_string());
+                return Ok(strip_verbatim_prefix(&canonical)
+                    .to_string_lossy()
+                    .to_string());
             }
         }
     }
@@ -132,6 +165,7 @@ pub struct ClaudeController {
     claude_session_id: Arc<RwLock<Option<String>>>,
     active_provider: Arc<RwLock<Option<String>>>,
     pending_resume_session_id: Arc<RwLock<Option<String>>>,
+    pending_resume_record_id: Arc<RwLock<Option<String>>>,
     mcp_context: Arc<RwLock<Option<McpContext>>>,
 }
 
@@ -151,6 +185,7 @@ impl ClaudeController {
             claude_session_id: Arc::new(RwLock::new(None)),
             active_provider: Arc::new(RwLock::new(None)),
             pending_resume_session_id: Arc::new(RwLock::new(None)),
+            pending_resume_record_id: Arc::new(RwLock::new(None)),
             mcp_context: Arc::new(RwLock::new(None)),
         }
     }
@@ -179,7 +214,7 @@ impl ClaudeController {
 
         let resume_id = {
             let mut pending = self.pending_resume_session_id.write().await;
-            pending.take()
+            pending.take().filter(|id| !id.trim().is_empty())
         };
 
         let mcp_ctx = {
@@ -201,8 +236,15 @@ impl ClaudeController {
         // we fail fast instead of pretending the session is active.
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         if !session.is_alive() {
+            let stderr = session.recent_stderr();
+            if stderr.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Claude process exited immediately after spawn; no stderr output was captured"
+                ));
+            }
             return Err(anyhow::anyhow!(
-                "Claude process exited immediately after spawn; check stderr logs for details"
+                "Claude process exited immediately after spawn: {}",
+                stderr
             ));
         }
 
@@ -250,12 +292,14 @@ impl ClaudeController {
         let message_buffer = self.message_buffer.clone();
         let show_thinking = self.show_thinking.clone();
         let permission_policy = config.permission.clone();
+        let claude_session_id_arc = self.claude_session_id.clone();
         tokio::spawn(async move {
             while let Some(event) = agent_rx.recv().await {
                 Self::process_agent_event(
                     &event_tx,
                     &pending_perm,
                     &session_arc,
+                    &claude_session_id_arc,
                     event,
                     &show_thinking,
                     &permission_policy,
@@ -418,6 +462,19 @@ impl ClaudeController {
         *sid = id;
     }
 
+    pub async fn set_pending_resume_record_id(&self, id: Option<String>) {
+        let mut sid = self.pending_resume_record_id.write().await;
+        *sid = id;
+    }
+
+    pub async fn take_pending_resume_record_id(&self) -> Option<String> {
+        self.pending_resume_record_id.write().await.take()
+    }
+
+    pub async fn has_pending_resume_session_id(&self) -> bool {
+        self.pending_resume_session_id.read().await.is_some()
+    }
+
     pub async fn set_mcp_context(&self, ctx: McpContext) {
         let mut c = self.mcp_context.write().await;
         *c = Some(ctx);
@@ -427,6 +484,7 @@ impl ClaudeController {
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
         pending_perm: &Arc<RwLock<Option<(String, String)>>>,
         session_arc: &Arc<RwLock<Option<AgentSession>>>,
+        claude_session_id: &Arc<RwLock<Option<String>>>,
         event: AgentEvent,
         show_thinking: &Arc<AtomicBool>,
         permission_policy: &str,
@@ -434,6 +492,8 @@ impl ClaudeController {
         match event {
             AgentEvent::SessionId(id) => {
                 tracing::debug!("Agent session ID: {}", id);
+                let mut sid = claude_session_id.write().await;
+                *sid = Some(id);
             }
             AgentEvent::Text(text) => {
                 let _ = event_tx.send(ControllerEvent::Text(text));

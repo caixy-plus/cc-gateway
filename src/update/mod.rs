@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::cmp::Ordering;
-use std::path::Path;
+use std::ffi::OsStr;
+use std::io::{Cursor, Read};
+use std::path::{Path, PathBuf};
 
 /// A parsed semantic version (major.minor.patch).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,28 +67,25 @@ pub fn parse_release_json(json: &str) -> Result<GitHubRelease> {
 
 /// Detect the platform name used in release asset filenames.
 pub fn detect_platform() -> String {
-    let os = if cfg!(target_os = "macos") {
-        "darwin"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else if cfg!(target_os = "windows") {
-        "windows"
+    let target = if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
     } else {
         "unknown"
     };
-    let arch = if cfg!(target_arch = "x86_64") {
-        "amd64"
-    } else if cfg!(target_arch = "aarch64") {
-        "arm64"
+    let archive_ext = if cfg!(target_os = "windows") {
+        "zip"
     } else {
-        "unknown"
+        "tar.gz"
     };
-    let ext = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    format!("{}-{}{}", os, arch, ext)
+    format!("{}.{}", target, archive_ext)
 }
 
 /// Compare two version strings and return true if `latest` is newer than `current`.
@@ -143,12 +142,198 @@ pub async fn check_update(
     }))
 }
 
-/// Download a binary to a temporary path and atomically replace the target.
-pub async fn download_and_replace(
-    client: &reqwest::Client,
-    url: &str,
+fn binary_name_for_current_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "cc-gateway.exe"
+    } else {
+        "cc-gateway"
+    }
+}
+
+fn extract_binary_from_tar_gz(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
+    let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries().context("failed to read tar archive")? {
+        let mut entry = entry.context("failed to read tar entry")?;
+        let path = entry.path().context("failed to read tar entry path")?;
+        if path.file_name() != Some(OsStr::new(binary_name)) {
+            continue;
+        }
+
+        let mut binary = Vec::new();
+        entry
+            .read_to_end(&mut binary)
+            .context("failed to extract binary from tar archive")?;
+        return Ok(binary);
+    }
+
+    anyhow::bail!("archive does not contain {}", binary_name);
+}
+
+fn extract_binary_from_zip(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
+    let reader = Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).context("failed to read zip archive")?;
+
+    for idx in 0..archive.len() {
+        let mut file = archive
+            .by_index(idx)
+            .context("failed to read zip archive entry")?;
+        let Some(name) = file.name().rsplit('/').next() else {
+            continue;
+        };
+        if name != binary_name {
+            continue;
+        }
+
+        let mut binary = Vec::new();
+        file.read_to_end(&mut binary)
+            .context("failed to extract binary from zip archive")?;
+        return Ok(binary);
+    }
+
+    anyhow::bail!("archive does not contain {}", binary_name);
+}
+
+fn binary_bytes_from_download(url: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+    let binary_name = binary_name_for_current_platform();
+    if url.ends_with(".tar.gz") {
+        extract_binary_from_tar_gz(bytes, binary_name)
+    } else if url.ends_with(".zip") {
+        extract_binary_from_zip(bytes, binary_name)
+    } else {
+        Ok(bytes.to_vec())
+    }
+}
+
+fn update_tmp_path(target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("cc-gateway");
+    target.with_file_name(format!(".{}.update-tmp", file_name))
+}
+
+#[cfg(windows)]
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn local_codesign(path: &Path) {
+    let Ok(status) = std::process::Command::new("codesign")
+        .arg("-s")
+        .arg("-")
+        .arg("-f")
+        .arg(path)
+        .status()
+    else {
+        eprintln!("Warning: local codesign command failed to start");
+        return;
+    };
+
+    if !status.success() {
+        eprintln!("Warning: local codesign failed, keeping downloaded binary signature");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn clear_macos_xattrs(path: &Path) {
+    let _ = std::process::Command::new("xattr")
+        .arg("-cr")
+        .arg(path)
+        .status();
+}
+
+#[cfg(target_os = "macos")]
+fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
+    let _ = std::fs::remove_file(target);
+    std::fs::copy(tmp_path, target).context("failed to copy binary into place")?;
+    make_executable(target)?;
+    clear_macos_xattrs(target);
+    std::fs::remove_file(tmp_path).context("failed to remove temp file")?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
+    std::fs::rename(tmp_path, target).context("failed to replace binary")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn schedule_windows_self_replace(
+    tmp_path: &Path,
     target: &Path,
+    restart_daemon: bool,
+    config_path: Option<&Path>,
 ) -> Result<()> {
+    let updater_pid = std::process::id();
+    let tmp = powershell_quote(&tmp_path.to_string_lossy());
+    let target_quoted = powershell_quote(&target.to_string_lossy());
+    let restart = if restart_daemon { "$true" } else { "$false" };
+    let restart_args = match config_path {
+        Some(path) => format!(
+            "@('start','--config',{})",
+            powershell_quote(&path.to_string_lossy())
+        ),
+        None => "@('start')".to_string(),
+    };
+    let script = format!(
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $tmp = {tmp}; $target = {target}; $restart = {restart}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $moved = $false; for ($i = 0; $i -lt 120; $i++) {{ try {{ Move-Item -LiteralPath $tmp -Destination $target -Force; $moved = $true; break }} catch {{ Start-Sleep -Milliseconds 500 }} }}; if (-not $moved) {{ throw "failed to replace binary after waiting for locks" }}; if ($restart) {{ Start-Process -FilePath $target -ArgumentList $restartArgs -WindowStyle Hidden }}"#,
+        updater_pid = updater_pid,
+        tmp = tmp,
+        target = target_quoted,
+        restart = restart,
+        restart_args = restart_args
+    );
+
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("failed to schedule Windows binary replacement")?;
+
+    Ok(())
+}
+
+pub(crate) fn install_downloaded_binary(target: &Path, binary: &[u8]) -> Result<()> {
+    let tmp_path = update_tmp_path(target);
+    std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
+    make_executable(&tmp_path)?;
+
+    #[cfg(target_os = "macos")]
+    local_codesign(&tmp_path);
+
+    replace_binary(&tmp_path, target)?;
+    Ok(())
+}
+
+async fn download_binary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     let resp = client
         .get(url)
         .send()
@@ -160,25 +345,42 @@ pub async fn download_and_replace(
     }
 
     let bytes = resp.bytes().await.context("failed to read download body")?;
+    binary_bytes_from_download(url, &bytes)
+}
 
-    let tmp_path = target.with_extension("tmp");
-    std::fs::write(&tmp_path, &bytes).context("failed to write temp file")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&tmp_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&tmp_path, perms)?;
-    }
-
-    std::fs::rename(&tmp_path, target).context("failed to replace binary")?;
+/// Download a binary to a temporary path and atomically replace the target.
+pub async fn download_and_replace(
+    client: &reqwest::Client,
+    url: &str,
+    target: &Path,
+) -> Result<()> {
+    let binary = download_binary(client, url).await?;
+    install_downloaded_binary(target, &binary)?;
 
     Ok(())
 }
 
+#[cfg(windows)]
+async fn download_and_schedule_windows_replace(
+    client: &reqwest::Client,
+    url: &str,
+    target: &Path,
+    restart_daemon: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    let binary = download_binary(client, url).await?;
+    let tmp_path = update_tmp_path(target);
+    std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
+    schedule_windows_self_replace(&tmp_path, target, restart_daemon, config_path)
+}
+
 /// CLI entry point for `cc-gateway update`.
-pub async fn run(check_only: bool, force: bool) -> Result<()> {
+pub async fn run(
+    check_only: bool,
+    force: bool,
+    yes: bool,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
     let repo = "caixy-plus/cc-gateway";
     let current = env!("CARGO_PKG_VERSION");
 
@@ -227,23 +429,44 @@ pub async fn run(check_only: bool, force: bool) -> Result<()> {
     let exe = std::env::current_exe().context("failed to get current executable path")?;
     println!("Target binary: {}", exe.display());
 
-    print!("Download and replace? [y/N] ");
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    if !input.trim().eq_ignore_ascii_case("y") {
-        println!("Aborted.");
-        return Ok(());
+    if !yes {
+        print!("Download and replace? [y/N] ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
     }
 
     println!("Downloading...");
-    download_and_replace(&client, &info.url, &exe)
+
+    #[cfg(windows)]
+    {
+        println!("Stopping daemon before replacing the Windows executable...");
+        let _ = crate::daemon::stop().await;
+        download_and_schedule_windows_replace(
+            &client,
+            &info.url,
+            &exe,
+            true,
+            config_path.as_deref(),
+        )
         .await
-        .context("failed to download and replace binary")?;
+        .context("failed to schedule Windows binary replacement")?;
+        println!("Binary downloaded. It will be replaced after this updater exits, then the daemon will restart.");
+        Ok(())
+    }
 
-    println!("Binary updated. Restarting daemon...");
-    crate::daemon::restart(None).await?;
+    #[cfg(not(windows))]
+    {
+        download_and_replace(&client, &info.url, &exe)
+            .await
+            .context("failed to download and replace binary")?;
 
-    Ok(())
+        println!("Binary updated. Restarting daemon...");
+        crate::daemon::restart(config_path).await
+    }
 }

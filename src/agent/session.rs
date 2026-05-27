@@ -105,6 +105,13 @@ impl AgentSession {
             AgentSession::Cursor(session) => session.is_alive(),
         }
     }
+
+    pub fn recent_stderr(&mut self) -> String {
+        match self {
+            AgentSession::Claude(session) => session.recent_stderr(),
+            AgentSession::Cursor(_) => String::new(),
+        }
+    }
 }
 
 impl From<AgentConfig> for crate::config::model::ClaudeConfig {

@@ -24,6 +24,12 @@ fn test_router_with_default(default_dir: &str) -> (CommandRouter, Arc<Mutex<Clau
     )
 }
 
+fn display_path(path: &std::path::Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
+}
+
 #[tokio::test]
 async fn routes_claude_history_with_index_argument() {
     let (router, _) = test_router();
@@ -36,13 +42,62 @@ async fn routes_claude_history_with_index_argument() {
 }
 
 #[tokio::test]
+async fn routes_telegram_menu_aliases_with_underscores() {
+    let (router, _) = test_router();
+
+    assert!(matches!(
+        router.route("/claude_history 2").await,
+        CommandAction::ShowClaudeHistory { arg } if arg == "2"
+    ));
+    assert!(matches!(
+        router.route("/cd_up").await,
+        CommandAction::ChangeDir(path) if path == PathBuf::from("..")
+    ));
+    assert!(matches!(
+        router.route("/show_thinking").await,
+        CommandAction::ShowThinking
+    ));
+    assert!(matches!(
+        router.route("/hide_thinking").await,
+        CommandAction::HideThinking
+    ));
+}
+
+#[tokio::test]
+async fn inactive_quit_reply_uses_i18n() {
+    let _env = TestEnv::new();
+    let previous_lang = std::env::var("CC_GATEWAY_LANG").ok();
+    std::env::set_var("CC_GATEWAY_LANG", "zh_CN");
+    crate::i18n::init();
+    let (router, _) = test_router();
+
+    let action = router.route("/quit").await;
+
+    match action {
+        CommandAction::Reply(message) => {
+            assert_eq!(message, crate::t!("builtin.no_active_session_to_quit"));
+        }
+        other => panic!("expected translated reply, got {:?}", other),
+    }
+
+    if let Some(lang) = previous_lang {
+        std::env::set_var("CC_GATEWAY_LANG", lang);
+        crate::i18n::init();
+    } else {
+        std::env::set_var("CC_GATEWAY_LANG", "en");
+        crate::i18n::init();
+        std::env::remove_var("CC_GATEWAY_LANG");
+    }
+}
+
+#[tokio::test]
 async fn exposes_work_dir_after_relative_change_dir() {
     let env = TestEnv::new();
     let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
     let temp = tempfile::tempdir_in(env.home()).expect("temp dir should be created");
     let child = temp.path().join("child");
     std::fs::create_dir(&child).expect("child dir should be created");
-    let expected = temp.path().canonicalize().unwrap();
+    let expected = display_path(&temp.path().canonicalize().unwrap());
 
     {
         let ctrl = controller.lock().await;
@@ -54,13 +109,8 @@ async fn exposes_work_dir_after_relative_change_dir() {
         .execute(CommandAction::ChangeDir(PathBuf::from("..")))
         .await;
 
-    assert!(reply
-        .unwrap()
-        .contains(&expected.to_string_lossy().to_string()));
-    assert_eq!(
-        router.current_work_dir().await,
-        expected.to_string_lossy().to_string()
-    );
+    assert!(reply.unwrap().contains(&expected));
+    assert_eq!(router.current_work_dir().await, expected);
 }
 
 #[tokio::test]

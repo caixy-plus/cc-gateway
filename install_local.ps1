@@ -25,6 +25,35 @@ function Write-Msg($en, $zh) {
     }
 }
 
+function Stop-AllCCGateway {
+    # Step 1: Force kill all cc-gateway processes
+    $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Msg "Force stopping cc-gateway processes..." "正在强制停止 cc-gateway 进程..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    # Step 2: Verify all processes are actually closed
+    $maxRetries = 10
+    for ($i = 1; $i -le $maxRetries; $i++) {
+        Start-Sleep -Seconds 1
+        $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
+        if (-not $procs) {
+            Write-Msg "All cc-gateway processes have stopped." "所有 cc-gateway 进程已停止。"
+            return
+        }
+        Write-Msg "Waiting for $($procs.Count) process(es) to exit... ($i/$maxRetries)" "等待 $($procs.Count) 个进程退出... ($i/$maxRetries)"
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    # Step 3: Final check - fail if still running
+    $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Msg "Failed to stop all cc-gateway processes after $maxRetries attempts. PIDs: $($procs.Id -join ', '). Aborting." "无法停止所有 cc-gateway 进程（尝试 $maxRetries 次后）。PID: $($procs.Id -join ', ')。中止安装。"
+        exit 1
+    }
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WebUiDir = Join-Path (Split-Path -Parent $ScriptDir) "cc-gateway-webui"
 
@@ -51,8 +80,8 @@ if (Test-Path $WebUiDir -PathType Container) {
 Write-Msg "2. Building release version..." "2. 构建 release 版本..."
 cargo build --release
 
-Write-Msg "2. Stopping running daemon (if any)..." "2. 停止运行中的 daemon（如有）..."
-& "$InstallDir\$Binary.exe" stop 2>$null | Out-Null
+Write-Msg "2. Stopping all cc-gateway processes..." "2. 停止所有 cc-gateway 进程..."
+Stop-AllCCGateway
 
 Write-Msg "3. Installing to $InstallDir..." "3. 安装到 $InstallDir..."
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null

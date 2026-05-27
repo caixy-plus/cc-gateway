@@ -89,3 +89,23 @@ pub struct ClaudeSession {
     pub stopped_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
+
+impl ClaudeSession {
+    pub fn new(channel_session_id: &str, title: &str, work_dir: &str) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel_session_id: channel_session_id.to_string(),
+            provider: "claude".to_string(),
+            title: title.to_string(),
+            work_dir: work_dir.to_string(),
+            active: false,
+            state: ClaudeSessionState::Stopped,
+            provider_session_id: None,
+            claude_session_id: None,
+            created_at: now,
+            stopped_at: None,
+            updated_at: None,
+        }
+    }
+}

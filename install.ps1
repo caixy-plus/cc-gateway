@@ -26,6 +26,35 @@ function Write-Msg($en, $zh) {
     }
 }
 
+function Stop-AllCCGateway {
+    # Step 1: Force kill all cc-gateway processes
+    $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Msg "Force stopping cc-gateway processes..." "正在强制停止 cc-gateway 进程..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    # Step 2: Verify all processes are actually closed
+    $maxRetries = 10
+    for ($i = 1; $i -le $maxRetries; $i++) {
+        Start-Sleep -Seconds 1
+        $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
+        if (-not $procs) {
+            Write-Msg "All cc-gateway processes have stopped." "所有 cc-gateway 进程已停止。"
+            return
+        }
+        Write-Msg "Waiting for $($procs.Count) process(es) to exit... ($i/$maxRetries)" "等待 $($procs.Count) 个进程退出... ($i/$maxRetries)"
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    # Step 3: Final check - fail if still running
+    $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Msg "Failed to stop all cc-gateway processes after $maxRetries attempts. PIDs: $($procs.Id -join ', '). Aborting." "无法停止所有 cc-gateway 进程（尝试 $maxRetries 次后）。PID: $($procs.Id -join ', ')。中止安装。"
+        exit 1
+    }
+}
+
 # Detect architecture
 $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64"   { "x86_64" }
@@ -56,6 +85,10 @@ Expand-Archive -Path $TempFile -DestinationPath $TempDir -Force
 
 # Install
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+Write-Msg "Stopping all cc-gateway processes before replacing binary..." "正在停止所有 cc-gateway 进程以替换可执行文件..."
+Stop-AllCCGateway
+
 Copy-Item -Path "$TempDir\$Binary.exe" -Destination "$InstallDir\$Binary.exe" -Force
 
 # Config

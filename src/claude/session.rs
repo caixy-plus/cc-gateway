@@ -3,11 +3,13 @@ use serde::Deserialize;
 use serde_json;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::claude::file_delivery::MCP_TARGET_ENV;
 use crate::claude::mcp_server::McpContext;
 use crate::claude::protocol::{InputMessage, OutputEvent};
 use crate::config::model::ClaudeConfig;
@@ -24,6 +26,7 @@ pub struct ClaudeSession {
     #[allow(dead_code)]
     work_dir: String,
     mcp_config_path: Option<PathBuf>,
+    stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
 pub(crate) fn resolve_cli_path(config_path: &str) -> String {
@@ -135,16 +138,14 @@ impl ClaudeSession {
         let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
             let config_path =
                 std::env::temp_dir().join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
+            let target_json = mcp_ctx.to_env_json()?;
             let config_json = serde_json::json!({
                 "mcpServers": {
                     "cc-gateway": {
                         "command": std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cc-gateway")),
                         "args": ["_mcp-server"],
                         "env": {
-                            "CC_GATEWAY_FEISHU_APP_ID": mcp_ctx.feishu_app_id,
-                            "CC_GATEWAY_FEISHU_APP_SECRET": mcp_ctx.feishu_app_secret,
-                            "CC_GATEWAY_FEISHU_CHAT_ID": mcp_ctx.chat_id,
-                            "CC_GATEWAY_FEISHU_RECEIVE_ID_TYPE": mcp_ctx.receive_id_type,
+                            (MCP_TARGET_ENV): target_json,
                         }
                     }
                 }
@@ -199,7 +200,8 @@ impl ClaudeSession {
         let stderr = child.stderr.take().context("Failed to open stderr pipe")?;
 
         // Spawn stderr reader
-        tokio::spawn(Self::stderr_reader(stderr));
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
+        tokio::spawn(Self::stderr_reader(stderr, stderr_lines.clone()));
 
         // Spawn stdout reader
         let tx = event_tx.clone();
@@ -218,6 +220,7 @@ impl ClaudeSession {
                 stdin,
                 work_dir,
                 mcp_config_path,
+                stderr_lines,
             },
             claude_session_id,
         ))
@@ -305,6 +308,13 @@ impl ClaudeSession {
         }
     }
 
+    pub fn recent_stderr(&self) -> String {
+        self.stderr_lines
+            .lock()
+            .map(|lines| lines.join("\n"))
+            .unwrap_or_default()
+    }
+
     async fn stdout_reader(
         stdout: tokio::process::ChildStdout,
         tx: mpsc::UnboundedSender<OutputEvent>,
@@ -333,12 +343,21 @@ impl ClaudeSession {
         info!("Claude stdout reader ended");
     }
 
-    async fn stderr_reader(stderr: tokio::process::ChildStderr) {
+    async fn stderr_reader(
+        stderr: tokio::process::ChildStderr,
+        stderr_lines: Arc<Mutex<Vec<String>>>,
+    ) {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
 
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.trim().is_empty() {
+                if let Ok(mut lines) = stderr_lines.lock() {
+                    lines.push(line.clone());
+                    if lines.len() > 20 {
+                        lines.remove(0);
+                    }
+                }
                 debug!("Claude stderr: {}", line);
             }
         }

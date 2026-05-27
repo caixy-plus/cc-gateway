@@ -17,6 +17,9 @@ pub struct GatewayConfig {
     /// Number of days to retain downloaded media files (images/files/audio).
     /// Files older than this will be cleaned up every 8 hours. Default: 30.
     pub media_retention_days: u64,
+    /// Max Claude sessions kept per channel by the background cleaner. Default: 30.
+    /// Values below 10 are treated as 10; above 100 as 100 (no error).
+    pub session_retention_per_channel: u64,
     /// Local port bound by the daemon to enforce a single instance.
     /// If the port is already in use, the daemon refuses to start.
     pub port: u16,
@@ -120,9 +123,25 @@ impl Default for GatewayConfig {
             default_dir: "~".to_string(),
             show_thinking: false,
             media_retention_days: 30,
+            session_retention_per_channel: 30,
             port: 17534,
         }
     }
+}
+
+/// Minimum `session_retention_per_channel` enforced by the session cleaner.
+pub const MIN_SESSION_RETENTION_PER_CHANNEL: u64 = 10;
+
+/// Maximum `session_retention_per_channel` enforced by the session cleaner.
+pub const MAX_SESSION_RETENTION_PER_CHANNEL: u64 = 100;
+
+/// Resolve configured per-channel session cap (silently clamps to 10..=100).
+pub fn effective_session_retention_per_channel(configured: u64) -> usize {
+    configured
+        .clamp(
+            MIN_SESSION_RETENTION_PER_CHANNEL,
+            MAX_SESSION_RETENTION_PER_CHANNEL,
+        ) as usize
 }
 
 impl Default for LogConfig {

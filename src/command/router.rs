@@ -98,15 +98,17 @@ impl CommandRouter {
             // controls that affect the gateway process itself.
             match cmd {
                 "/quit" => CommandAction::StopSession,
-                "/show-thinking" => CommandAction::ShowThinking,
-                "/hide-thinking" => CommandAction::HideThinking,
+                "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
+                "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
                 _ => CommandAction::ForwardToClaude(trimmed.to_string()),
             }
         } else {
             // No active session: handle gateway commands locally
             match cmd {
                 "/help" => CommandAction::Reply(self.builtin.help_text()),
-                "/quit" => CommandAction::Reply("No active session to quit. Use /quit in an active session or type /help for available commands.".to_string()),
+                "/quit" => {
+                    CommandAction::Reply(t!("builtin.no_active_session_to_quit").to_string())
+                }
                 "/cd" => {
                     if arg.is_empty() {
                         CommandAction::Reply(t!("builtin.cd_usage").to_string())
@@ -115,6 +117,7 @@ impl CommandRouter {
                         CommandAction::ChangeDir(PathBuf::from(expanded))
                     }
                 }
+                "/cd_up" => CommandAction::ChangeDir(PathBuf::from("..")),
                 "/cd_default" => CommandAction::ChangeDirDefault,
                 "/pwd" => CommandAction::PrintWorkingDir,
                 "/ll" => {
@@ -152,9 +155,12 @@ impl CommandRouter {
                         args,
                     }
                 }
-                "/show-thinking" => CommandAction::ShowThinking,
-                "/hide-thinking" => CommandAction::HideThinking,
-                "/agent-history" | "/claude-history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
+                "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
+                "/agent-history"
+                | "/claude-history"
+                | "/claude_history"
+                | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
                     arg: arg.to_string(),
                 },
                 _ => {

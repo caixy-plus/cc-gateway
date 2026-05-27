@@ -45,10 +45,25 @@ impl BuiltinCommands {
             if idx == 0 || idx > sorted.len() {
                 return t!("builtin.invalid_history_index").to_string();
             }
-            let target_sid = sorted[idx - 1].session_id.clone();
+            let target = sorted[idx - 1].clone();
+            let target_sid = target.session_id.clone();
             let ctrl = self.controller.lock().await;
-            ctrl.set_pending_resume_session_id(Some(target_sid.clone()))
+            ctrl.init_work_dir(target.project).await;
+            ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
                 .await;
+            ctrl.set_pending_resume_session_id(
+                target
+                    .resume_session_id
+                    .clone()
+                    .or_else(|| Some(String::new())),
+            )
+            .await;
+            if target.resume_session_id.is_none() {
+                return t_fmt!(
+                    "builtin.resume_session_missing_id",
+                    SID = &target_sid[..target_sid.len().min(8)]
+                );
+            }
             return t_fmt!(
                 "builtin.resume_session_set",
                 SID = &target_sid[..target_sid.len().min(8)]
@@ -88,16 +103,33 @@ impl BuiltinCommands {
             }
 
             let items_for_select = items.clone();
-            let action = tokio::task::spawn_blocking(move || interactive_select(&items_for_select))
-                .await
-                .unwrap_or(SelectAction::Cancelled);
+            let action = tokio::task::spawn_blocking(move || {
+                interactive_select_for_history(&items_for_select)
+            })
+            .await
+            .unwrap_or(SelectAction::Cancelled);
 
             match action {
                 SelectAction::Selected(idx) => {
-                    let target_sid = sorted[idx].session_id.clone();
+                    let target = sorted[idx].clone();
+                    let target_sid = target.session_id.clone();
                     let ctrl = self.controller.lock().await;
-                    ctrl.set_pending_resume_session_id(Some(target_sid.clone()))
+                    ctrl.init_work_dir(target.project).await;
+                    ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
                         .await;
+                    ctrl.set_pending_resume_session_id(
+                        target
+                            .resume_session_id
+                            .clone()
+                            .or_else(|| Some(String::new())),
+                    )
+                    .await;
+                    if target.resume_session_id.is_none() {
+                        return t_fmt!(
+                            "builtin.resume_session_missing_id",
+                            SID = &target_sid[..target_sid.len().min(8)]
+                        );
+                    }
                     return t_fmt!(
                         "builtin.resume_session_set",
                         SID = &target_sid[..target_sid.len().min(8)]
@@ -225,7 +257,17 @@ pub(crate) trait SelectBackend {
     fn read_key(&mut self) -> Option<crossterm::event::KeyCode>;
 }
 
-pub(crate) struct RealBackend;
+pub(crate) struct RealBackend {
+    prompt: String,
+}
+
+impl RealBackend {
+    fn new(prompt: &str) -> Self {
+        Self {
+            prompt: prompt.to_string(),
+        }
+    }
+}
 
 impl SelectBackend for RealBackend {
     fn size(&self) -> (u16, u16) {
@@ -239,7 +281,7 @@ impl SelectBackend for RealBackend {
         let _ = stdout.queue(terminal::Clear(terminal::ClearType::All));
         let _ = stdout.queue(cursor::MoveTo(0, 0));
         // Use \r\n because raw mode disables automatic \n -> \r\n translation
-        let _ = write!(stdout, "{}\r\n\r\n", t!("builtin.select_dir_prompt"));
+        let _ = write!(stdout, "{}\r\n\r\n", &self.prompt);
         for line in lines {
             let _ = write!(stdout, "{}\r\n", line);
         }
@@ -247,11 +289,17 @@ impl SelectBackend for RealBackend {
     }
 
     fn read_key(&mut self) -> Option<crossterm::event::KeyCode> {
-        use crossterm::event::{self, Event};
-        if let Ok(Event::Key(key)) = event::read() {
-            Some(key.code)
-        } else {
-            None
+        use crossterm::event::{self, Event, KeyEventKind};
+        loop {
+            match event::read() {
+                Ok(Event::Key(key))
+                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                {
+                    return Some(key.code);
+                }
+                Ok(Event::Key(_)) | Ok(_) => continue,
+                Err(_) => return None,
+            }
         }
     }
 }
@@ -293,6 +341,7 @@ pub(crate) fn interactive_select_with_backend(
             Some(crossterm::event::KeyCode::Char('q')) | Some(crossterm::event::KeyCode::Esc) => {
                 return SelectAction::Cancelled;
             }
+            None => return SelectAction::Cancelled,
             _ => {}
         }
     }
@@ -301,6 +350,7 @@ pub(crate) fn interactive_select_with_backend(
 #[derive(Clone, Debug)]
 pub(crate) struct HistorySessionInfo {
     pub session_id: String,
+    pub resume_session_id: Option<String>,
     pub cc_gateway_id: Option<String>,
     pub project: String,
     pub last_timestamp: i64,
@@ -318,11 +368,10 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
         }
         let sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
         for s in sessions {
+            let resume_session_id = s.provider_session_id.clone().or(s.claude_session_id.clone());
             result.push(HistorySessionInfo {
-                session_id: s
-                    .provider_session_id
-                    .or(s.claude_session_id)
-                    .unwrap_or_else(|| s.id.clone()),
+                session_id: resume_session_id.clone().unwrap_or_else(|| s.id.clone()),
+                resume_session_id,
                 cc_gateway_id: Some(s.id),
                 project: s.work_dir,
                 last_timestamp: s.updated_at.unwrap_or(s.created_at).timestamp(),
@@ -336,21 +385,35 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
 }
 
 pub(crate) fn interactive_select(items: &[(String, bool)]) -> SelectAction {
-    use std::io::{self, IsTerminal};
+    interactive_select_with_prompt(items, crate::t!("builtin.select_dir_prompt"))
+}
 
-    if !io::stdin().is_terminal() {
-        return SelectAction::Cancelled;
+pub(crate) fn interactive_select_for_history(items: &[(String, bool)]) -> SelectAction {
+    interactive_select_with_prompt(items, crate::t!("builtin.select_history_prompt"))
+}
+
+fn interactive_select_with_prompt(items: &[(String, bool)], prompt: &str) -> SelectAction {
+    struct PauseGuard;
+    impl Drop for PauseGuard {
+        fn drop(&mut self) {
+            TUI_EVENT_READER_PAUSED.store(false, Ordering::Relaxed);
+        }
     }
 
     TUI_EVENT_READER_PAUSED.store(true, Ordering::Relaxed);
+    let _pause_guard = PauseGuard;
     // Give the TUI background event reader time to see the flag and stop polling.
     std::thread::sleep(std::time::Duration::from_millis(30));
 
-    let _ = crossterm::terminal::enable_raw_mode();
-    let mut backend = RealBackend;
-    let result = interactive_select_with_backend(items, &mut backend);
-    let _ = crossterm::terminal::disable_raw_mode();
+    let raw_was_enabled = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+    if !raw_was_enabled && crossterm::terminal::enable_raw_mode().is_err() {
+        return SelectAction::Cancelled;
+    }
 
-    TUI_EVENT_READER_PAUSED.store(false, Ordering::Relaxed);
+    let mut backend = RealBackend::new(prompt);
+    let result = interactive_select_with_backend(items, &mut backend);
+    if !raw_was_enabled {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
     result
 }

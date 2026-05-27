@@ -400,6 +400,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Cannot delete an active session. Use /quit to stop it first.",
             Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
         },
+        "builtin.no_active_session_to_quit" => match lang {
+            Language::En => "No active session to quit. Use /quit in an active session or type /help for available commands.",
+            Language::ZhCN => "没有可退出的活动会话。请在活动会话中使用 /quit，或输入 /help 查看可用命令。",
+        },
         "builtin.mkdir_usage" => match lang {
             Language::En => "Usage: /mkdir <dirname>",
             Language::ZhCN => "用法: /mkdir <目录名>",
@@ -423,6 +427,10 @@ pub fn t(key: &str) -> &str {
         "builtin.select_dir_prompt" => match lang {
             Language::En => "Select a directory (↑↓ move, Enter to cd, q quit):",
             Language::ZhCN => "选择目录 (↑↓ 移动, Enter 确认, q 退出):",
+        },
+        "builtin.select_history_prompt" => match lang {
+            Language::En => "Select session (↑↓ move, Enter resume, x delete, q cancel):",
+            Language::ZhCN => "选择会话 (↑↓ 移动, Enter 恢复, x 删除, q 取消):",
         },
         "builtin.no_sessions" => match lang {
             Language::En => "No sessions found.",
@@ -455,6 +463,10 @@ pub fn t(key: &str) -> &str {
         "builtin.resume_session_set" => match lang {
             Language::En => "Resume session set: {SID}",
             Language::ZhCN => "恢复会话已设置: {SID}",
+        },
+        "builtin.resume_session_missing_id" => match lang {
+            Language::En => "Claude resume id is missing for {SID}; starting a new session in its project directory.",
+            Language::ZhCN => "会话 {SID} 缺少 Claude 恢复 ID，将在原项目目录启动新会话。",
         },
         "builtin.invalid_history_index" => match lang {
             Language::En => "Invalid history index.",
@@ -663,6 +675,90 @@ pub fn t(key: &str) -> &str {
         "telegram.permission_request" => match lang {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
+        },
+        "telegram.command_help" => match lang {
+            Language::En => "Show help",
+            Language::ZhCN => "查看帮助",
+        },
+        "telegram.command_pwd" => match lang {
+            Language::En => "Show current directory",
+            Language::ZhCN => "查看当前目录",
+        },
+        "telegram.command_ll" => match lang {
+            Language::En => "List folders",
+            Language::ZhCN => "列出文件夹",
+        },
+        "telegram.command_cd" => match lang {
+            Language::En => "Change directory",
+            Language::ZhCN => "切换目录",
+        },
+        "telegram.command_cd_up" => match lang {
+            Language::En => "Go to parent directory (/cd ..)",
+            Language::ZhCN => "返回上级目录 (/cd ..)",
+        },
+        "telegram.command_cd_default" => match lang {
+            Language::En => "Return to default directory",
+            Language::ZhCN => "返回默认目录",
+        },
+        "telegram.command_mkdir" => match lang {
+            Language::En => "Create directory",
+            Language::ZhCN => "创建目录",
+        },
+        "telegram.command_claude" => match lang {
+            Language::En => "Start Claude session",
+            Language::ZhCN => "启动 Claude 会话",
+        },
+        "telegram.command_claude_history" => match lang {
+            Language::En => "Show Claude history",
+            Language::ZhCN => "查看 Claude 历史",
+        },
+        "telegram.command_show_thinking" => match lang {
+            Language::En => "Show thinking",
+            Language::ZhCN => "显示 Thinking",
+        },
+        "telegram.command_hide_thinking" => match lang {
+            Language::En => "Hide thinking",
+            Language::ZhCN => "隐藏 Thinking",
+        },
+        "telegram.command_quit" => match lang {
+            Language::En => "Stop active session",
+            Language::ZhCN => "停止当前会话",
+        },
+        "telegram.choose_directory" => match lang {
+            Language::En => "Choose a directory in {DIR}:",
+            Language::ZhCN => "请选择 {DIR} 下的目录:",
+        },
+        "telegram.choose_history" => match lang {
+            Language::En => "Choose a Claude session to resume:",
+            Language::ZhCN => "请选择要恢复的 Claude 会话:",
+        },
+        "telegram.session_history_subtitle" => match lang {
+            Language::En => "Sessions for this chat",
+            Language::ZhCN => "此聊天的会话",
+        },
+        "telegram.resume" => match lang {
+            Language::En => "Resume",
+            Language::ZhCN => "恢复",
+        },
+        "telegram.start_new_session" => match lang {
+            Language::En => "New",
+            Language::ZhCN => "新开",
+        },
+        "telegram.delete_session" => match lang {
+            Language::En => "Delete",
+            Language::ZhCN => "删除",
+        },
+        "telegram.session_deleted" => match lang {
+            Language::En => "Session deleted.",
+            Language::ZhCN => "会话已删除。",
+        },
+        "telegram.cannot_delete_active" => match lang {
+            Language::En => "Cannot delete an active session. Use /quit to stop it first.",
+            Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
+        },
+        "telegram.callback_expired" => match lang {
+            Language::En => "This action has expired. Please run the command again.",
+            Language::ZhCN => "这个操作已过期，请重新执行命令。",
         },
 
         // cli/tui.rs

@@ -10,21 +10,28 @@ static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 pub(crate) struct TestEnv {
     _lock: MutexGuard<'static, ()>,
     previous_home: Option<String>,
+    previous_userprofile: Option<String>,
     root: tempfile::TempDir,
 }
 
 impl TestEnv {
     pub(crate) fn new() -> Self {
-        let lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let lock = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = tempfile::tempdir_in(std::env::current_dir().unwrap())
             .expect("test temp dir should be created in workspace");
         let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
         std::env::set_var("HOME", root.path());
+        std::env::set_var("USERPROFILE", root.path());
         std::fs::create_dir_all(root.path().join(".cc-gateway")).unwrap();
         GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
         Self {
             _lock: lock,
             previous_home,
+            previous_userprofile,
             root,
         }
     }
@@ -51,9 +58,15 @@ impl Drop for TestEnv {
         } else {
             std::env::remove_var("HOME");
         }
+        if let Some(userprofile) = self.previous_userprofile.as_deref() {
+            std::env::set_var("USERPROFILE", userprofile);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
     }
 }
 
+#[cfg(not(windows))]
 pub(crate) fn create_fake_claude(home: &Path) -> PathBuf {
     let script = home.join("fake-claude.sh");
     std::fs::write(
@@ -76,14 +89,46 @@ done
 "#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script, perms).unwrap();
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&script).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script, perms).unwrap();
     script
+}
+
+#[cfg(windows)]
+pub(crate) fn create_fake_claude(home: &Path) -> PathBuf {
+    let ps1 = home.join("fake-claude.ps1");
+    std::fs::write(
+        &ps1,
+        r#"$sessionId = "fake-session"
+for ($i = 0; $i -lt $args.Count; $i++) {
+  if ($args[$i] -eq "--resume" -and ($i + 1) -lt $args.Count) {
+    $sessionId = $args[$i + 1]
+    $i++
+  }
+}
+$sessionDir = Join-Path $env:USERPROFILE ".claude\sessions"
+New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
+Set-Content -LiteralPath (Join-Path $sessionDir "$PID.json") -Value "{`"sessionId`":`"$sessionId`"}" -NoNewline -Encoding UTF8
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  Write-Output '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fake reply"}]}}'
+  Write-Output '{"type":"result","result":"fake reply","usage":{"input_tokens":1,"output_tokens":2}}'
+}
+"#,
+    )
+    .unwrap();
+
+    let cmd = home.join("fake-claude.cmd");
+    std::fs::write(
+        &cmd,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+            ps1.display()
+        ),
+    )
+    .unwrap();
+    cmd
 }
 
 pub(crate) fn feishu_platform(default_dir: &str) -> FeishuPlatform {

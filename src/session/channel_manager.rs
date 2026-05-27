@@ -223,6 +223,18 @@ impl ChannelManager {
         self.claude_sessions.get(id).map(|e| e.clone())
     }
 
+    pub fn update_claude_session_work_dir(&self, id: &str, work_dir: &str) -> bool {
+        let Some(mut session) = self.get_claude_session(id) else {
+            return false;
+        };
+        session.work_dir = work_dir.to_string();
+        session.updated_at = Some(Utc::now());
+        self.claude_sessions
+            .insert(session.id.clone(), session.clone());
+        crate::db::insert_claude_session(&session);
+        true
+    }
+
     pub fn get_active_claude_session(&self, channel_id: &str) -> Option<ClaudeSession> {
         self.claude_sessions
             .iter()
@@ -335,6 +347,30 @@ impl ChannelManager {
             .insert(session.id.clone(), session.clone());
         crate::db::insert_claude_session(&session);
         Ok(Some(session))
+    }
+
+    pub async fn refresh_active_controller_session(
+        &self,
+        channel_id: &str,
+        controller: &Arc<Mutex<ClaudeController>>,
+    ) {
+        let Some(mut session) = self.get_active_claude_session(channel_id) else {
+            return;
+        };
+        let ctrl = controller.lock().await;
+        session.work_dir = ctrl.get_work_dir().await;
+        let provider = ctrl.provider_name().await;
+        if let Some(provider_session_id) = ctrl.get_claude_session_id().await {
+            session.provider_session_id = Some(provider_session_id.clone());
+            session.claude_session_id = Some(provider_session_id);
+        }
+        session.provider = provider;
+        session.updated_at = Some(Utc::now());
+        drop(ctrl);
+
+        self.claude_sessions
+            .insert(session.id.clone(), session.clone());
+        crate::db::insert_claude_session(&session);
     }
 
     pub async fn create_and_start_claude_session<C: Into<AgentSettings>>(
@@ -539,6 +575,50 @@ impl ChannelManager {
             controller,
             router,
         })
+    }
+
+    pub async fn resume_claude_session_with_controller(
+        &self,
+        session_id: &str,
+        controller: &Arc<Mutex<ClaudeController>>,
+    ) -> Result<ClaudeSession> {
+        let existing = self
+            .get_claude_session(session_id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+        let work_dir = existing.work_dir.clone();
+
+        {
+            let ctrl = controller.lock().await;
+            if let Some(ref sid) = existing.claude_session_id {
+                ctrl.set_pending_resume_session_id(Some(sid.clone())).await;
+            }
+            ctrl.init_work_dir(work_dir.clone()).await;
+            ctrl.start_session(work_dir.clone(), vec![]).await?;
+        }
+
+        let new_claude_id = {
+            let ctrl = controller.lock().await;
+            ctrl.get_claude_session_id().await
+        };
+
+        let mut session = existing;
+        self.stop_active_session_records_for_channel(
+            &session.channel_session_id,
+            Some(&session.id),
+        );
+        session.active = true;
+        session.state = ClaudeSessionState::Active;
+        session.work_dir = work_dir.clone();
+        session.claude_session_id = new_claude_id;
+        session.updated_at = Some(Utc::now());
+        session.stopped_at = None;
+
+        self.update_channel_work_dir(&session.channel_session_id, &work_dir);
+        self.claude_sessions
+            .insert(session.id.clone(), session.clone());
+        crate::db::insert_claude_session(&session);
+
+        Ok(session)
     }
 
     pub async fn send_and_poll_active_runtime(

@@ -52,6 +52,23 @@ impl FeishuPlatform {
         }
     }
 
+    pub(crate) fn mcp_context_for_receive(
+        &self,
+        receive_id: &str,
+        receive_id_type: &str,
+    ) -> crate::claude::mcp_server::McpContext {
+        crate::claude::mcp_server::McpContext {
+            delivery: crate::claude::file_delivery::McpDeliveryTarget::Feishu(
+                crate::claude::file_delivery::FeishuFileTarget {
+                    app_id: self.config.app_id.clone(),
+                    app_secret: self.config.app_secret.clone(),
+                    chat_id: receive_id.to_string(),
+                    receive_id_type: receive_id_type.to_string(),
+                },
+            ),
+        }
+    }
+
     pub(crate) async fn get_channel(
         &self,
         chat_id: &str,

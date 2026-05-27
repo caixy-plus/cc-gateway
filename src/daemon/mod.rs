@@ -71,6 +71,15 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
         cmd.process_group(0);
     }
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // DETACHED_PROCESS: the child runs without inheriting the parent's console.
+        // This prevents CTRL_CLOSE_EVENT from being delivered when the terminal is closed.
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(DETACHED_PROCESS);
+    }
+
     let child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
 
@@ -217,7 +226,7 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     info!("Starting cc-gateway daemon (PID: {})", pid);
 
     // Start the daemon engine
-    let engine = engine::DaemonEngine::new(config);
+    let engine = engine::DaemonEngine::new_with_config_path(config, config_path);
     engine.run(tokio_listener).await?;
 
     // Cleanup: lock is released when pid_lock drops.
