@@ -326,6 +326,7 @@ pub async fn stop() -> Result<()> {
     #[cfg(windows)]
     {
         use std::process::Command;
+        println!("{}", t_fmt!("daemon.stop_signal", PID = pid));
         Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .output()
