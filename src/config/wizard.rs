@@ -154,6 +154,16 @@ fn save_config(config: &GatewayConfig) -> Result<()> {
 pub fn run_init_config() -> Result<()> {
     let config_path = ConfigLoader::config_path()?;
 
+    if config_path.is_file() {
+        println!(
+            "{}",
+            t_fmt!("wizard.init_skipped_existing", PATH = config_path.display())
+        );
+        return Ok(());
+    }
+
+    ConfigLoader::ensure_config_dir()?;
+
     println!("{}\n", t!("wizard.init_title"));
     println!("{}", t!("wizard.welcome"));
     println!(
@@ -161,17 +171,9 @@ pub fn run_init_config() -> Result<()> {
         t_fmt!("wizard.location", PATH = config_path.display())
     );
     println!("{}\n", t!("wizard.rerun"));
+    println!("{}\n", t!("wizard.no_config_defaults"));
 
-    let mut config = match ConfigLoader::load() {
-        Ok(c) => {
-            println!("{}\n", t!("wizard.found_existing"));
-            c
-        }
-        Err(_) => {
-            println!("{}\n", t!("wizard.no_config_defaults"));
-            GatewayConfig::default()
-        }
-    };
+    let mut config = GatewayConfig::default();
 
     println!("{}", t!("wizard.feishu_section_title"));
     println!("{}", t!("wizard.press_enter_keep"));
@@ -203,7 +205,7 @@ pub fn run_init_config() -> Result<()> {
         t_fmt!("wizard.config_saved_to", PATH = config_path.display())
     );
     println!("\n{}", t!("wizard.modify_later"));
-    println!("{}", t!("wizard.run_init"));
+    println!("{}", t!("wizard.run_config"));
     println!("{}", t_fmt!("wizard.or_edit", PATH = config_path.display()));
 
     if skip_feishu || config.feishu.app_id.is_empty() || config.feishu.app_id.starts_with("${") {

@@ -164,6 +164,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Found existing config. Press Enter to keep current values.",
             Language::ZhCN => "发现已有配置。按 Enter 保留当前值。",
         },
+        "wizard.init_skipped_existing" => match lang {
+            Language::En => "Config already exists at {PATH}, skipping initialization. Use `cc-gateway config` to edit.",
+            Language::ZhCN => "配置文件已存在于 {PATH}，跳过初始化。使用 `cc-gateway config` 进行修改。",
+        },
         "wizard.no_config_defaults" => match lang {
             Language::En => "No existing config found. Using defaults.",
             Language::ZhCN => "未找到现有配置。使用默认值。",
@@ -200,6 +204,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "  - Run: cc-gateway init",
             Language::ZhCN => "  - 运行: cc-gateway init",
         },
+        "wizard.run_config" => match lang {
+            Language::En => "  - Run: cc-gateway config",
+            Language::ZhCN => "  - 运行: cc-gateway config",
+        },
         "wizard.or_edit" => match lang {
             Language::En => "  - Or edit: {PATH}",
             Language::ZhCN => "  - 或编辑: {PATH}",
@@ -213,8 +221,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "      没有 app_id 和 app_secret，飞书机器人将无法工作。",
         },
         "wizard.configure_later" => match lang {
-            Language::En => "      You can configure it later by running 'cc-gateway init' again.",
-            Language::ZhCN => "      您可以稍后通过再次运行 'cc-gateway init' 来配置。",
+            Language::En => "      You can configure it later by running 'cc-gateway config'.",
+            Language::ZhCN => "      您可以稍后通过运行 'cc-gateway config' 来配置。",
         },
         "wizard.please_edit_credentials" => match lang {
             Language::En => "Please edit it to add your Feishu app credentials.",

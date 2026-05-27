@@ -126,7 +126,12 @@ if [ -n "$SHELL_CONFIG" ] && [ -f "$SHELL_CONFIG" ]; then
         echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
         msg "Added $INSTALL_DIR to PATH in $SHELL_CONFIG" "已将 $INSTALL_DIR 添加到 PATH ($SHELL_CONFIG)"
     fi
+    # Apply shell config in this install session (init/start need cc-gateway on PATH).
+    # shellcheck disable=SC1090
+    . "$SHELL_CONFIG" 2>/dev/null || true
 fi
+# Ensure install dir is on PATH for the rest of this install run.
+export PATH="$INSTALL_DIR:$PATH"
 
 # macOS: setup launchd plist
 if [ "$OS" = "darwin" ]; then
@@ -198,26 +203,12 @@ else
     $INIT_CMD < /dev/null
 fi
 
-if [ -n "$SHELL_CONFIG" ]; then
-    msg "" ""
-    msg "To use cc-gateway in this terminal, run:" "请运行以下命令以在当前终端使用 cc-gateway:"
-    msg "  source $SHELL_CONFIG" "  source $SHELL_CONFIG"
-    msg "Or open a new terminal." "或新开一个终端窗口。"
-fi
-
 msg "" ""
-if [ -t 0 ]; then
-    msg "Start cc-gateway daemon now? [y/N] " "现在启动 cc-gateway 守护进程？[y/N] "
-    read -r START_NOW
-    if echo "$START_NOW" | tr '[:upper:]' '[:lower:]' | grep -q '^y'; then
-        if command -v cc-gateway > /dev/null 2>&1; then
-            cc-gateway start || true
-        else
-            "$INSTALL_DIR/cc-gateway" start || true
-        fi
-    fi
+msg "Restarting cc-gateway daemon..." "正在重启 cc-gateway 守护进程..."
+if command -v cc-gateway > /dev/null 2>&1; then
+    cc-gateway restart || true
 else
-    msg "Skipping auto-start (non-interactive shell)." "跳过自动启动（非交互式环境）。"
+    "$INSTALL_DIR/cc-gateway" restart || true
 fi
 
 msg "" ""
