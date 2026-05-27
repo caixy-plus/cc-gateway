@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use tracing::{error, info, warn};
 
 use crate::config::model::effective_session_retention_per_channel;
-use crate::session::channel_model::{ChannelSession, ClaudeSession, SessionSource};
+use crate::session::channel_model::{ChannelSession, AgentSession, SessionSource};
 use chrono::{DateTime, Utc};
 
 fn clamp_session_retention_per_channel(max_per_channel: usize) -> usize {
@@ -194,17 +194,16 @@ pub fn is_daemon_running() -> bool {
 }
 
 /// Last activity time for retention: prefer session `updated_at`, then `created_at`.
-fn session_last_updated_at(session: &ClaudeSession) -> DateTime<Utc> {
+fn session_last_updated_at(session: &AgentSession) -> DateTime<Utc> {
     session
         .updated_at
         .unwrap_or(session.created_at)
 }
 
-fn remove_claude_session_record(session: &ClaudeSession) {
+fn remove_agent_session_record(session: &AgentSession) {
     let file_id = session
         .provider_session_id
         .as_ref()
-        .or(session.claude_session_id.as_ref())
         .unwrap_or(&session.id);
     if let Some(home) = dirs::home_dir() {
         let history_file = home
@@ -213,26 +212,26 @@ fn remove_claude_session_record(session: &ClaudeSession) {
             .join(format!("{}.jsonl", file_id));
         let _ = std::fs::remove_file(&history_file);
     }
-    crate::db::delete_claude_session(&session.id);
+    crate::db::delete_agent_session(&session.id);
 }
 
 /// Pick up to `max` sessions per channel: pin the latest-updated per work_dir, then fill by
 /// `updated_at` (newest first). When work_dir count exceeds `max`, only the newest `max` pinned
 /// sessions survive.
 pub(crate) fn select_sessions_to_keep(
-    sessions: &[ClaudeSession],
+    sessions: &[AgentSession],
     max: usize,
 ) -> HashSet<String> {
     if sessions.len() <= max {
         return sessions.iter().map(|s| s.id.clone()).collect();
     }
 
-    let mut by_time: Vec<&ClaudeSession> = sessions.iter().collect();
+    let mut by_time: Vec<&AgentSession> = sessions.iter().collect();
     by_time.sort_by(|a, b| {
         session_last_updated_at(b).cmp(&session_last_updated_at(a))
     });
 
-    let mut pinned_by_work_dir: HashMap<&str, &ClaudeSession> = HashMap::new();
+    let mut pinned_by_work_dir: HashMap<&str, &AgentSession> = HashMap::new();
     for session in &by_time {
         pinned_by_work_dir
             .entry(session.work_dir.as_str())
@@ -245,7 +244,7 @@ pub(crate) fn select_sessions_to_keep(
         .collect();
 
     if keep.len() > max {
-        let mut pinned: Vec<&ClaudeSession> = pinned_by_work_dir.values().copied().collect();
+        let mut pinned: Vec<&AgentSession> = pinned_by_work_dir.values().copied().collect();
         pinned.sort_by(|a, b| {
             session_last_updated_at(b).cmp(&session_last_updated_at(a))
         });
@@ -283,6 +282,7 @@ fn ensure_canonical_tui_channel(channels: &[ChannelSession]) -> String {
         platform: "tui".to_string(),
         channel_id: CANONICAL_TUI_CHANNEL_ID.to_string(),
         work_dir: shellexpand::tilde("~").to_string(),
+        default_provider: None,
         created_at: Utc::now(),
     };
     let id = channel.id.clone();
@@ -306,7 +306,7 @@ pub fn consolidate_stale_tui_channels_when(tui_running: bool) -> usize {
         }
 
         let reassigned =
-            crate::db::reassign_claude_sessions_channel(&channel.id, &canonical_id);
+            crate::db::reassign_agent_sessions_channel(&channel.id, &canonical_id);
         if reassigned > 0 {
             info!(
                 "Reassigned {} TUI Claude sessions from channel {} to canonical {}",
@@ -333,26 +333,26 @@ pub fn consolidate_stale_tui_channels() -> usize {
     consolidate_stale_tui_channels_when(is_tui_running())
 }
 
-fn prune_claude_sessions(sessions: &[ClaudeSession], keep: &HashSet<String>) -> usize {
+fn prune_agent_sessions(sessions: &[AgentSession], keep: &HashSet<String>) -> usize {
     let mut removed = 0usize;
     for session in sessions {
         if keep.contains(&session.id) {
             continue;
         }
-        remove_claude_session_record(session);
+        remove_agent_session_record(session);
         removed += 1;
     }
     removed
 }
 
 fn clean_excess_sessions_for_channel(channel_id: &str, max_per_channel: usize) -> usize {
-    let sessions = crate::db::load_claude_sessions_by_channel_id(channel_id);
+    let sessions = crate::db::load_agent_sessions_by_channel_id(channel_id);
     if sessions.len() <= max_per_channel {
         return 0;
     }
 
     let keep = select_sessions_to_keep(&sessions, max_per_channel);
-    let removed = prune_claude_sessions(&sessions, &keep);
+    let removed = prune_agent_sessions(&sessions, &keep);
     if removed > 0 {
         info!(
             "Cleaned {} excess Claude sessions from channel {}",

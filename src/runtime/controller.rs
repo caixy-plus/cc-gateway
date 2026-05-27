@@ -7,10 +7,10 @@ use tracing::info;
 
 use crate::agent::event::AgentEvent;
 pub use crate::agent::event::QuestionItem;
-use crate::agent::session::AgentSession;
-use crate::claude::mcp_server::McpContext;
-use crate::claude::protocol::{build_permission_allow, build_permission_deny, InputMessage};
-use crate::config::model::{AgentProvider, AgentSettings};
+use crate::agent::session::AgentRuntime;
+use crate::runtime::mcp_server::McpContext;
+use crate::runtime::protocol::{build_permission_allow, build_permission_deny, InputMessage};
+use crate::config::model::{AgentProvider, AgentProfiles};
 use crate::{t, t_fmt};
 
 /// Validate that a path is allowed.
@@ -152,28 +152,33 @@ enum SessionState {
     Active,
 }
 
-pub struct ClaudeController {
-    config: AgentSettings,
+pub struct AgentController {
+    config: AgentProfiles,
     show_thinking: Arc<AtomicBool>,
-    session: Arc<RwLock<Option<AgentSession>>>,
+    session: Arc<RwLock<Option<AgentRuntime>>>,
     event_tx: mpsc::UnboundedSender<ControllerEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
     work_dir: Arc<RwLock<String>>,
     pending_permission: Arc<RwLock<Option<(String, String)>>>,
     session_state: Arc<RwLock<SessionState>>,
     message_buffer: Arc<Mutex<Vec<String>>>,
-    claude_session_id: Arc<RwLock<Option<String>>>,
+    provider_session_id: Arc<RwLock<Option<String>>>,
     active_provider: Arc<RwLock<Option<String>>>,
     pending_resume_session_id: Arc<RwLock<Option<String>>>,
+    pending_resume_provider: Arc<RwLock<Option<AgentProvider>>>,
     pending_resume_record_id: Arc<RwLock<Option<String>>>,
     mcp_context: Arc<RwLock<Option<McpContext>>>,
 }
 
-impl ClaudeController {
-    pub fn new<C: Into<AgentSettings>>(config: C, show_thinking: bool) -> Self {
+impl AgentController {
+    pub fn agent_profiles(&self) -> &AgentProfiles {
+        &self.config
+    }
+
+    pub fn new(config: AgentProfiles, show_thinking: bool) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
-            config: config.into(),
+            config,
             show_thinking: Arc::new(AtomicBool::new(show_thinking)),
             session: Arc::new(RwLock::new(None)),
             event_tx,
@@ -182,9 +187,10 @@ impl ClaudeController {
             pending_permission: Arc::new(RwLock::new(None)),
             session_state: Arc::new(RwLock::new(SessionState::Inactive)),
             message_buffer: Arc::new(Mutex::new(Vec::new())),
-            claude_session_id: Arc::new(RwLock::new(None)),
+            provider_session_id: Arc::new(RwLock::new(None)),
             active_provider: Arc::new(RwLock::new(None)),
             pending_resume_session_id: Arc::new(RwLock::new(None)),
+            pending_resume_provider: Arc::new(RwLock::new(None)),
             pending_resume_record_id: Arc::new(RwLock::new(None)),
             mcp_context: Arc::new(RwLock::new(None)),
         }
@@ -195,6 +201,7 @@ impl ClaudeController {
         *wd = dir;
     }
 
+    #[cfg(test)]
     pub async fn start_session(&self, work_dir: String, extra_args: Vec<String>) -> Result<()> {
         self.start_session_with_provider(work_dir, extra_args, None)
             .await
@@ -209,6 +216,11 @@ impl ClaudeController {
         // Stop existing session if any
         self.stop_session().await?;
 
+        let provider = if provider.is_some() {
+            provider
+        } else {
+            self.pending_resume_provider.write().await.take()
+        };
         let config = self.config.config_for_provider(provider);
         let validated = ensure_under_home(&work_dir)?;
 
@@ -222,7 +234,7 @@ impl ClaudeController {
             ctx.clone()
         };
         let (agent_tx, mut agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let (mut session, claude_session_id) = AgentSession::spawn(
+        let (mut session, spawned_provider_session_id) = AgentRuntime::spawn(
             validated.clone(),
             extra_args,
             &config,
@@ -253,8 +265,8 @@ impl ClaudeController {
             *s = Some(session);
         }
         {
-            let mut sid = self.claude_session_id.write().await;
-            *sid = claude_session_id.clone();
+            let mut sid = self.provider_session_id.write().await;
+            *sid = spawned_provider_session_id.clone();
         }
         {
             let mut provider = self.active_provider.write().await;
@@ -272,10 +284,6 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        {
-            let mut provider = self.active_provider.write().await;
-            *provider = None;
-        }
         // Drain stale events from the previous session.
         // Use try_lock to avoid deadlocking with the TUI event listener,
         // which holds this lock while waiting on recv() from a non-existent
@@ -292,14 +300,14 @@ impl ClaudeController {
         let message_buffer = self.message_buffer.clone();
         let show_thinking = self.show_thinking.clone();
         let permission_policy = config.permission.clone();
-        let claude_session_id_arc = self.claude_session_id.clone();
+        let provider_session_id_arc = self.provider_session_id.clone();
         tokio::spawn(async move {
             while let Some(event) = agent_rx.recv().await {
                 Self::process_agent_event(
                     &event_tx,
                     &pending_perm,
                     &session_arc,
-                    &claude_session_id_arc,
+                    &provider_session_id_arc,
                     event,
                     &show_thinking,
                     &permission_policy,
@@ -369,8 +377,8 @@ impl ClaudeController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        // NOTE: we intentionally keep claude_session_id here so that a
-        // subsequent /claude can resume the same Claude session.
+        // NOTE: we intentionally keep provider_session_id here so that a
+        // subsequent /agent can resume the same provider session.
         Ok(())
     }
 
@@ -444,8 +452,8 @@ impl ClaudeController {
         self.show_thinking.store(value, Ordering::Relaxed);
     }
 
-    pub async fn get_claude_session_id(&self) -> Option<String> {
-        let sid = self.claude_session_id.read().await;
+    pub async fn get_provider_session_id(&self) -> Option<String> {
+        let sid = self.provider_session_id.read().await;
         sid.clone()
     }
 
@@ -460,6 +468,15 @@ impl ClaudeController {
     pub async fn set_pending_resume_session_id(&self, id: Option<String>) {
         let mut sid = self.pending_resume_session_id.write().await;
         *sid = id;
+    }
+
+    pub async fn set_pending_resume_provider(&self, provider: Option<AgentProvider>) {
+        let mut p = self.pending_resume_provider.write().await;
+        *p = provider;
+    }
+
+    pub async fn take_pending_resume_provider(&self) -> Option<AgentProvider> {
+        self.pending_resume_provider.write().await.take()
     }
 
     pub async fn set_pending_resume_record_id(&self, id: Option<String>) {
@@ -483,8 +500,8 @@ impl ClaudeController {
     pub(crate) async fn process_agent_event(
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
         pending_perm: &Arc<RwLock<Option<(String, String)>>>,
-        session_arc: &Arc<RwLock<Option<AgentSession>>>,
-        claude_session_id: &Arc<RwLock<Option<String>>>,
+        session_arc: &Arc<RwLock<Option<AgentRuntime>>>,
+        provider_session_id: &Arc<RwLock<Option<String>>>,
         event: AgentEvent,
         show_thinking: &Arc<AtomicBool>,
         permission_policy: &str,
@@ -492,7 +509,7 @@ impl ClaudeController {
         match event {
             AgentEvent::SessionId(id) => {
                 tracing::debug!("Agent session ID: {}", id);
-                let mut sid = claude_session_id.write().await;
+                let mut sid = provider_session_id.write().await;
                 *sid = Some(id);
             }
             AgentEvent::Text(text) => {

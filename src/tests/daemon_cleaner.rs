@@ -9,7 +9,7 @@ use crate::daemon::cleaner::{
     run_cleanup_cycle, select_sessions_to_keep, trim_log_file,
 };
 use crate::session::channel_model::{
-    ChannelSession, ClaudeSession, ClaudeSessionState, SessionSource,
+    ChannelSession, AgentSession, AgentSessionState, SessionSource,
 };
 use crate::tests::helpers::TestEnv;
 
@@ -101,33 +101,33 @@ fn insert_telegram_channel(id: &str) {
         platform: "telegram".to_string(),
         channel_id: "chat-1".to_string(),
         work_dir: "/tmp".to_string(),
+        default_provider: None,
         created_at: Utc::now(),
     };
     crate::db::insert_channel_session(&channel);
 }
 
-fn insert_claude_session(
+fn insert_agent_session(
     channel_id: &str,
     id: &str,
     work_dir: &str,
     created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
 ) {
-    let session = ClaudeSession {
+    let session = AgentSession {
         id: id.to_string(),
         channel_session_id: channel_id.to_string(),
         provider: "claude".to_string(),
         title: format!("Session {}", id),
         work_dir: work_dir.to_string(),
         active: false,
-        state: ClaudeSessionState::Stopped,
+        state: AgentSessionState::Stopped,
         provider_session_id: Some(format!("claude-{}", id)),
-        claude_session_id: Some(format!("claude-{}", id)),
         created_at,
         stopped_at: Some(updated_at),
         updated_at: Some(updated_at),
     };
-    crate::db::insert_claude_session(&session);
+    crate::db::insert_agent_session(&session);
 }
 
 #[test]
@@ -135,30 +135,28 @@ fn select_sessions_to_keep_prefers_updated_at_over_created_at() {
     let _guard = cleaner_test_guard();
     let base = Utc::now();
     let sessions = vec![
-        ClaudeSession {
+        AgentSession {
             id: "stale-update".to_string(),
             channel_session_id: "ch".to_string(),
             provider: "claude".to_string(),
             title: "t".to_string(),
             work_dir: "/project/a".to_string(),
             active: false,
-            state: ClaudeSessionState::Stopped,
+            state: AgentSessionState::Stopped,
             provider_session_id: None,
-            claude_session_id: None,
             created_at: base,
             stopped_at: None,
             updated_at: Some(base - chrono::Duration::days(10)),
         },
-        ClaudeSession {
+        AgentSession {
             id: "fresh-update".to_string(),
             channel_session_id: "ch".to_string(),
             provider: "claude".to_string(),
             title: "t".to_string(),
             work_dir: "/project/a".to_string(),
             active: false,
-            state: ClaudeSessionState::Stopped,
+            state: AgentSessionState::Stopped,
             provider_session_id: None,
-            claude_session_id: None,
             created_at: base - chrono::Duration::days(10),
             stopped_at: None,
             updated_at: Some(base),
@@ -174,31 +172,29 @@ fn select_sessions_to_keep_prefers_updated_at_over_created_at() {
 fn select_sessions_to_keep_pins_newest_per_work_dir_then_fills_by_time() {
     let _guard = cleaner_test_guard();
     let base = Utc::now();
-    let sessions: Vec<ClaudeSession> = (0..5)
-        .map(|i| ClaudeSession {
+    let sessions: Vec<AgentSession> = (0..5)
+        .map(|i| AgentSession {
             id: format!("dir-a-{i}"),
             channel_session_id: "ch".to_string(),
             provider: "claude".to_string(),
             title: "t".to_string(),
             work_dir: "/project/a".to_string(),
             active: false,
-            state: ClaudeSessionState::Stopped,
+            state: AgentSessionState::Stopped,
             provider_session_id: None,
-            claude_session_id: None,
             created_at: base - chrono::Duration::seconds(i),
             stopped_at: None,
             updated_at: Some(base - chrono::Duration::seconds(i)),
         })
-        .chain((0..5).map(|i| ClaudeSession {
+        .chain((0..5).map(|i| AgentSession {
             id: format!("dir-b-{i}"),
             channel_session_id: "ch".to_string(),
             provider: "claude".to_string(),
             title: "t".to_string(),
             work_dir: "/project/b".to_string(),
             active: false,
-            state: ClaudeSessionState::Stopped,
+            state: AgentSessionState::Stopped,
             provider_session_id: None,
-            claude_session_id: None,
             created_at: base - chrono::Duration::seconds(10 + i),
             stopped_at: None,
             updated_at: Some(base - chrono::Duration::seconds(10 + i)),
@@ -221,14 +217,14 @@ fn clean_excess_sessions_prunes_by_updated_at_not_created_at() {
     insert_telegram_channel("tg-updated");
 
     let base = Utc::now();
-    insert_claude_session(
+    insert_agent_session(
         "tg-updated",
         "keep-me",
         "/tmp",
         base,
         base,
     );
-    insert_claude_session(
+    insert_agent_session(
         "tg-updated",
         "drop-me",
         "/tmp",
@@ -237,7 +233,7 @@ fn clean_excess_sessions_prunes_by_updated_at_not_created_at() {
     );
     for i in 0..30 {
         let created = base - chrono::Duration::seconds(i + 2);
-        insert_claude_session(
+        insert_agent_session(
             "tg-updated",
             &format!("filler-{i:02}"),
             &format!("/other/{i:02}"),
@@ -248,7 +244,7 @@ fn clean_excess_sessions_prunes_by_updated_at_not_created_at() {
 
     clean_excess_sessions(30);
 
-    let remaining = crate::db::load_claude_sessions_by_channel_id("tg-updated");
+    let remaining = crate::db::load_agent_sessions_by_channel_id("tg-updated");
     assert_eq!(remaining.len(), 30);
     assert!(remaining.iter().any(|s| s.id == "keep-me"));
     assert!(!remaining.iter().any(|s| s.id == "drop-me"));
@@ -264,12 +260,12 @@ fn clean_excess_sessions_respects_configured_cap_clamped_to_hundred() {
     let base = Utc::now();
     for i in 0..110 {
         let at = base - chrono::Duration::seconds(i);
-        insert_claude_session("tg-cap-max", &format!("cap-{i:03}"), "/tmp", at, at);
+        insert_agent_session("tg-cap-max", &format!("cap-{i:03}"), "/tmp", at, at);
     }
 
     clean_excess_sessions(200);
 
-    let remaining = crate::db::load_claude_sessions_by_channel_id("tg-cap-max");
+    let remaining = crate::db::load_agent_sessions_by_channel_id("tg-cap-max");
     assert_eq!(remaining.len(), 100);
 }
 
@@ -283,12 +279,12 @@ fn clean_excess_sessions_respects_configured_cap_clamped_to_ten() {
     let base = Utc::now();
     for i in 0..15 {
         let at = base - chrono::Duration::seconds(i);
-        insert_claude_session("tg-cap", &format!("cap-{i:02}"), "/tmp", at, at);
+        insert_agent_session("tg-cap", &format!("cap-{i:02}"), "/tmp", at, at);
     }
 
     clean_excess_sessions(5);
 
-    let remaining = crate::db::load_claude_sessions_by_channel_id("tg-cap");
+    let remaining = crate::db::load_agent_sessions_by_channel_id("tg-cap");
     assert_eq!(remaining.len(), 10);
 }
 
@@ -302,7 +298,7 @@ fn clean_excess_sessions_keeps_latest_thirty_per_channel() {
     let base = Utc::now();
     for i in 0..35 {
         let created = base - chrono::Duration::seconds(i);
-        insert_claude_session(
+        insert_agent_session(
             "tg-channel",
             &format!("session-{i:02}"),
             "/tmp",
@@ -314,7 +310,7 @@ fn clean_excess_sessions_keeps_latest_thirty_per_channel() {
     let removed = clean_excess_sessions(30);
     assert_eq!(removed, 5);
 
-    let remaining = crate::db::load_claude_sessions_by_channel_id("tg-channel");
+    let remaining = crate::db::load_agent_sessions_by_channel_id("tg-channel");
     assert_eq!(remaining.len(), 30);
     let ids: Vec<String> = remaining.into_iter().map(|s| s.id).collect();
     for i in 0..30 {
@@ -335,12 +331,12 @@ fn clean_excess_sessions_keeps_newest_per_work_dir_when_dirs_exceed_cap() {
     let base = Utc::now();
     for i in 0..35 {
         let at = base - chrono::Duration::seconds(i);
-        insert_claude_session("tg-dirs", &format!("s-{i:02}"), &format!("/project/{i:02}"), at, at);
+        insert_agent_session("tg-dirs", &format!("s-{i:02}"), &format!("/project/{i:02}"), at, at);
     }
 
     clean_excess_sessions(30);
 
-    let remaining = crate::db::load_claude_sessions_by_channel_id("tg-dirs");
+    let remaining = crate::db::load_agent_sessions_by_channel_id("tg-dirs");
     assert_eq!(remaining.len(), 30);
     let work_dirs: std::collections::HashSet<_> =
         remaining.iter().map(|s| s.work_dir.as_str()).collect();
@@ -358,23 +354,23 @@ fn clean_excess_sessions_keeps_at_least_one_session_per_work_dir() {
     let base = Utc::now();
     for i in 0..20 {
         let at = base - chrono::Duration::seconds(i);
-        insert_claude_session("tg-multi", &format!("a-{i:02}"), "/project/a", at, at);
+        insert_agent_session("tg-multi", &format!("a-{i:02}"), "/project/a", at, at);
     }
     for i in 0..20 {
         let at = base - chrono::Duration::seconds(100 + i);
-        insert_claude_session("tg-multi", &format!("b-{i:02}"), "/project/b", at, at);
+        insert_agent_session("tg-multi", &format!("b-{i:02}"), "/project/b", at, at);
     }
 
     clean_excess_sessions(30);
 
-    let remaining = crate::db::load_claude_sessions_by_channel_id("tg-multi");
+    let remaining = crate::db::load_agent_sessions_by_channel_id("tg-multi");
     assert_eq!(remaining.len(), 30);
     assert!(remaining.iter().any(|s| s.id == "a-00"));
     assert!(remaining.iter().any(|s| s.id == "b-00"));
 }
 
 #[test]
-fn consolidate_stale_tui_channels_preserves_claude_sessions() {
+fn consolidate_stale_tui_channels_preserves_agent_sessions() {
     let _guard = cleaner_test_guard();
     let _env = TestEnv::new();
     crate::db::init_schema().unwrap();
@@ -386,6 +382,7 @@ fn consolidate_stale_tui_channels_preserves_claude_sessions() {
         platform: "tui".to_string(),
         channel_id: "tui".to_string(),
         work_dir: "/tmp".to_string(),
+        default_provider: None,
         created_at: Utc::now() - chrono::Duration::hours(1),
     };
     let stale = ChannelSession {
@@ -395,12 +392,13 @@ fn consolidate_stale_tui_channels_preserves_claude_sessions() {
         platform: "tui".to_string(),
         channel_id: "tui-history".to_string(),
         work_dir: "/tmp".to_string(),
+        default_provider: None,
         created_at: Utc::now(),
     };
     crate::db::insert_channel_session(&canonical);
     crate::db::insert_channel_session(&stale);
     let now = Utc::now();
-    insert_claude_session("tui-stale", "shared-session", "/tmp", now, now);
+    insert_agent_session("tui-stale", "shared-session", "/tmp", now, now);
 
     let removed = consolidate_stale_tui_channels_when(false);
     assert_eq!(removed, 1);
@@ -410,7 +408,7 @@ fn consolidate_stale_tui_channels_preserves_claude_sessions() {
             .any(|c| c.id == "tui-stale")
     );
 
-    let sessions = crate::db::load_claude_sessions_by_channel_id("tui-canonical");
+    let sessions = crate::db::load_agent_sessions_by_channel_id("tui-canonical");
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "shared-session");
 }
@@ -429,7 +427,7 @@ async fn run_cleanup_cycle_trims_log_and_prunes_sessions() {
     let base = Utc::now();
     for i in 0..32 {
         let created = base - chrono::Duration::seconds(i);
-        insert_claude_session("cycle-channel", &format!("cycle-{i:02}"), "/tmp", created, created);
+        insert_agent_session("cycle-channel", &format!("cycle-{i:02}"), "/tmp", created, created);
     }
 
     let mut log = tempfile::NamedTempFile::new().unwrap();
@@ -447,7 +445,7 @@ async fn run_cleanup_cycle_trims_log_and_prunes_sessions() {
     assert_eq!(result.media_removed, 0);
     assert_eq!(result.excess_sessions_removed, 2);
     assert_eq!(
-        crate::db::load_claude_sessions_by_channel_id("cycle-channel").len(),
+        crate::db::load_agent_sessions_by_channel_id("cycle-channel").len(),
         30
     );
 

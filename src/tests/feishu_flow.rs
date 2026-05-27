@@ -1,4 +1,4 @@
-use crate::claude::file_delivery::McpDeliveryTarget;
+use crate::runtime::file_delivery::McpDeliveryTarget;
 use crate::command::builtin::list_directory_paths;
 use crate::platform::feishu::cards::build_dir_picker_card;
 use crate::platform::feishu::FeishuChannelRuntime;

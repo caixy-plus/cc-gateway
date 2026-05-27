@@ -1,9 +1,9 @@
-use crate::claude::file_delivery::McpDeliveryTarget;
-use crate::config::model::{ClaudeConfig, TelegramConfig};
+use crate::runtime::file_delivery::McpDeliveryTarget;
+use crate::config::model::{AgentProfiles, TelegramConfig};
 use crate::db;
 use crate::platform::telegram::TelegramPlatform;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
-use crate::session::channel_model::{ClaudeSession, ClaudeSessionState};
+use crate::session::channel_model::{AgentSession, AgentSessionState};
 
 use super::helpers::TestEnv;
 
@@ -16,7 +16,7 @@ fn telegram_platform(allow_from: &str, default_dir: &str) -> TelegramPlatform {
             webhook_url: String::new(),
         },
         default_dir,
-        ClaudeConfig::default(),
+        AgentProfiles::default(),
         false,
     )
 }
@@ -65,14 +65,29 @@ fn telegram_bot_commands_payload_uses_valid_menu_commands() {
         .map(|cmd| cmd["command"].as_str().unwrap())
         .collect();
 
-    assert!(names.contains(&"help"));
-    assert!(names.contains(&"ll"));
-    assert!(names.contains(&"cd_up"));
-    assert!(!names.contains(&"cd"));
-    assert!(names.contains(&"claude"));
-    assert!(names.contains(&"claude_history"));
-    assert!(names.contains(&"show_thinking"));
-    assert!(names.contains(&"hide_thinking"));
+    let expected = [
+        "help",
+        "pwd",
+        "ll",
+        "cd",
+        "cd_up",
+        "cd_default",
+        "mkdir",
+        "agent",
+        "agents",
+        "agent_claude",
+        "agent_cursor",
+        "agents_claude",
+        "agents_cursor",
+        "agent_history",
+        "show_thinking",
+        "hide_thinking",
+        "quit",
+    ];
+    for name in expected {
+        assert!(names.contains(&name), "missing telegram menu command: {}", name);
+    }
+    assert_eq!(names.len(), expected.len());
     assert!(names
         .iter()
         .all(|name| !name.contains('-') && !name.starts_with('/')));
@@ -104,16 +119,15 @@ fn telegram_directory_reply_markup_registers_callback_buttons() {
 fn telegram_history_reply_markup_registers_callback_buttons() {
     let platform = telegram_platform("*", "~");
     let now = chrono::Utc::now();
-    let sessions = vec![ClaudeSession {
+    let sessions = vec![AgentSession {
         id: "session-1".to_string(),
         channel_session_id: "channel-1".to_string(),
         provider: "claude".to_string(),
         title: "Build feature".to_string(),
         work_dir: "/home/me/project".to_string(),
         active: false,
-        state: ClaudeSessionState::Stopped,
+        state: AgentSessionState::Stopped,
         provider_session_id: Some("claude-1".to_string()),
-        claude_session_id: Some("claude-1".to_string()),
         created_at: now,
         stopped_at: None,
         updated_at: Some(now),
@@ -139,16 +153,15 @@ fn telegram_history_message_includes_feishu_level_session_details() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-05-27T01:30:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let sessions = vec![ClaudeSession {
+    let sessions = vec![AgentSession {
         id: "session-1".to_string(),
         channel_session_id: "channel-1".to_string(),
         provider: "claude".to_string(),
         title: "Build feature".to_string(),
         work_dir: "/home/me/project".to_string(),
         active: true,
-        state: ClaudeSessionState::Active,
+        state: AgentSessionState::Active,
         provider_session_id: Some("claude-1".to_string()),
-        claude_session_id: Some("claude-1".to_string()),
         created_at: now,
         stopped_at: None,
         updated_at: Some(now),

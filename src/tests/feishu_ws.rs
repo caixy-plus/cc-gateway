@@ -511,7 +511,7 @@ fn make_test_platform() -> FeishuPlatform {
     FeishuPlatform::new(
         config,
         &gateway_config.default_dir,
-        gateway_config.claude.clone(),
+        gateway_config.agent.clone(),
         gateway_config.show_thinking,
     )
 }
@@ -530,7 +530,7 @@ fn test_feishu_platform_constructs_without_panic() {
 fn test_event_sink_trait_is_object_safe_for_boxing() {
     // The EventPollSink trait uses async_trait and is Send.
     // Just verify we can reference the type.
-    use crate::claude::event_poller::EventPollSink;
+    use crate::runtime::event_poller::EventPollSink;
 
     fn _assert_sink(_s: &dyn EventPollSink) {}
     // If FeishuEventSink doesn't implement EventPollSink,
@@ -546,13 +546,13 @@ fn test_event_sink_trait_is_object_safe_for_boxing() {
 
 #[tokio::test]
 async fn test_command_router_help_when_inactive() {
-    use crate::claude::controller::ClaudeController;
+    use crate::runtime::controller::AgentController;
     use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let config = crate::config::model::ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
+    let config = crate::config::model::AgentProfiles::default();
+    let controller = Arc::new(Mutex::new(AgentController::new(config, false)));
     let router = CommandRouter::new(controller, "~");
 
     let action = router.route("/help").await;
@@ -561,28 +561,28 @@ async fn test_command_router_help_when_inactive() {
 
 #[tokio::test]
 async fn test_command_router_claude_starts_session_when_inactive() {
-    use crate::claude::controller::ClaudeController;
+    use crate::runtime::controller::AgentController;
     use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let config = crate::config::model::ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
+    let config = crate::config::model::AgentProfiles::default();
+    let controller = Arc::new(Mutex::new(AgentController::new(config, false)));
     let router = CommandRouter::new(controller, "~");
 
-    let action = router.route("/claude test").await;
+    let action = router.route("/agent test").await;
     assert!(matches!(action, CommandAction::StartSession { .. }));
 }
 
 #[tokio::test]
 async fn test_command_router_unknown_command_when_inactive() {
-    use crate::claude::controller::ClaudeController;
+    use crate::runtime::controller::AgentController;
     use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let config = crate::config::model::ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
+    let config = crate::config::model::AgentProfiles::default();
+    let controller = Arc::new(Mutex::new(AgentController::new(config, false)));
     let router = CommandRouter::new(controller, "~");
 
     let action = router.route("/nonexistent_command").await;
@@ -591,13 +591,13 @@ async fn test_command_router_unknown_command_when_inactive() {
 
 #[tokio::test]
 async fn test_command_router_quit_when_inactive_returns_reply() {
-    use crate::claude::controller::ClaudeController;
+    use crate::runtime::controller::AgentController;
     use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let config = crate::config::model::ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
+    let config = crate::config::model::AgentProfiles::default();
+    let controller = Arc::new(Mutex::new(AgentController::new(config, false)));
     let router = CommandRouter::new(controller, "~");
 
     let action = router.route("/quit").await;
@@ -606,13 +606,13 @@ async fn test_command_router_quit_when_inactive_returns_reply() {
 
 #[tokio::test]
 async fn test_command_router_pwd_when_inactive() {
-    use crate::claude::controller::ClaudeController;
+    use crate::runtime::controller::AgentController;
     use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let config = crate::config::model::ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
+    let config = crate::config::model::AgentProfiles::default();
+    let controller = Arc::new(Mutex::new(AgentController::new(config, false)));
     let router = CommandRouter::new(controller, "~");
 
     let action = router.route("/pwd").await;
@@ -621,17 +621,17 @@ async fn test_command_router_pwd_when_inactive() {
 
 #[tokio::test]
 async fn test_command_router_regular_text_without_session() {
-    use crate::claude::controller::ClaudeController;
+    use crate::runtime::controller::AgentController;
     use crate::command::router::{CommandAction, CommandRouter};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let config = crate::config::model::ClaudeConfig::default();
-    let controller = Arc::new(Mutex::new(ClaudeController::new(config, false)));
+    let config = crate::config::model::AgentProfiles::default();
+    let controller = Arc::new(Mutex::new(AgentController::new(config, false)));
     let router = CommandRouter::new(controller, "~");
 
     // Regular text with no active session should try to forward,
     // and execute() will return a "no session" error.
     let action = router.route("hello claude").await;
-    assert!(matches!(action, CommandAction::ForwardToClaude(_)));
+    assert!(matches!(action, CommandAction::ForwardToAgent(_)));
 }

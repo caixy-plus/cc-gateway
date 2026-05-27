@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tracing::{error, info, warn};
 
 use crate::session::channel_model::{
-    ChannelSession, ClaudeSession, ClaudeSessionState, SessionSource,
+    AgentSession, AgentSessionState, ChannelSession, SessionSource,
 };
 
 fn db_path() -> PathBuf {
@@ -26,22 +26,19 @@ fn open_conn() -> Result<Connection> {
 pub fn init_schema() -> Result<()> {
     let conn = open_conn()?;
 
-    // New tables
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS channel_sessions (
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS claude_sessions;
+         CREATE TABLE IF NOT EXISTS channel_sessions (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             source TEXT NOT NULL,
             platform TEXT NOT NULL,
             channel_id TEXT,
             work_dir TEXT NOT NULL,
+            default_provider TEXT,
             created_at TEXT NOT NULL
-        )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS claude_sessions (
+        );
+        CREATE TABLE IF NOT EXISTS agent_sessions (
             id TEXT PRIMARY KEY,
             channel_session_id TEXT NOT NULL,
             provider TEXT NOT NULL DEFAULT 'claude',
@@ -50,44 +47,18 @@ pub fn init_schema() -> Result<()> {
             active INTEGER NOT NULL DEFAULT 0,
             state TEXT NOT NULL DEFAULT 'stopped',
             provider_session_id TEXT,
-            claude_session_id TEXT,
             created_at TEXT NOT NULL,
             stopped_at TEXT,
             updated_at TEXT,
             FOREIGN KEY (channel_session_id) REFERENCES channel_sessions(id)
-        )",
-        [],
+        );
+        PRAGMA journal_mode=WAL;",
     )?;
 
-    // Migrate existing tables that lack updated_at column
-    let mut stmt = conn.prepare("PRAGMA table_info(claude_sessions)")?;
-    let cols: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
-    if !cols.contains(&"updated_at".to_string()) {
-        conn.execute("ALTER TABLE claude_sessions ADD COLUMN updated_at TEXT", [])?;
-    }
-    if !cols.contains(&"provider".to_string()) {
-        conn.execute(
-            "ALTER TABLE claude_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
-            [],
-        )?;
-    }
-    if !cols.contains(&"provider_session_id".to_string()) {
-        conn.execute(
-            "ALTER TABLE claude_sessions ADD COLUMN provider_session_id TEXT",
-            [],
-        )?;
-        conn.execute(
-            "UPDATE claude_sessions SET provider_session_id = claude_session_id WHERE provider_session_id IS NULL",
-            [],
-        )?;
-    }
-
-    // Enable WAL mode so concurrent readers do not block writers (avoids SQLITE_BUSY)
-    conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    let _ = conn.execute(
+        "ALTER TABLE channel_sessions ADD COLUMN default_provider TEXT",
+        [],
+    );
 
     info!("SQLite session database initialized at {:?}", db_path());
     Ok(())
@@ -107,8 +78,8 @@ fn try_insert_channel_session(channel: &ChannelSession) -> Result<()> {
     let conn = open_conn()?;
     let source = source_to_str(&channel.source);
     conn.execute(
-        "INSERT OR REPLACE INTO channel_sessions (id, title, source, platform, channel_id, work_dir, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT OR REPLACE INTO channel_sessions (id, title, source, platform, channel_id, work_dir, default_provider, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             channel.id,
             channel.title,
@@ -116,6 +87,7 @@ fn try_insert_channel_session(channel: &ChannelSession) -> Result<()> {
             channel.platform,
             channel.channel_id,
             channel.work_dir,
+            channel.default_provider.as_deref(),
             channel.created_at.to_rfc3339(),
         ],
     )?;
@@ -152,6 +124,24 @@ fn try_update_channel_work_dir(id: &str, work_dir: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn update_channel_default_provider(id: &str, provider: &str) {
+    if let Err(e) = try_update_channel_default_provider(id, provider) {
+        warn!(
+            "Failed to update default_provider for channel session {}: {}",
+            id, e
+        );
+    }
+}
+
+fn try_update_channel_default_provider(id: &str, provider: &str) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "UPDATE channel_sessions SET default_provider = ?1 WHERE id = ?2",
+        params![provider, id],
+    )?;
+    Ok(())
+}
+
 pub fn load_all_channel_sessions() -> Vec<ChannelSession> {
     match try_load_all_channel_sessions() {
         Ok(sessions) => sessions,
@@ -165,11 +155,11 @@ pub fn load_all_channel_sessions() -> Vec<ChannelSession> {
 fn try_load_all_channel_sessions() -> Result<Vec<ChannelSession>> {
     let conn = open_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, title, source, platform, channel_id, work_dir, created_at FROM channel_sessions"
+        "SELECT id, title, source, platform, channel_id, work_dir, default_provider, created_at FROM channel_sessions",
     )?;
     let rows = stmt.query_map([], |row| {
         let source_str: String = row.get(2)?;
-        let created_at_str: String = row.get(6)?;
+        let created_at_str: String = row.get(7)?;
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
@@ -180,6 +170,7 @@ fn try_load_all_channel_sessions() -> Result<Vec<ChannelSession>> {
             platform: row.get(3)?,
             channel_id: row.get(4)?,
             work_dir: row.get(5)?,
+            default_provider: row.get(6)?,
             created_at,
         })
     })?;
@@ -195,20 +186,20 @@ fn try_load_all_channel_sessions() -> Result<Vec<ChannelSession>> {
 }
 
 // ------------------------------------------------------------------
-// ClaudeSession CRUD
+// AgentSession CRUD
 // ------------------------------------------------------------------
 
-pub fn insert_claude_session(session: &ClaudeSession) {
-    if let Err(e) = try_insert_claude_session(session) {
-        warn!("Failed to persist Claude session {}: {}", session.id, e);
+pub fn insert_agent_session(session: &AgentSession) {
+    if let Err(e) = try_insert_agent_session(session) {
+        warn!("Failed to persist agent session {}: {}", session.id, e);
     }
 }
 
-fn try_insert_claude_session(session: &ClaudeSession) -> Result<()> {
+fn try_insert_agent_session(session: &AgentSession) -> Result<()> {
     let conn = open_conn()?;
     conn.execute(
-        "INSERT OR REPLACE INTO claude_sessions (id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, claude_session_id, created_at, stopped_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT OR REPLACE INTO agent_sessions (id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, created_at, stopped_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             session.id,
             session.channel_session_id,
@@ -218,7 +209,6 @@ fn try_insert_claude_session(session: &ClaudeSession) -> Result<()> {
             if session.active { 1 } else { 0 },
             session.state.to_string(),
             session.provider_session_id.as_deref(),
-            session.claude_session_id.as_deref(),
             session.created_at.to_rfc3339(),
             session.stopped_at.map(|t| t.to_rfc3339()),
             session.updated_at.map(|t| t.to_rfc3339()),
@@ -227,83 +217,84 @@ fn try_insert_claude_session(session: &ClaudeSession) -> Result<()> {
     Ok(())
 }
 
-pub fn delete_claude_session(id: &str) {
-    if let Err(e) = try_delete_claude_session(id) {
-        warn!("Failed to delete Claude session {}: {}", id, e);
+pub fn delete_agent_session(id: &str) {
+    if let Err(e) = try_delete_agent_session(id) {
+        warn!("Failed to delete agent session {}: {}", id, e);
     }
 }
 
-fn try_delete_claude_session(id: &str) -> Result<()> {
+fn try_delete_agent_session(id: &str) -> Result<()> {
     let conn = open_conn()?;
-    conn.execute("DELETE FROM claude_sessions WHERE id = ?1", params![id])?;
+    conn.execute("DELETE FROM agent_sessions WHERE id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn load_all_claude_sessions() -> Vec<ClaudeSession> {
-    match try_load_all_claude_sessions() {
+pub fn load_all_agent_sessions() -> Vec<AgentSession> {
+    match try_load_all_agent_sessions() {
         Ok(sessions) => sessions,
         Err(e) => {
-            error!("Failed to load Claude sessions from DB: {}", e);
+            error!("Failed to load agent sessions from DB: {}", e);
             Vec::new()
         }
     }
 }
 
-fn try_load_all_claude_sessions() -> Result<Vec<ClaudeSession>> {
+fn parse_agent_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSession> {
+    let state_str: String = row.get(6)?;
+    let created_at_str: String = row.get(8)?;
+    let stopped_at_str: Option<String> = row.get(9)?;
+    let updated_at_str: Option<String> = row.get(10)?;
+    let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now());
+    let stopped_at = stopped_at_str.and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(&s)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .ok()
+    });
+    let updated_at = updated_at_str.and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(&s)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .ok()
+    });
+    Ok(AgentSession {
+        id: row.get(0)?,
+        channel_session_id: row.get(1)?,
+        provider: row.get(2)?,
+        title: row.get(3)?,
+        work_dir: row.get(4)?,
+        active: row.get::<_, i32>(5)? != 0,
+        state: state_str.parse().unwrap_or(AgentSessionState::Stopped),
+        provider_session_id: row.get(7)?,
+        created_at,
+        stopped_at,
+        updated_at,
+    })
+}
+
+fn try_load_all_agent_sessions() -> Result<Vec<AgentSession>> {
     let conn = open_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, claude_session_id, created_at, stopped_at, updated_at FROM claude_sessions"
+        "SELECT id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, created_at, stopped_at, updated_at FROM agent_sessions",
     )?;
-    let rows = stmt.query_map([], |row| {
-        let state_str: String = row.get(6)?;
-        let created_at_str: String = row.get(9)?;
-        let stopped_at_str: Option<String> = row.get(10)?;
-        let updated_at_str: Option<String> = row.get(11)?;
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now());
-        let stopped_at = stopped_at_str.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
-        let updated_at = updated_at_str.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
-        Ok(ClaudeSession {
-            id: row.get(0)?,
-            channel_session_id: row.get(1)?,
-            provider: row.get(2)?,
-            title: row.get(3)?,
-            work_dir: row.get(4)?,
-            active: row.get::<_, i32>(5)? != 0,
-            state: state_str.parse().unwrap_or(ClaudeSessionState::Stopped),
-            provider_session_id: row.get(7)?,
-            claude_session_id: row.get(8)?,
-            created_at,
-            stopped_at,
-            updated_at,
-        })
-    })?;
+    let rows = stmt.query_map([], parse_agent_session_row)?;
 
     let mut sessions = Vec::new();
     for row in rows {
         match row {
             Ok(session) => sessions.push(session),
-            Err(e) => warn!("Failed to parse Claude session row: {}", e),
+            Err(e) => warn!("Failed to parse agent session row: {}", e),
         }
     }
     Ok(sessions)
 }
 
-pub fn load_claude_sessions_by_channel_id(channel_id: &str) -> Vec<ClaudeSession> {
-    match try_load_claude_sessions_by_channel_id(channel_id) {
+pub fn load_agent_sessions_by_channel_id(channel_id: &str) -> Vec<AgentSession> {
+    match try_load_agent_sessions_by_channel_id(channel_id) {
         Ok(sessions) => sessions,
         Err(e) => {
             error!(
-                "Failed to load Claude sessions for channel {} from DB: {}",
+                "Failed to load agent sessions for channel {} from DB: {}",
                 channel_id, e
             );
             Vec::new()
@@ -311,61 +302,29 @@ pub fn load_claude_sessions_by_channel_id(channel_id: &str) -> Vec<ClaudeSession
     }
 }
 
-fn try_load_claude_sessions_by_channel_id(channel_id: &str) -> Result<Vec<ClaudeSession>> {
+fn try_load_agent_sessions_by_channel_id(channel_id: &str) -> Result<Vec<AgentSession>> {
     let conn = open_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, claude_session_id, created_at, stopped_at, updated_at FROM claude_sessions WHERE channel_session_id = ?1"
+        "SELECT id, channel_session_id, provider, title, work_dir, active, state, provider_session_id, created_at, stopped_at, updated_at FROM agent_sessions WHERE channel_session_id = ?1",
     )?;
-    let rows = stmt.query_map(params![channel_id], |row| {
-        let state_str: String = row.get(6)?;
-        let created_at_str: String = row.get(9)?;
-        let stopped_at_str: Option<String> = row.get(10)?;
-        let updated_at_str: Option<String> = row.get(11)?;
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now());
-        let stopped_at = stopped_at_str.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
-        let updated_at = updated_at_str.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
-        Ok(ClaudeSession {
-            id: row.get(0)?,
-            channel_session_id: row.get(1)?,
-            provider: row.get(2)?,
-            title: row.get(3)?,
-            work_dir: row.get(4)?,
-            active: row.get::<_, i32>(5)? != 0,
-            state: state_str.parse().unwrap_or(ClaudeSessionState::Stopped),
-            provider_session_id: row.get(7)?,
-            claude_session_id: row.get(8)?,
-            created_at,
-            stopped_at,
-            updated_at,
-        })
-    })?;
+    let rows = stmt.query_map(params![channel_id], parse_agent_session_row)?;
 
     let mut sessions = Vec::new();
     for row in rows {
         match row {
             Ok(session) => sessions.push(session),
-            Err(e) => warn!("Failed to parse Claude session row: {}", e),
+            Err(e) => warn!("Failed to parse agent session row: {}", e),
         }
     }
     Ok(sessions)
 }
 
-pub fn reassign_claude_sessions_channel(from_channel_id: &str, to_channel_id: &str) -> usize {
-    match try_reassign_claude_sessions_channel(from_channel_id, to_channel_id) {
+pub fn reassign_agent_sessions_channel(from_channel_id: &str, to_channel_id: &str) -> usize {
+    match try_reassign_agent_sessions_channel(from_channel_id, to_channel_id) {
         Ok(n) => n,
         Err(e) => {
             warn!(
-                "Failed to reassign Claude sessions from channel {} to {}: {}",
+                "Failed to reassign agent sessions from channel {} to {}: {}",
                 from_channel_id, to_channel_id, e
             );
             0
@@ -373,21 +332,17 @@ pub fn reassign_claude_sessions_channel(from_channel_id: &str, to_channel_id: &s
     }
 }
 
-fn try_reassign_claude_sessions_channel(
+fn try_reassign_agent_sessions_channel(
     from_channel_id: &str,
     to_channel_id: &str,
 ) -> Result<usize> {
     let conn = open_conn()?;
     let updated = conn.execute(
-        "UPDATE claude_sessions SET channel_session_id = ?1 WHERE channel_session_id = ?2",
+        "UPDATE agent_sessions SET channel_session_id = ?1 WHERE channel_session_id = ?2",
         params![to_channel_id, from_channel_id],
     )?;
     Ok(updated)
 }
-
-// ------------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------------
 
 fn source_to_str(source: &SessionSource) -> &'static str {
     match source {

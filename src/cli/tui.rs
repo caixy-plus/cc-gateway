@@ -22,8 +22,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::command::builtin::TUI_EVENT_READER_PAUSED;
 
-use crate::claude::controller::{ClaudeController, QuestionItem};
-use crate::claude::event_poller::{ClaudeEventPoller, EventPollSink};
+use crate::runtime::controller::{AgentController, QuestionItem};
+use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::cli::interactive::format_banner;
 use crate::command::{CommandAction, CommandRouter};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
@@ -54,7 +54,7 @@ pub(crate) fn to_lines(s: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Poll events from ClaudeEventPoller → main TUI loop
+// Poll events from AgentEventPoller → main TUI loop
 // ---------------------------------------------------------------------------
 
 enum TuiPollEvent {
@@ -138,7 +138,7 @@ impl EventPollSink for TuiEventSink {
 /// share a single receiver. Starting more than one poller races on the
 /// controller's event channel and can make later Claude chunks disappear.
 fn spawn_poller_task(
-    controller: Arc<Mutex<ClaudeController>>,
+    controller: Arc<Mutex<AgentController>>,
     poll_tx: mpsc::UnboundedSender<TuiPollEvent>,
 ) {
     tokio::spawn(async move {
@@ -148,7 +148,7 @@ fn spawn_poller_task(
                 if !ctrl.is_session_active().await {
                     break;
                 }
-                ClaudeEventPoller::from_controller(&*ctrl)
+                AgentEventPoller::from_controller(&*ctrl)
             };
 
             let mut sink = TuiEventSink {
@@ -260,13 +260,14 @@ impl App {
                 "/quit".into(),
                 "/cd".into(),
                 "/cd_default".into(),
-                "/claude".into(),
+                "/agent".into(),
+                "/agents".into(),
                 "/pwd".into(),
                 "/ll".into(),
                 "/mkdir".into(),
                 "/show-thinking".into(),
                 "/hide-thinking".into(),
-                "/claude-history".into(),
+                "/agent-history".into(),
             ],
             completion_matches: Vec::new(),
             completion_index: 0,
@@ -552,7 +553,7 @@ mod tests {
     use super::*;
     use crate::command::CommandRouter;
     use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
-    use crate::session::channel_model::{ClaudeSession as StoredClaudeSession, ClaudeSessionState};
+    use crate::session::channel_model::{AgentSession as StoredAgentSession, AgentSessionState};
     use crate::tests::helpers::TestEnv;
     use chrono::Utc;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -584,7 +585,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_history_resume_reuses_existing_tui_session_record() {
+    async fn agent_history_resume_reuses_existing_tui_session_record() {
         let env = TestEnv::new();
         crate::db::init_schema().unwrap();
         let work_dir = env.home().join("resume-project");
@@ -593,40 +594,39 @@ mod tests {
             .get_or_create_platform_channel("tui", "tui-history", work_dir.to_str().unwrap())
             .await;
         let now = Utc::now();
-        let stored = StoredClaudeSession {
+        let stored = StoredAgentSession {
             id: "stored-session".to_string(),
             channel_session_id: channel.id.clone(),
             provider: "claude".to_string(),
             title: "TUI Session".to_string(),
             work_dir: work_dir.to_string_lossy().to_string(),
             active: false,
-            state: ClaudeSessionState::Stopped,
+            state: AgentSessionState::Stopped,
             provider_session_id: Some("resume-session-id".to_string()),
-            claude_session_id: Some("resume-session-id".to_string()),
             created_at: now,
             stopped_at: Some(now),
             updated_at: Some(now),
         };
-        crate::db::insert_claude_session(&stored);
+        crate::db::insert_agent_session(&stored);
         GLOBAL_CHANNEL_SESSIONS.load_from_db();
 
-        let controller = Arc::new(Mutex::new(ClaudeController::new(
-            env.fake_claude_config(),
+        let controller = Arc::new(Mutex::new(AgentController::new(
+            env.fake_agent_profiles(),
             false,
         )));
         let router = CommandRouter::new(controller.clone(), work_dir.to_str().unwrap());
         let mut app = App::new(channel.id.clone());
 
-        process_submit("/claude-history 1", &mut app, &router, &controller)
+        process_submit("/agent-history 1", &mut app, &router, &controller)
             .await
             .unwrap();
 
-        let sessions = GLOBAL_CHANNEL_SESSIONS.list_claude_sessions_by_channel(&channel.id, None);
+        let sessions = GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&channel.id, None);
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "stored-session");
         assert!(sessions[0].active);
         assert_eq!(
-            sessions[0].claude_session_id.as_deref(),
+            sessions[0].provider_session_id.as_deref(),
             Some("resume-session-id")
         );
         assert!(app.session_active);
@@ -692,7 +692,7 @@ async fn process_submit(
     text: &str,
     app: &mut App,
     router: &CommandRouter,
-    controller: &Arc<Mutex<ClaudeController>>,
+    controller: &Arc<Mutex<AgentController>>,
 ) -> Result<SubmitResult> {
     let action = router.route(text).await;
 
@@ -744,9 +744,9 @@ async fn process_submit(
             Ok(SubmitResult { poll_claude: false })
         }
 
-        CommandAction::ShowClaudeHistory { arg } => {
+        CommandAction::ShowAgentHistory { arg } => {
             if let Some(reply) = router
-                .execute(CommandAction::ShowClaudeHistory { arg })
+                .execute(CommandAction::ShowAgentHistory { arg })
                 .await
             {
                 app.add_message(MsgRole::System, &reply);
@@ -757,8 +757,12 @@ async fn process_submit(
                 ctrl.take_pending_resume_record_id().await
             };
             if let Some(record_id) = pending_record_id {
+                let resume_provider = GLOBAL_CHANNEL_SESSIONS
+                    .get_agent_session(&record_id)
+                    .map(|s| s.stored_provider())
+                    .unwrap_or_default();
                 match GLOBAL_CHANNEL_SESSIONS
-                    .resume_claude_session_with_controller(&record_id, controller)
+                    .resume_agent_session_with_controller(&record_id, controller)
                     .await
                 {
                     Ok(_) => {
@@ -768,7 +772,10 @@ async fn process_submit(
                     Err(e) => {
                         app.add_message(
                             MsgRole::System,
-                            &t_fmt!("builtin.failed_start_claude", ERR = e),
+                            &crate::command::agents::failed_start_agent_message(
+                                &resume_provider,
+                                e,
+                            ),
                         );
                     }
                 }
@@ -780,10 +787,14 @@ async fn process_submit(
                 ctrl.has_pending_resume_session_id().await
             };
             if has_pending_resume {
+                let pending_provider = {
+                    let ctrl = controller.lock().await;
+                    ctrl.take_pending_resume_provider().await
+                };
                 let result = router
                     .execute(CommandAction::StartSession {
                         work_dir: None,
-                        provider: None,
+                        provider: pending_provider,
                         args: Vec::new(),
                     })
                     .await;
@@ -819,7 +830,7 @@ async fn process_submit(
             Ok(SubmitResult { poll_claude: false })
         }
 
-        CommandAction::ForwardToClaude(msg) => {
+        CommandAction::ForwardToAgent(msg) => {
             match GLOBAL_CHANNEL_SESSIONS
                 .send_to_controller(controller, &msg)
                 .await
@@ -845,7 +856,7 @@ async fn process_submit(
     }
 }
 
-/// Process a single poll event from the ClaudeEventPoller, updating app state.
+/// Process a single poll event from the AgentEventPoller, updating app state.
 /// Returns true when the response stream is done.
 fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
     match event {
@@ -912,7 +923,7 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
 // ---------------------------------------------------------------------------
 
 pub async fn run_tui(
-    controller: Arc<Mutex<ClaudeController>>,
+    controller: Arc<Mutex<AgentController>>,
     router: CommandRouter,
     channel_id: String,
 ) -> Result<()> {
@@ -953,7 +964,7 @@ pub async fn run_tui(
         }
     });
 
-    // --- Poll channel (ClaudeEventPoller → main loop) ---
+    // --- Poll channel (AgentEventPoller → main loop) ---
     let (poll_tx, mut poll_rx) = mpsc::unbounded_channel::<TuiPollEvent>();
 
     // --- Initial render ---

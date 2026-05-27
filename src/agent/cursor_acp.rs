@@ -32,7 +32,7 @@ impl CursorAcpSession {
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         resume_session_id: Option<String>,
     ) -> Result<(Self, Option<String>)> {
-        let cli_path = crate::claude::session::resolve_cli_path(&config.cli_path);
+        let cli_path = crate::runtime::session::resolve_cli_path(&config.cli_path);
         let mut args: Vec<String> = Vec::new();
         if !config.default_args.is_empty() {
             args.extend(
@@ -126,7 +126,7 @@ impl CursorAcpSession {
             config.mode.trim()
         };
         let result = if let Some(ref sid) = resume_session_id {
-            session
+            match session
                 .send_request(
                     "session/load",
                     json!({
@@ -136,7 +136,32 @@ impl CursorAcpSession {
                         "mcpServers": []
                     }),
                 )
-                .await?
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    // Cursor ACP session ids may not be resumable across agent process restarts.
+                    // If the stored session id is no longer recognized, fall back to starting a new session.
+                    let err = e.to_string();
+                    if is_cursor_session_not_found_error(&err) {
+                        let _ = event_tx.send(AgentEvent::Text(
+                            "Cursor session not found; starting a new session.".to_string(),
+                        ));
+                        session
+                            .send_request(
+                                "session/new",
+                                json!({
+                                    "cwd": work_dir,
+                                    "mode": mode,
+                                    "mcpServers": []
+                                }),
+                            )
+                            .await?
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
         } else {
             session
                 .send_request(
@@ -151,7 +176,6 @@ impl CursorAcpSession {
         };
 
         let session_id = extract_session_id(&result)
-            .or(resume_session_id)
             .ok_or_else(|| anyhow::anyhow!("Cursor ACP did not return a session id"))?;
         let mut session = session;
         session.session_id = session_id.clone();
@@ -523,6 +547,24 @@ async fn respond_extension(stdin: &Arc<Mutex<ChildStdin>>, msg: &Value, result: 
     }
 }
 
+fn is_cursor_session_not_found_error(err: &str) -> bool {
+    // Cursor ACP returns JSON-RPC errors as JSON strings, for example:
+    // {"code":-32602,"data":{"message":"Session \"...\" not found"},"message":"Invalid params"}
+    if !err.contains("Session") || !err.contains("not found") {
+        return false;
+    }
+    // Best-effort JSON parse to avoid matching unrelated errors.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(err) {
+        let msg = v
+            .get("data")
+            .and_then(|d| d.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        return msg.contains("Session") && msg.contains("not found");
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,6 +618,13 @@ mod tests {
             AgentEvent::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text event, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn cursor_session_not_found_error_is_detected() {
+        let err = r#"{"code":-32602,"data":{"message":"Session \"abc\" not found"},"message":"Invalid params"}"#;
+        assert!(is_cursor_session_not_found_error(err));
+        assert!(!is_cursor_session_not_found_error("other error"));
     }
 
     #[tokio::test]

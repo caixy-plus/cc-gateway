@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod builtin;
 pub mod router;
 pub(crate) mod workdir;

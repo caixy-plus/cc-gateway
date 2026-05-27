@@ -1,8 +1,8 @@
-use crate::claude::file_delivery::{
+use crate::runtime::file_delivery::{
     telegram_send_document_url, validate_outbound_file, FeishuFileTarget, McpContext,
     McpDeliveryTarget, TelegramFileTarget,
 };
-use crate::claude::mcp_server::send_file_tool_schema;
+use crate::runtime::mcp_server::send_file_tool_schema;
 
 use super::helpers::TestEnv;
 

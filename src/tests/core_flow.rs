@@ -1,11 +1,10 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::claude::event_poller::EventPollSink;
-use crate::config::model::ClaudeConfig;
+use crate::runtime::event_poller::EventPollSink;
 use crate::db;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
-use crate::session::channel_model::ClaudeSessionState;
+use crate::session::channel_model::AgentSessionState;
 
 use super::helpers::TestEnv;
 
@@ -50,7 +49,7 @@ impl EventPollSink for CollectSink {
     async fn on_question_request(
         &mut self,
         _request_id: &str,
-        _questions: &[crate::claude::controller::QuestionItem],
+        _questions: &[crate::runtime::controller::QuestionItem],
     ) -> Result<()> {
         Ok(())
     }
@@ -97,7 +96,7 @@ impl EventPollSink for ChunkSink {
     async fn on_question_request(
         &mut self,
         _request_id: &str,
-        _questions: &[crate::claude::controller::QuestionItem],
+        _questions: &[crate::runtime::controller::QuestionItem],
     ) -> Result<()> {
         Ok(())
     }
@@ -162,12 +161,12 @@ async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
         "thinking-hidden"
     });
     std::fs::create_dir_all(&work_dir)?;
-    let config = ClaudeConfig {
-        cli_path: create_thinking_fake_claude(env.home())
+    let mut config = env.fake_agent_profiles();
+    config.claude.cli_path = Some(
+        create_thinking_fake_claude(env.home())
             .to_string_lossy()
             .to_string(),
-        default_args: String::new(),
-    };
+    );
 
     let channel = GLOBAL_CHANNEL_SESSIONS
         .get_or_create_platform_channel(
@@ -181,13 +180,14 @@ async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
         )
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &channel.id,
             "Thinking Flow",
             work_dir.to_str().unwrap(),
             config,
             show_thinking,
             vec![],
+            None,
             None,
             None,
             None,
@@ -214,13 +214,13 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
     db::init_schema()?;
     let work_dir = env.home().join("project");
     std::fs::create_dir_all(&work_dir)?;
-    let fake_config = env.fake_claude_config();
+    let fake_config = env.fake_agent_profiles();
 
     let channel = GLOBAL_CHANNEL_SESSIONS
         .get_or_create_platform_channel("tui", "core-flow", work_dir.to_str().unwrap())
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &channel.id,
             "Core Flow",
             work_dir.to_str().unwrap(),
@@ -230,11 +230,12 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
             None,
             None,
             None,
+            None,
         )
         .await?;
 
     assert_eq!(db::load_all_channel_sessions().len(), 1);
-    let stored = db::load_claude_sessions_by_channel_id(&channel.id);
+    let stored = db::load_agent_sessions_by_channel_id(&channel.id);
     assert_eq!(stored.len(), 1);
     assert!(stored[0].active);
 
@@ -253,18 +254,18 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
     GLOBAL_CHANNEL_SESSIONS
         .stop_channel_session(&channel.id)
         .await?;
-    let stopped = db::load_claude_sessions_by_channel_id(&channel.id);
+    let stopped = db::load_agent_sessions_by_channel_id(&channel.id);
     assert!(!stopped[0].active);
-    assert_eq!(stopped[0].state, ClaudeSessionState::Stopped);
+    assert_eq!(stopped[0].state, AgentSessionState::Stopped);
 
     GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
     GLOBAL_CHANNEL_SESSIONS.load_from_db();
-    let restored = GLOBAL_CHANNEL_SESSIONS.list_claude_sessions_by_channel(&channel.id, None);
+    let restored = GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&channel.id, None);
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].work_dir, work_dir.to_string_lossy());
 
     let resumed = GLOBAL_CHANNEL_SESSIONS
-        .resume_claude_session_runtime(
+        .resume_agent_session_runtime(
             &restored[0].id,
             work_dir.to_str().unwrap(),
             fake_config,
@@ -291,18 +292,18 @@ async fn start_session_uses_work_dir_override_as_process_cwd_and_persisted_work_
     let root = env.home().join("override-root");
     let child = root.join("child");
     std::fs::create_dir_all(&child)?;
-    let config = ClaudeConfig {
-        cli_path: create_cwd_fake_claude(env.home())
+    let mut config = env.fake_agent_profiles();
+    config.claude.cli_path = Some(
+        create_cwd_fake_claude(env.home())
             .to_string_lossy()
             .to_string(),
-        default_args: String::new(),
-    };
+    );
 
     let channel = GLOBAL_CHANNEL_SESSIONS
         .get_or_create_platform_channel("feishu", "override-flow", root.to_str().unwrap())
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &channel.id,
             "Override Flow",
             root.to_str().unwrap(),
@@ -312,15 +313,16 @@ async fn start_session_uses_work_dir_override_as_process_cwd_and_persisted_work_
             None,
             Some(child.to_string_lossy().to_string()),
             None,
+            None,
         )
         .await?;
 
     let process_cwd = std::fs::read_to_string(env.home().join("claude-cwd.txt"))?;
     assert_eq!(process_cwd.trim(), child.to_string_lossy());
-    assert_eq!(active.claude_session.work_dir, child.to_string_lossy());
+    assert_eq!(active.agent_session.work_dir, child.to_string_lossy());
     assert_eq!(
         GLOBAL_CHANNEL_SESSIONS
-            .get_active_claude_session(&channel.id)
+            .get_active_agent_session(&channel.id)
             .unwrap()
             .work_dir,
         child.to_string_lossy()
@@ -345,18 +347,18 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
     let current = env.home().join("resume-current");
     std::fs::create_dir_all(&original)?;
     std::fs::create_dir_all(&current)?;
-    let config = ClaudeConfig {
-        cli_path: create_cwd_fake_claude(env.home())
+    let mut config = env.fake_agent_profiles();
+    config.claude.cli_path = Some(
+        create_cwd_fake_claude(env.home())
             .to_string_lossy()
             .to_string(),
-        default_args: String::new(),
-    };
+    );
 
     let channel = GLOBAL_CHANNEL_SESSIONS
         .get_or_create_platform_channel("feishu", "resume-workdir", current.to_str().unwrap())
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
-        .start_claude_session_for_platform(
+        .start_agent_session_for_platform(
             &channel.id,
             "Resume WorkDir",
             current.to_str().unwrap(),
@@ -366,9 +368,10 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
             None,
             Some(original.to_string_lossy().to_string()),
             None,
+            None,
         )
         .await?;
-    let session_id = active.claude_session.id.clone();
+    let session_id = active.agent_session.id.clone();
     {
         let ctrl = active.controller.lock().await;
         ctrl.stop_session().await?;
@@ -381,7 +384,7 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
         .await?;
 
     let resumed = GLOBAL_CHANNEL_SESSIONS
-        .resume_claude_session_for_platform(
+        .resume_agent_session_for_platform(
             &session_id,
             current.to_str().unwrap(),
             config,
@@ -393,7 +396,7 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
 
     let process_cwd = std::fs::read_to_string(env.home().join("claude-cwd.txt"))?;
     assert_eq!(process_cwd.trim(), original.to_string_lossy());
-    assert_eq!(resumed.claude_session.work_dir, original.to_string_lossy());
+    assert_eq!(resumed.agent_session.work_dir, original.to_string_lossy());
     assert_eq!(
         GLOBAL_CHANNEL_SESSIONS
             .get_channel(&channel.id)
@@ -401,6 +404,177 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
             .work_dir,
         original.to_string_lossy()
     );
+
+    {
+        let ctrl = resumed.controller.lock().await;
+        ctrl.stop_session().await?;
+    }
+    GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel.id)
+        .await?;
+
+    Ok(())
+}
+
+fn create_tagged_fake_cli(home: &Path, tag: &str) -> PathBuf {
+    let script = home.join(format!("fake-{}.sh", tag));
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+mkdir -p "$HOME/.claude/sessions"
+echo "{tag}" > "$HOME/last-spawn-tag.txt"
+pwd > "$HOME/claude-cwd.txt"
+printf '{{"sessionId":"fake-{tag}-session"}}\n' > "$HOME/.claude/sessions/$$.json"
+while IFS= read -r line; do
+  printf '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"tag reply"}}]}}}}\n'
+  printf '{{"type":"result","result":"tag reply","usage":{{"input_tokens":1,"output_tokens":2}}}}\n'
+done
+"#
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+    }
+    script
+}
+
+#[tokio::test]
+async fn controller_start_session_with_explicit_claude_provider() -> Result<()> {
+    use crate::runtime::controller::AgentController;
+    use crate::config::model::{
+        AgentProvider, AgentProviderConfig, AgentProfiles,
+    };
+
+    let env = TestEnv::new();
+    let work_dir = env.home().join("controller-claude");
+    std::fs::create_dir_all(&work_dir)?;
+    let claude_cli = create_tagged_fake_cli(env.home(), "claude");
+    let cursor_cli = create_tagged_fake_cli(env.home(), "cursor");
+    let settings = AgentProfiles {
+        default: AgentProvider::Cursor,
+        claude: AgentProviderConfig {
+            cli_path: Some(claude_cli.to_string_lossy().to_string()),
+            default_args: Some(String::new()),
+            mode: None,
+            permission: None,
+        },
+        cursor: AgentProviderConfig {
+            cli_path: Some(cursor_cli.to_string_lossy().to_string()),
+            default_args: Some(String::new()),
+            mode: None,
+            permission: None,
+        },
+    };
+
+    let controller = AgentController::new(settings, false);
+    {
+        let ctrl = std::sync::Arc::new(tokio::sync::Mutex::new(controller));
+        let c = ctrl.lock().await;
+        c.init_work_dir(work_dir.to_string_lossy().to_string()).await;
+        c.set_pending_resume_session_id(Some("fake-claude-session".to_string()))
+            .await;
+        c.start_session_with_provider(
+            work_dir.to_string_lossy().to_string(),
+            vec![],
+            Some(AgentProvider::Claude),
+        )
+        .await?;
+        c.stop_session().await?;
+    }
+
+    let tag = std::fs::read_to_string(env.home().join("last-spawn-tag.txt"))?;
+    assert_eq!(tag.trim(), "claude");
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_session_uses_stored_provider_not_agent_default() -> Result<()> {
+    use crate::config::model::{
+        AgentProvider, AgentProviderConfig, AgentProfiles,
+    };
+    use crate::session::channel_model::{AgentSession, AgentSessionState};
+
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("provider-resume");
+    std::fs::create_dir_all(&work_dir)?;
+
+    let claude_cli = create_tagged_fake_cli(env.home(), "claude");
+    let cursor_cli = create_tagged_fake_cli(env.home(), "cursor");
+    let claude_script = std::fs::read_to_string(&claude_cli)?;
+    assert!(
+        claude_script.contains("echo \"claude\""),
+        "unexpected claude script:\n{}",
+        claude_script
+    );
+    let agent_settings = AgentProfiles {
+        default: AgentProvider::Cursor,
+        claude: AgentProviderConfig {
+            cli_path: Some(claude_cli.to_string_lossy().to_string()),
+            default_args: Some(String::new()),
+            mode: None,
+            permission: None,
+        },
+        cursor: AgentProviderConfig {
+            cli_path: Some(cursor_cli.to_string_lossy().to_string()),
+            default_args: Some(String::new()),
+            mode: None,
+            permission: None,
+        },
+    };
+
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel("feishu", "provider-resume", work_dir.to_str().unwrap())
+        .await;
+
+    let mut session = AgentSession::new(&channel.id, "Stored Provider", work_dir.to_str().unwrap());
+    session.provider = "claude".to_string();
+    session.state = AgentSessionState::Stopped;
+    session.provider_session_id = Some("fake-claude-session".to_string());
+    let session_id = session.id.clone();
+    db::insert_agent_session(&session);
+    GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+    GLOBAL_CHANNEL_SESSIONS.load_from_db();
+
+    let loaded = GLOBAL_CHANNEL_SESSIONS
+        .get_agent_session(&session_id)
+        .expect("session loaded from db");
+    assert_eq!(loaded.provider, "claude");
+    let resume_cfg = agent_settings.config_for_provider(Some(loaded.stored_provider()));
+    assert!(
+        resume_cfg.cli_path.contains("fake-claude"),
+        "expected claude profile cli, got {}",
+        resume_cfg.cli_path
+    );
+
+    let all = crate::db::load_all_agent_sessions();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].provider, "claude");
+    assert_eq!(all[0].id, session_id);
+
+    let tag_path = env.home().join("last-spawn-tag.txt");
+    let _ = std::fs::remove_file(&tag_path);
+
+    let resumed = GLOBAL_CHANNEL_SESSIONS
+        .resume_agent_session_for_platform(
+            &session_id,
+            work_dir.to_str().unwrap(),
+            agent_settings,
+            false,
+            None,
+            None,
+        )
+        .await?;
+
+    let tag = std::fs::read_to_string(&tag_path)?;
+    assert_eq!(tag.trim(), "claude");
+    assert_eq!(resumed.agent_session.provider, "claude");
 
     {
         let ctrl = resumed.controller.lock().await;

@@ -3,17 +3,17 @@ use tokio::sync::mpsc;
 
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
-use crate::claude::mcp_server::McpContext;
-use crate::claude::protocol::{InputMessage, OutputEvent};
-use crate::claude::session::ClaudeSession;
+use crate::runtime::mcp_server::McpContext;
+use crate::runtime::protocol::{InputMessage, OutputEvent};
+use crate::runtime::session::StreamJsonSession;
 use crate::config::model::{AgentConfig, AgentProvider};
 
-pub enum AgentSession {
-    Claude(ClaudeSession),
+pub enum AgentRuntime {
+    Claude(StreamJsonSession),
     Cursor(CursorAcpSession),
 }
 
-impl AgentSession {
+impl AgentRuntime {
     pub async fn spawn(
         work_dir: String,
         extra_args: Vec<String>,
@@ -25,11 +25,10 @@ impl AgentSession {
         match config.provider {
             AgentProvider::Claude => {
                 let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
-                let claude_config: crate::config::model::ClaudeConfig = config.clone().into();
-                let (session, session_id) = ClaudeSession::spawn(
+                let (session, session_id) = StreamJsonSession::spawn(
                     work_dir,
                     extra_args,
-                    &claude_config,
+                    config,
                     claude_tx,
                     resume_session_id,
                     mcp_context,
@@ -38,7 +37,7 @@ impl AgentSession {
                 let tx = event_tx.clone();
                 tokio::spawn(async move {
                     while let Some(event) = claude_rx.recv().await {
-                        for agent_event in claude_to_agent_events(event) {
+                        for agent_event in stream_json_to_agent_events(event) {
                             let _ = tx.send(agent_event);
                         }
                     }
@@ -61,19 +60,19 @@ impl AgentSession {
 
     pub async fn send_message(&mut self, text: &str) -> Result<()> {
         match self {
-            AgentSession::Claude(session) => {
+            AgentRuntime::Claude(session) => {
                 session
-                    .send(crate::claude::protocol::build_user_message(text))
+                    .send(crate::runtime::protocol::build_user_message(text))
                     .await
             }
-            AgentSession::Cursor(session) => session.send_user_message(text).await,
+            AgentRuntime::Cursor(session) => session.send_user_message(text).await,
         }
     }
 
     pub async fn send_input(&mut self, msg: InputMessage) -> Result<()> {
         match self {
-            AgentSession::Claude(session) => session.send(msg).await,
-            AgentSession::Cursor(session) => match msg {
+            AgentRuntime::Claude(session) => session.send(msg).await,
+            AgentRuntime::Cursor(session) => match msg {
                 InputMessage::ControlResponse { response } => {
                     let allow = response.response.behavior == "allow";
                     session
@@ -94,36 +93,27 @@ impl AgentSession {
 
     pub async fn stop(self) -> Result<()> {
         match self {
-            AgentSession::Claude(session) => session.stop().await,
-            AgentSession::Cursor(session) => session.stop().await,
+            AgentRuntime::Claude(session) => session.stop().await,
+            AgentRuntime::Cursor(session) => session.stop().await,
         }
     }
 
     pub fn is_alive(&mut self) -> bool {
         match self {
-            AgentSession::Claude(session) => session.is_alive(),
-            AgentSession::Cursor(session) => session.is_alive(),
+            AgentRuntime::Claude(session) => session.is_alive(),
+            AgentRuntime::Cursor(session) => session.is_alive(),
         }
     }
 
     pub fn recent_stderr(&mut self) -> String {
         match self {
-            AgentSession::Claude(session) => session.recent_stderr(),
-            AgentSession::Cursor(_) => String::new(),
+            AgentRuntime::Claude(session) => session.recent_stderr(),
+            AgentRuntime::Cursor(_) => String::new(),
         }
     }
 }
 
-impl From<AgentConfig> for crate::config::model::ClaudeConfig {
-    fn from(value: AgentConfig) -> Self {
-        Self {
-            cli_path: value.cli_path,
-            default_args: value.default_args,
-        }
-    }
-}
-
-fn claude_to_agent_events(event: OutputEvent) -> Vec<AgentEvent> {
+fn stream_json_to_agent_events(event: OutputEvent) -> Vec<AgentEvent> {
     match event {
         OutputEvent::System { session_id } => {
             session_id.map(AgentEvent::SessionId).into_iter().collect()
@@ -132,17 +122,17 @@ fn claude_to_agent_events(event: OutputEvent) -> Vec<AgentEvent> {
             .content
             .into_iter()
             .map(|block| match block {
-                crate::claude::protocol::ContentBlock::Text { text } => AgentEvent::Text(text),
-                crate::claude::protocol::ContentBlock::Thinking { thinking } => {
+                crate::runtime::protocol::ContentBlock::Text { text } => AgentEvent::Text(text),
+                crate::runtime::protocol::ContentBlock::Thinking { thinking } => {
                     AgentEvent::Thinking(thinking)
                 }
-                crate::claude::protocol::ContentBlock::ToolUse { name, input } => {
+                crate::runtime::protocol::ContentBlock::ToolUse { name, input } => {
                     AgentEvent::ToolUse(name, serde_json::to_string(&input).unwrap_or_default())
                 }
-                crate::claude::protocol::ContentBlock::ToolResult { content, is_error } => {
+                crate::runtime::protocol::ContentBlock::ToolResult { content, is_error } => {
                     AgentEvent::ToolResult(content.unwrap_or_default(), is_error)
                 }
-                crate::claude::protocol::ContentBlock::Image { source } => {
+                crate::runtime::protocol::ContentBlock::Image { source } => {
                     AgentEvent::Text(format!(
                         "[Image: {} {} ({} bytes)]",
                         source.source_type,
@@ -173,7 +163,7 @@ fn claude_to_agent_events(event: OutputEvent) -> Vec<AgentEvent> {
 
 fn claude_control_request_to_agent_event(
     request_id: String,
-    request: crate::claude::protocol::ControlRequestBody,
+    request: crate::runtime::protocol::ControlRequestBody,
 ) -> AgentEvent {
     let tool_name = request
         .tool_name

@@ -92,7 +92,7 @@ impl FileDelivery for FeishuFileTarget {
         let platform = crate::platform::feishu::FeishuPlatform::new(
             config,
             "~",
-            crate::config::model::ClaudeConfig::default(),
+            crate::config::model::AgentProfiles::default(),
             false,
         );
 

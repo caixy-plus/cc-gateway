@@ -2,9 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::claude::controller::ClaudeController;
+use crate::runtime::controller::AgentController;
+use crate::command::agents;
 use crate::command::builtin::BuiltinCommands;
 use crate::config::model::AgentProvider;
+use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
 
 /// Semantic action produced by parsing a user message.
@@ -38,9 +40,13 @@ pub enum CommandAction {
     /// Disable showing thinking content
     HideThinking,
     /// Show recent Claude sessions and allow resuming
-    ShowClaudeHistory { arg: String },
+    ShowAgentHistory { arg: String },
+    /// Set this channel's default agent (`/agents` picker or `/agents claude|cursor`)
+    SelectChannelAgent {
+        provider: Option<AgentProvider>,
+    },
     /// Forward regular text to the active Claude session
-    ForwardToClaude(String),
+    ForwardToAgent(String),
     /// Unknown slash command when no session is active
     UnknownCommand(String),
     /// No operation needed
@@ -49,17 +55,24 @@ pub enum CommandAction {
 
 pub struct CommandRouter {
     builtin: BuiltinCommands,
-    controller: Arc<Mutex<ClaudeController>>,
+    controller: Arc<Mutex<AgentController>>,
     default_dir: String,
+    channel_id: Option<String>,
 }
 
 impl CommandRouter {
-    pub fn new(controller: Arc<Mutex<ClaudeController>>, default_dir: &str) -> Self {
+    pub fn new(controller: Arc<Mutex<AgentController>>, default_dir: &str) -> Self {
         Self {
             builtin: BuiltinCommands::new(controller.clone(), default_dir),
             controller,
             default_dir: default_dir.to_string(),
+            channel_id: None,
         }
+    }
+
+    pub fn with_channel_id(mut self, channel_id: impl Into<String>) -> Self {
+        self.channel_id = Some(channel_id.into());
+        self
     }
 
     #[cfg(test)]
@@ -100,7 +113,7 @@ impl CommandRouter {
                 "/quit" => CommandAction::StopSession,
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
-                _ => CommandAction::ForwardToClaude(trimmed.to_string()),
+                _ => CommandAction::ForwardToAgent(trimmed.to_string()),
             }
         } else {
             // No active session: handle gateway commands locally
@@ -111,7 +124,7 @@ impl CommandRouter {
                 }
                 "/cd" => {
                     if arg.is_empty() {
-                        CommandAction::Reply(t!("builtin.cd_usage").to_string())
+                        CommandAction::ListDir { path: None }
                     } else {
                         let expanded = shellexpand::tilde(arg).to_string();
                         CommandAction::ChangeDir(PathBuf::from(expanded))
@@ -136,18 +149,15 @@ impl CommandRouter {
                         CommandAction::MakeDir(PathBuf::from(expanded))
                     }
                 }
-                "/agent" | "/claude" | "/new-session" => {
+                "/agent" | "/agent_claude" => {
                     let mut args: Vec<String> = arg
                         .split_whitespace()
                         .filter(|s| *s != "--new")
                         .map(|s| s.to_string())
                         .collect();
-                    let provider = if cmd == "/claude" {
-                        Some(AgentProvider::Claude)
-                    } else if cmd == "/agent" {
-                        parse_provider_prefix(&mut args)
-                    } else {
-                        None
+                    let provider = match cmd {
+                        "/agent_claude" => Some(AgentProvider::Claude),
+                        _ => parse_provider_prefix(&mut args),
                     };
                     CommandAction::StartSession {
                         work_dir: None,
@@ -155,14 +165,36 @@ impl CommandRouter {
                         args,
                     }
                 }
+                "/agent_cursor" => CommandAction::StartSession {
+                    work_dir: None,
+                    provider: Some(AgentProvider::Cursor),
+                    args: if arg.is_empty() {
+                        vec![]
+                    } else {
+                        arg.split_whitespace().map(|s| s.to_string()).collect()
+                    },
+                },
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
-                "/agent-history"
-                | "/claude-history"
-                | "/claude_history"
-                | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
+                "/agent-history" | "/agent_history" => CommandAction::ShowAgentHistory {
                     arg: arg.to_string(),
                 },
+                "/agents" | "/agents_claude" | "/agents_cursor" => {
+                    let mut args: Vec<String> = arg
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect();
+                    let provider = match cmd {
+                        "/agents_claude" => Some(AgentProvider::Claude),
+                        "/agents_cursor" => Some(AgentProvider::Cursor),
+                        _ => parse_provider_prefix(&mut args),
+                    };
+                    if provider.is_some() || arg.trim().is_empty() {
+                        CommandAction::SelectChannelAgent { provider }
+                    } else {
+                        CommandAction::UnknownCommand(cmd.to_string())
+                    }
+                }
                 _ => {
                     if trimmed.starts_with('/') {
                         CommandAction::UnknownCommand(cmd.to_string())
@@ -183,8 +215,10 @@ impl CommandRouter {
             CommandAction::Reply(text) => Some(text),
             CommandAction::StopSession => {
                 let ctrl = self.controller.lock().await;
+                let provider =
+                    crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
                 match ctrl.stop_session().await {
-                    Ok(()) => Some(t!("builtin.session_stopped").to_string()),
+                    Ok(()) => Some(crate::command::agents::session_stopped_message(&provider)),
                     Err(e) => Some(t_fmt!("builtin.failed_stop_session", ERR = e)),
                 }
             }
@@ -303,12 +337,48 @@ impl CommandRouter {
 
                 let target = PathBuf::from(&base).join(&path);
                 let target_str = target.to_string_lossy().to_string();
-                if let Err(e) = crate::claude::controller::ensure_under_home(&target_str) {
+                if let Err(e) = crate::runtime::controller::ensure_under_home(&target_str) {
                     return Some(e.to_string());
                 }
                 match std::fs::create_dir_all(&target) {
                     Ok(()) => Some(t_fmt!("builtin.dir_created", PATH = target_str)),
                     Err(e) => Some(t_fmt!("builtin.failed_create_dir", ERR = e)),
+                }
+            }
+            CommandAction::SelectChannelAgent { provider: explicit } => {
+                let channel_id = match self.channel_id.as_deref() {
+                    Some(id) => id.to_string(),
+                    None => return Some(t!("builtin.agents_requires_channel").to_string()),
+                };
+                let profiles = {
+                    let ctrl = self.controller.lock().await;
+                    ctrl.agent_profiles().clone()
+                };
+                let current =
+                    GLOBAL_CHANNEL_SESSIONS.effective_channel_provider(&channel_id, &profiles);
+                let selected = if let Some(p) = explicit {
+                    p
+                } else {
+                    let picked = tokio::task::spawn_blocking(move || {
+                        agents::interactive_select_provider(&current)
+                    })
+                    .await
+                    .unwrap_or(crate::command::builtin::SelectAction::Cancelled);
+                    match picked {
+                        crate::command::builtin::SelectAction::Selected(idx) => {
+                            match agents::provider_at_index(idx) {
+                                Some(p) => p,
+                                None => return Some(t!("builtin.invalid_agent_index").to_string()),
+                            }
+                        }
+                        _ => return Some(t!("builtin.selection_cancelled").to_string()),
+                    }
+                };
+                let name = agents::provider_display_name(&selected);
+                match GLOBAL_CHANNEL_SESSIONS.set_channel_default_provider(&channel_id, selected)
+                {
+                    Ok(()) => Some(t_fmt!("builtin.channel_agent_set", NAME = name)),
+                    Err(e) => Some(t_fmt!("builtin.failed_set_channel_agent", ERR = e)),
                 }
             }
             CommandAction::StartSession {
@@ -317,6 +387,16 @@ impl CommandRouter {
                 args,
             } => {
                 let ctrl = self.controller.lock().await;
+                let profiles = ctrl.agent_profiles().clone();
+                let channel_id = self.channel_id.clone();
+                let resolved_provider = match channel_id.as_ref() {
+                    Some(channel_id) => GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
+                        channel_id,
+                        &profiles,
+                        provider,
+                    ),
+                    None => provider.unwrap_or_else(|| profiles.default.clone()),
+                };
                 let dir = if let Some(p) = work_dir {
                     p.to_string_lossy().to_string()
                 } else {
@@ -327,9 +407,12 @@ impl CommandRouter {
                         wd
                     }
                 };
-                match ctrl.start_session_with_provider(dir.clone(), args, provider).await {
-                    Ok(()) => Some(t_fmt!("builtin.session_started", DIR = dir)),
-                    Err(e) => Some(t_fmt!("builtin.failed_start_claude", ERR = e)),
+                match ctrl
+                    .start_session_with_provider(dir.clone(), args, Some(resolved_provider.clone()))
+                    .await
+                {
+                    Ok(()) => Some(agents::session_started_message(&resolved_provider, &dir)),
+                    Err(e) => Some(agents::failed_start_agent_message(&resolved_provider, e)),
                 }
             }
             CommandAction::ShowThinking => {
@@ -342,13 +425,13 @@ impl CommandRouter {
                 ctrl.set_show_thinking(false);
                 Some(t!("builtin.thinking_disabled").to_string())
             }
-            CommandAction::ShowClaudeHistory { arg } => {
-                Some(self.builtin.claude_history(&arg).await)
+            CommandAction::ShowAgentHistory { arg } => {
+                Some(self.builtin.agent_history(&arg).await)
             }
             CommandAction::UnknownCommand(cmd) => {
-                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agent-history, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))
+                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agents, /agent-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))
             }
-            CommandAction::ForwardToClaude(text) => {
+            CommandAction::ForwardToAgent(text) => {
                 let ctrl = self.controller.lock().await;
                 if !ctrl.is_session_active().await {
                     return Some(crate::i18n::dict::tfmt("forward.no_session", &[("MSG", &text)]));

@@ -3,6 +3,7 @@ pub(crate) mod auth_middleware;
 pub(crate) mod cards;
 pub(crate) mod handle;
 pub(crate) mod interaction;
+pub(crate) mod inbound;
 pub(crate) mod media;
 pub(crate) mod webhook;
 pub(crate) mod ws;
@@ -18,8 +19,8 @@ use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
-use crate::config::model::{AgentSettings, FeishuConfig};
-use crate::session::channel_manager::ActiveClaudeRuntime;
+use crate::config::model::{AgentProfiles, FeishuConfig};
+use crate::session::channel_manager::ActiveAgentRuntime;
 
 // Re-export commonly used items from child modules
 pub(crate) use handle::{
@@ -48,7 +49,7 @@ pub(crate) const REACTION_FAILURE: &str = "CrossMark";
 #[derive(Clone)]
 pub(crate) struct FeishuChannelRuntime {
     pub(crate) channel_session: crate::session::channel_model::ChannelSession,
-    pub(crate) active_claude: Option<ActiveClaudeRuntime>,
+    pub(crate) active_agent: Option<ActiveAgentRuntime>,
     pub(crate) receive_id_type: String,
     pub(crate) receive_id: String,
     pub(crate) poll_lock: Arc<Mutex<()>>,
@@ -68,7 +69,7 @@ impl FeishuChannelRuntime {
     ) -> Self {
         Self {
             channel_session,
-            active_claude: None,
+            active_agent: None,
             receive_id_type,
             receive_id,
             poll_lock: Arc::new(Mutex::new(())),
@@ -76,7 +77,7 @@ impl FeishuChannelRuntime {
     }
 
     pub(crate) fn shutdown_notice_target(&self) -> Option<FeishuShutdownNoticeTarget> {
-        self.active_claude.as_ref()?;
+        self.active_agent.as_ref()?;
         Some(FeishuShutdownNoticeTarget {
             receive_id_type: self.receive_id_type.clone(),
             receive_id: self.receive_id.clone(),
@@ -431,7 +432,7 @@ impl AnomalyTracker {
 pub struct FeishuPlatform {
     pub(crate) config: FeishuConfig,
     pub(crate) default_dir: String,
-    pub(crate) claude_config: AgentSettings,
+    pub(crate) agent_settings: AgentProfiles,
     pub(crate) show_thinking: Arc<AtomicBool>,
     pub(crate) http_client: ClientWithMiddleware,
     pub(crate) dedup_cache: Arc<DedupCache>,

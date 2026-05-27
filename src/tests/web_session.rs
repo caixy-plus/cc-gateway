@@ -32,8 +32,8 @@ async fn cleanup_webui() {
         .collect();
     for id in channels {
         // Remove claude sessions from memory and DB
-        for cs in GLOBAL_CHANNEL_SESSIONS.list_claude_sessions_by_channel(&id) {
-            GLOBAL_CHANNEL_SESSIONS.remove_claude_session(&cs.id);
+        for cs in GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&id) {
+            GLOBAL_CHANNEL_SESSIONS.remove_agent_session(&cs.id);
         }
         crate::db::delete_channel_session(&id);
     }

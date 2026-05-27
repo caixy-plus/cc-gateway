@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::io::{self, Write};
 
 use crate::config::loader::ConfigLoader;
-use crate::config::model::{ClaudeConfig, FeishuConfig, GatewayConfig, LogConfig};
+use crate::config::model::{AgentProfiles, AgentProviderConfig, FeishuConfig, GatewayConfig, LogConfig};
 use crate::{t, t_fmt};
 
 pub fn run_interactive_config() -> Result<()> {
@@ -23,7 +23,7 @@ pub fn run_interactive_config() -> Result<()> {
     loop {
         println!("\n{}\n", t!("wizard.title"));
         println!("  1. {}", t!("wizard.log_section"));
-        println!("  2. {}", t!("wizard.claude_section"));
+        println!("  2. {}", t!("wizard.agent_section"));
         println!("  3. {}", t!("wizard.feishu_section"));
         println!("  4. {}", t!("wizard.default_dir_section"));
         println!("  5. {}", t!("wizard.save_exit"));
@@ -36,7 +36,7 @@ pub fn run_interactive_config() -> Result<()> {
 
         match choice.trim() {
             "1" => configure_log(&mut config.log)?,
-            "2" => configure_claude(&mut config.claude)?,
+            "2" => configure_agent(&mut config.agent)?,
             "3" => configure_feishu(&mut config.feishu)?,
             "4" => configure_default_dir(&mut config.default_dir)?,
             "5" => {
@@ -89,10 +89,25 @@ fn configure_log(log: &mut LogConfig) -> Result<()> {
     Ok(())
 }
 
-fn configure_claude(claude: &mut ClaudeConfig) -> Result<()> {
-    println!("\n{}", t!("wizard.claude_config"));
-    claude.cli_path = prompt("cli_path", &claude.cli_path)?;
-    claude.default_args = prompt("default_args", &claude.default_args)?;
+fn configure_agent_profile(label: &str, profile: &mut AgentProviderConfig) -> Result<()> {
+    println!("\n{}", t_fmt!("wizard.agent_profile", NAME = label));
+    let cli_path = profile
+        .cli_path
+        .clone()
+        .unwrap_or_else(|| "claude".to_string());
+    let default_args = profile
+        .default_args
+        .clone()
+        .unwrap_or_else(|| "--dangerously-skip-permissions".to_string());
+    profile.cli_path = Some(prompt("cli_path", &cli_path)?);
+    profile.default_args = Some(prompt("default_args", &default_args)?);
+    Ok(())
+}
+
+fn configure_agent(agent: &mut AgentProfiles) -> Result<()> {
+    println!("\n{}", t!("wizard.agent_config"));
+    configure_agent_profile("claude", &mut agent.claude)?;
+    configure_agent_profile("cursor", &mut agent.cursor)?;
     Ok(())
 }
 
@@ -132,11 +147,8 @@ fn prompt_sensitive(label: &str, current: &str) -> Result<String> {
 
 fn save_config(config: &GatewayConfig) -> Result<()> {
     let path = ConfigLoader::config_path()?;
-    ConfigLoader::ensure_config_dir()?;
-    let content = serde_json::to_string_pretty(config)?;
-    std::fs::write(&path, content)
-        .with_context(|| format!("Failed to write config to {}", path.display()))?;
-    Ok(())
+    ConfigLoader::save(config)
+        .with_context(|| format!("Failed to write config to {}", path.display()))
 }
 
 pub fn run_init_config() -> Result<()> {
@@ -161,7 +173,6 @@ pub fn run_init_config() -> Result<()> {
         }
     };
 
-    // Feishu configuration
     println!("{}", t!("wizard.feishu_section_title"));
     println!("{}", t!("wizard.press_enter_keep"));
     println!("{}\n", t!("wizard.enter_skip"));
@@ -178,7 +189,6 @@ pub fn run_init_config() -> Result<()> {
         config.feishu.webhook_bind = prompt("webhook_bind", &config.feishu.webhook_bind)?;
     }
 
-    // Optional: default_dir
     println!("\n{}", t!("wizard.other_settings"));
     let default_dir = prompt("default_dir", &config.default_dir)?;
     if !default_dir.is_empty() {

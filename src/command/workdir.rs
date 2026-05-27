@@ -56,5 +56,5 @@ pub(crate) fn resolve_work_dir_target(
         );
     }
 
-    crate::claude::controller::ensure_under_home(&canonical.to_string_lossy())
+    crate::runtime::controller::ensure_under_home(&canonical.to_string_lossy())
 }

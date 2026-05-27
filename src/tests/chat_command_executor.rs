@@ -20,7 +20,7 @@ async fn chat_command_executor_starts_session_and_updates_channel_work_dir() {
         .get_or_create_platform_channel("telegram", "chat-1", root.to_str().unwrap())
         .await;
     let executor =
-        ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_claude_config(), false);
+        ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_agent_profiles(), false);
     let mut context = ChatCommandContext::new(
         channel.id.clone(),
         "Telegram chat-1".to_string(),
@@ -41,13 +41,11 @@ async fn chat_command_executor_starts_session_and_updates_channel_work_dir() {
         .unwrap();
 
     match outcome {
-        ChatCommandOutcome::Started { work_dir, .. } => {
-            assert_eq!(work_dir, child.to_string_lossy());
-        }
+        ChatCommandOutcome::Started { .. } => {}
         _ => panic!("expected started outcome"),
     }
     assert_eq!(context.channel_work_dir, child.to_string_lossy());
-    assert!(context.active_claude.is_some());
+    assert!(context.active_agent.is_some());
     assert_eq!(
         GLOBAL_CHANNEL_SESSIONS
             .get_channel(&channel.id)
@@ -57,7 +55,7 @@ async fn chat_command_executor_starts_session_and_updates_channel_work_dir() {
     );
 
     GLOBAL_CHANNEL_SESSIONS
-        .stop_active_runtime_for_channel(&channel.id, context.active_claude.as_ref())
+        .stop_active_runtime_for_channel(&channel.id, context.active_agent.as_ref())
         .await
         .unwrap();
 }
@@ -73,7 +71,7 @@ async fn chat_command_executor_changes_work_dir_without_platform_specific_code()
         .get_or_create_platform_channel("feishu", "oc-chat", root.to_str().unwrap())
         .await;
     let executor =
-        ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_claude_config(), false);
+        ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_agent_profiles(), false);
     let mut context = ChatCommandContext::new(
         channel.id.clone(),
         "Feishu oc-chat".to_string(),

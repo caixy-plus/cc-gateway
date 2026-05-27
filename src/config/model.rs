@@ -4,24 +4,16 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct GatewayConfig {
     pub log: LogConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent: Option<AgentSettings>,
-    pub claude: ClaudeConfig,
+    pub agent: AgentProfiles,
     pub feishu: FeishuConfig,
     pub telegram: TelegramConfig,
     /// Default working directory for gateway sessions.
-    /// Used by /ll, /cd_default, and as the Feishu directory boundary.
     pub default_dir: String,
-    /// Whether to display Claude's Thinking blocks in output.
+    /// Whether to display agent Thinking blocks in output.
     pub show_thinking: bool,
-    /// Number of days to retain downloaded media files (images/files/audio).
-    /// Files older than this will be cleaned up every 8 hours. Default: 30.
     pub media_retention_days: u64,
-    /// Max Claude sessions kept per channel by the background cleaner. Default: 30.
-    /// Values below 10 are treated as 10; above 100 as 100 (no error).
+    /// Max agent sessions kept per channel by the background cleaner.
     pub session_retention_per_channel: u64,
-    /// Local port bound by the daemon to enforce a single instance.
-    /// If the port is already in use, the daemon refuses to start.
     pub port: u16,
 }
 
@@ -32,13 +24,6 @@ pub struct LogConfig {
     pub file: String,
     pub max_lines: usize,
     pub max_size_mb: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ClaudeConfig {
-    pub cli_path: String,
-    pub default_args: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,17 +39,8 @@ pub struct AgentConfig {
     pub provider: AgentProvider,
     pub cli_path: String,
     pub default_args: String,
-    /// Cursor ACP mode: "agent", "plan", or "ask".
     pub mode: String,
-    /// Permission handling for providers that support it: "prompt", "allow", or "deny".
     pub permission: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum AgentSettings {
-    Profiles(AgentProfiles),
-    Legacy(AgentConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,9 +72,7 @@ pub struct FeishuConfig {
     pub app_secret: String,
     pub allow_from: String,
     pub encrypt_key: String,
-    /// "websocket" or "webhook"
     pub mode: String,
-    /// Bind address for webhook server (e.g. "0.0.0.0:3000")
     pub webhook_bind: String,
 }
 
@@ -108,7 +82,6 @@ pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: String,
     pub allow_from: String,
-    /// If set, use webhook mode instead of long-polling.
     pub webhook_url: String,
 }
 
@@ -116,8 +89,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             log: LogConfig::default(),
-            agent: None,
-            claude: ClaudeConfig::default(),
+            agent: AgentProfiles::default(),
             feishu: FeishuConfig::default(),
             telegram: TelegramConfig::default(),
             default_dir: "~".to_string(),
@@ -129,13 +101,9 @@ impl Default for GatewayConfig {
     }
 }
 
-/// Minimum `session_retention_per_channel` enforced by the session cleaner.
 pub const MIN_SESSION_RETENTION_PER_CHANNEL: u64 = 10;
-
-/// Maximum `session_retention_per_channel` enforced by the session cleaner.
 pub const MAX_SESSION_RETENTION_PER_CHANNEL: u64 = 100;
 
-/// Resolve configured per-channel session cap (silently clamps to 10..=100).
 pub fn effective_session_retention_per_channel(configured: u64) -> usize {
     configured
         .clamp(
@@ -155,15 +123,6 @@ impl Default for LogConfig {
     }
 }
 
-impl Default for ClaudeConfig {
-    fn default() -> Self {
-        Self {
-            cli_path: "claude".to_string(),
-            default_args: "--dangerously-skip-permissions".to_string(),
-        }
-    }
-}
-
 impl Default for AgentProvider {
     fn default() -> Self {
         AgentProvider::Claude
@@ -179,6 +138,15 @@ impl std::fmt::Display for AgentProvider {
     }
 }
 
+impl AgentProvider {
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cursor" => AgentProvider::Cursor,
+            _ => AgentProvider::Claude,
+        }
+    }
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -188,30 +156,6 @@ impl Default for AgentConfig {
             mode: "agent".to_string(),
             permission: "prompt".to_string(),
         }
-    }
-}
-
-impl From<ClaudeConfig> for AgentConfig {
-    fn from(value: ClaudeConfig) -> Self {
-        Self {
-            provider: AgentProvider::Claude,
-            cli_path: value.cli_path,
-            default_args: value.default_args,
-            mode: "agent".to_string(),
-            permission: "prompt".to_string(),
-        }
-    }
-}
-
-impl From<ClaudeConfig> for AgentSettings {
-    fn from(value: ClaudeConfig) -> Self {
-        AgentSettings::Legacy(AgentConfig::from(value))
-    }
-}
-
-impl From<AgentConfig> for AgentSettings {
-    fn from(value: AgentConfig) -> Self {
-        AgentSettings::Legacy(value)
     }
 }
 
@@ -239,6 +183,7 @@ impl AgentConfig {
         }
     }
 
+    #[cfg(test)]
     pub fn with_provider_override(&self, provider: Option<AgentProvider>) -> Self {
         let Some(provider) = provider else {
             return self.clone().normalized();
@@ -271,49 +216,42 @@ impl AgentConfig {
     }
 }
 
-impl AgentSettings {
+impl AgentProfiles {
     pub fn effective_config(&self) -> AgentConfig {
         self.config_for_provider(None)
     }
 
     pub fn config_for_provider(&self, provider: Option<AgentProvider>) -> AgentConfig {
-        match self {
-            AgentSettings::Legacy(config) => config.with_provider_override(provider),
-            AgentSettings::Profiles(profiles) => {
-                let selected = provider.unwrap_or_else(|| profiles.default.clone());
-                let mut config = AgentConfig::default_for_provider(selected.clone());
-                let profile = match selected {
-                    AgentProvider::Claude => &profiles.claude,
-                    AgentProvider::Cursor => &profiles.cursor,
-                };
-                if let Some(ref cli_path) = profile.cli_path {
-                    config.cli_path = cli_path.clone();
-                }
-                if let Some(ref default_args) = profile.default_args {
-                    config.default_args = default_args.clone();
-                }
-                if let Some(ref mode) = profile.mode {
-                    config.mode = mode.clone();
-                }
-                if let Some(ref permission) = profile.permission {
-                    config.permission = permission.clone();
-                }
-                config.normalized()
-            }
+        let selected = provider.unwrap_or_else(|| self.default.clone());
+        let mut config = AgentConfig::default_for_provider(selected.clone());
+        let profile = match selected {
+            AgentProvider::Claude => &self.claude,
+            AgentProvider::Cursor => &self.cursor,
+        };
+        if let Some(ref cli_path) = profile.cli_path {
+            config.cli_path = cli_path.clone();
         }
+        if let Some(ref default_args) = profile.default_args {
+            config.default_args = default_args.clone();
+        }
+        if let Some(ref mode) = profile.mode {
+            config.mode = mode.clone();
+        }
+        if let Some(ref permission) = profile.permission {
+            config.permission = permission.clone();
+        }
+        config.normalized()
     }
 }
 
 impl GatewayConfig {
-    #[allow(dead_code)]
-    pub fn effective_agent_config(&self) -> AgentConfig {
-        self.effective_agent_settings().effective_config()
+    pub fn effective_agent_settings(&self) -> AgentProfiles {
+        self.agent.clone()
     }
 
-    pub fn effective_agent_settings(&self) -> AgentSettings {
-        self.agent
-            .clone()
-            .unwrap_or_else(|| AgentSettings::from(self.claude.clone()))
+    #[cfg(test)]
+    pub fn effective_agent_config(&self) -> AgentConfig {
+        self.agent.effective_config()
     }
 }
 

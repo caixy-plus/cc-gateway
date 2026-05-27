@@ -46,7 +46,7 @@
 - Generalized persisted session metadata:
   - `provider`
   - `provider_session_id`
-  - legacy `claude_session_id` is still kept for compatibility
+  - legacy `provider_session_id` is still kept for compatibility
 
 ## Verification Already Run
 
@@ -222,11 +222,11 @@ Verify:
 
 Many public types still use Claude names for compatibility:
 
-- `ClaudeController`
-- `ClaudeSession`
-- `ClaudeEventPoller`
-- `claude_session_id`
-- `ActiveClaudeRuntime`
+- `AgentController`
+- `AgentSession`
+- `AgentEventPoller`
+- `provider_session_id`
+- `ActiveAgentRuntime`
 
 This is acceptable for the current branch, but a follow-up refactor could rename these to Agent-prefixed names once behavior is stable.
 

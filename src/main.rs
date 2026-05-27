@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod agent;
-mod claude;
+mod runtime;
 mod cli;
 mod command;
 mod config;
@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
             update::run(check, force, yes, config).await?;
         }
         Some(Commands::McpServer) => {
-            claude::mcp_server::run_mcp_server().await?;
+            runtime::mcp_server::run_mcp_server().await?;
         }
     }
 

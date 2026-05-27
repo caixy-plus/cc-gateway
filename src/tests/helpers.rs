@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::config::model::{ClaudeConfig, FeishuConfig};
+use crate::config::model::{AgentProfiles, FeishuConfig};
 use crate::platform::feishu::FeishuPlatform;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
@@ -40,13 +40,15 @@ impl TestEnv {
         self.root.path()
     }
 
-    pub(crate) fn fake_claude_config(&self) -> ClaudeConfig {
-        ClaudeConfig {
-            cli_path: create_fake_claude(self.home())
+    pub(crate) fn fake_agent_profiles(&self) -> AgentProfiles {
+        let mut profiles = AgentProfiles::default();
+        profiles.claude.cli_path = Some(
+            create_fake_agent_cli(self.home())
                 .to_string_lossy()
                 .to_string(),
-            default_args: String::new(),
-        }
+        );
+        profiles.claude.default_args = Some(String::new());
+        profiles
     }
 }
 
@@ -67,7 +69,7 @@ impl Drop for TestEnv {
 }
 
 #[cfg(not(windows))]
-pub(crate) fn create_fake_claude(home: &Path) -> PathBuf {
+pub(crate) fn create_fake_agent_cli(home: &Path) -> PathBuf {
     let script = home.join("fake-claude.sh");
     std::fs::write(
         &script,
@@ -97,7 +99,7 @@ done
 }
 
 #[cfg(windows)]
-pub(crate) fn create_fake_claude(home: &Path) -> PathBuf {
+pub(crate) fn create_fake_agent_cli(home: &Path) -> PathBuf {
     let ps1 = home.join("fake-claude.ps1");
     std::fs::write(
         &ps1,
@@ -143,7 +145,7 @@ pub(crate) fn feishu_platform(default_dir: &str) -> FeishuPlatform {
             webhook_bind: "127.0.0.1:0".to_string(),
         },
         default_dir,
-        ClaudeConfig::default(),
+        AgentProfiles::default(),
         false,
     )
 }

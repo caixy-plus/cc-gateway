@@ -1,3 +1,5 @@
+mod agent_controller;
+mod channel_agent;
 mod chat_command_executor;
 mod command_router;
 mod config_model;
@@ -9,6 +11,7 @@ mod feishu_utils;
 mod feishu_webhook;
 pub(crate) mod helpers;
 mod i18n;
+mod inbound_media;
 mod mcp_file_delivery;
 mod proto;
 mod shutdown;

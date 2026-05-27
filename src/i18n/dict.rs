@@ -84,9 +84,17 @@ pub fn t(key: &str) -> &str {
             Language::En => "log        - Logging settings",
             Language::ZhCN => "log        - 日志设置",
         },
-        "wizard.claude_section" => match lang {
-            Language::En => "claude     - Claude Code settings",
-            Language::ZhCN => "claude     - Claude Code 设置",
+        "wizard.agent_section" => match lang {
+            Language::En => "agent      - Agent provider settings",
+            Language::ZhCN => "agent      - 智能体提供商设置",
+        },
+        "wizard.agent_config" => match lang {
+            Language::En => "=== Agent Settings ===",
+            Language::ZhCN => "=== 智能体设置 ===",
+        },
+        "wizard.agent_profile" => match lang {
+            Language::En => "Profile: {NAME}",
+            Language::ZhCN => "配置档: {NAME}",
         },
         "wizard.feishu_section" => match lang {
             Language::En => "feishu     - Feishu/Lark bot settings",
@@ -116,7 +124,7 @@ pub fn t(key: &str) -> &str {
             Language::En => "--- Log Configuration ---",
             Language::ZhCN => "--- 日志配置 ---",
         },
-        "wizard.claude_config" => match lang {
+        "wizard.agent_settings" => match lang {
             Language::En => "--- Claude Configuration ---",
             Language::ZhCN => "--- Claude 配置 ---",
         },
@@ -251,8 +259,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "再见!",
         },
         "cli.session_stopped" => match lang {
-            Language::En => "Claude session stopped. Back to cc-gateway.",
-            Language::ZhCN => "Claude 会话已停止。返回 cc-gateway。",
+            Language::En => "Agent session stopped. Back to cc-gateway.",
+            Language::ZhCN => "智能体会话已停止。返回 cc-gateway。",
         },
         "cli.help_desc" => match lang {
             Language::En => "Show this help",
@@ -281,8 +289,8 @@ pub fn t(key: &str) -> &str {
 
         // command/builtin.rs
         "builtin.help" => match lang {
-            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /claude [args...]    Alias for /agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
-            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /claude [args...]    /agent 的别名\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
+            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
         },
         "builtin.help_title" => match lang {
             Language::En => "cc-gateway commands:",
@@ -328,17 +336,69 @@ pub fn t(key: &str) -> &str {
             Language::En => "  /hide-thinking         Hide Claude Thinking content (show placeholder only)",
             Language::ZhCN => "  /hide-thinking         隐藏 Claude Thinking 内容（仅显示占位符）",
         },
-        "builtin.help_claude_history" => match lang {
+        "builtin.help_agent_history" => match lang {
             Language::En => "  /agent-history       Show recent agent sessions and resume by index",
             Language::ZhCN => "  /agent-history       显示最近的智能体会话并按索引恢复",
         },
+        "builtin.help_agents" => match lang {
+            Language::En => "  /agents              Set this channel's default agent (interactive picker)",
+            Language::ZhCN => "  /agents              设置本频道默认智能体（交互选择）",
+        },
+        "builtin.select_agent_prompt" => match lang {
+            Language::En => "Select default agent for this channel (↑↓ Enter, Esc cancel):",
+            Language::ZhCN => "选择本频道默认智能体（↑↓ 回车确认，Esc 取消）：",
+        },
+        "builtin.agent_option" => match lang {
+            Language::En => "{NAME}",
+            Language::ZhCN => "{NAME}",
+        },
+        "builtin.agent_option_default" => match lang {
+            Language::En => "{NAME} *",
+            Language::ZhCN => "{NAME} *",
+        },
+        "builtin.agent_fallback_name" => match lang {
+            Language::En => "Agent",
+            Language::ZhCN => "智能体",
+        },
+        "builtin.channel_agent_set" => match lang {
+            Language::En => "Default agent for this channel set to {NAME}.",
+            Language::ZhCN => "本频道默认智能体已设为 {NAME}。",
+        },
+        "builtin.failed_set_channel_agent" => match lang {
+            Language::En => "Failed to set channel default agent: {ERR}",
+            Language::ZhCN => "设置频道默认智能体失败: {ERR}",
+        },
+        "builtin.agents_requires_channel" => match lang {
+            Language::En => "/agents must be used from a channel context (TUI or chat).",
+            Language::ZhCN => "/agents 需要在频道上下文中使用（TUI 或聊天）。",
+        },
+        "builtin.invalid_agent_index" => match lang {
+            Language::En => "Invalid agent selection.",
+            Language::ZhCN => "无效的智能体选项。",
+        },
+        "feishu.choose_agent" => match lang {
+            Language::En => "Choose the default agent for this chat:",
+            Language::ZhCN => "选择本聊天的默认智能体：",
+        },
+        "feishu.select_agent_title" => match lang {
+            Language::En => "Default Agent",
+            Language::ZhCN => "默认智能体",
+        },
+        "feishu.agent_option_default" => match lang {
+            Language::En => "{NAME} (current)",
+            Language::ZhCN => "{NAME}（当前）",
+        },
+        "telegram.choose_agent" => match lang {
+            Language::En => "Choose the default agent for this chat:",
+            Language::ZhCN => "选择本聊天的默认智能体：",
+        },
         "builtin.help_any_text" => match lang {
-            Language::En => "Any other text is sent directly to Claude Code.",
-            Language::ZhCN => "任何其他文本将直接发送给 Claude Code。",
+            Language::En => "Any other text is sent directly to the active agent.",
+            Language::ZhCN => "任何其他文本将直接发送给当前智能体。",
         },
         "builtin.session_stopped" => match lang {
-            Language::En => "Claude session stopped.",
-            Language::ZhCN => "Claude 会话已停止。",
+            Language::En => "{NAME} session stopped.",
+            Language::ZhCN => "{NAME} 会话已停止。",
         },
         "builtin.shutdown_notice" => match lang {
             Language::En => "cc-gateway is shutting down, session closed.",
@@ -361,16 +421,16 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "工作目录已更改为: {PATH}",
         },
         "builtin.session_started" => match lang {
-            Language::En => "Claude session started in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat with Claude.\x1b[0m",
-            Language::ZhCN => "Claude 会话已启动于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 与 Claude 对话。\x1b[0m",
+            Language::En => "{NAME} session started in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat.\x1b[0m",
+            Language::ZhCN => "{NAME} 会话已启动于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 开始对话。\x1b[0m",
         },
         "builtin.session_resumed" => match lang {
-            Language::En => "Claude session resumed in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat with Claude.\x1b[0m",
-            Language::ZhCN => "Claude 会话已恢复于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 与 Claude 对话。\x1b[0m",
+            Language::En => "{NAME} session resumed in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat.\x1b[0m",
+            Language::ZhCN => "{NAME} 会话已恢复于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 开始对话。\x1b[0m",
         },
-        "builtin.failed_start_claude" => match lang {
-            Language::En => "Failed to start Claude: {ERR}",
-            Language::ZhCN => "启动 Claude 失败: {ERR}",
+        "builtin.failed_start_agent" => match lang {
+            Language::En => "Failed to start {NAME}: {ERR}",
+            Language::ZhCN => "启动 {NAME} 失败: {ERR}",
         },
         "builtin.current_dir" => match lang {
             Language::En => "Current directory: {DIR}",
@@ -452,7 +512,7 @@ pub fn t(key: &str) -> &str {
             Language::En => "Use /agent to start a new session.",
             Language::ZhCN => "使用 /agent 开始新会话。",
         },
-        "builtin.recent_claude_sessions" => match lang {
+        "builtin.recent_agent_sessions" => match lang {
             Language::En => "Recent agent sessions:",
             Language::ZhCN => "最近的智能体会话:",
         },
@@ -562,8 +622,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agent-history, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agent-history, /claude, /claude-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
+            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
         },
 
         "feishu.file_from_user" => match lang {
@@ -606,10 +666,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "Cannot delete an active session. Use /quit to stop it first.",
             Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
         },
-        "feishu.session_resumed" => match lang {
-            Language::En => "Claude session resumed in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
-            Language::ZhCN => "Claude 会话已恢复于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
-        },
         "feishu.status_active" => match lang {
             Language::En => "Active",
             Language::ZhCN => "活跃",
@@ -646,31 +702,22 @@ pub fn t(key: &str) -> &str {
             Language::En => "Permission request: {NAME} ({ID})",
             Language::ZhCN => "权限请求: {NAME} ({ID})",
         },
-        "feishu.session_started" => match lang {
-            Language::En => "Claude session started in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
-            Language::ZhCN => "Claude 会话已启动于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
-        },
-
         // platform/telegram
+        "telegram.error_generic" => match lang {
+            Language::En => "Error: {ERR}",
+            Language::ZhCN => "错误: {ERR}",
+        },
         "telegram.private_chat_only" => match lang {
             Language::En => "Please use in private chat.",
             Language::ZhCN => "请在私聊中使用。",
         },
         "telegram.history_unavailable" => match lang {
-            Language::En => "Claude history is not available in Telegram.",
-            Language::ZhCN => "Telegram 中不可用 Claude 历史记录。",
+            Language::En => "Agent history is not available in Telegram.",
+            Language::ZhCN => "Telegram 中不可用智能体历史记录。",
         },
         "telegram.shutdown_notice" => match lang {
             Language::En => "Bot is shutting down, sessions exited.",
             Language::ZhCN => "机器人正在关闭，会话已退出。",
-        },
-        "telegram.session_started" => match lang {
-            Language::En => "Claude session started in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
-            Language::ZhCN => "Claude 会话已启动于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
-        },
-        "telegram.session_resumed" => match lang {
-            Language::En => "Claude session resumed in: {DIR}\n\n💡 Type anything and press Enter to chat with Claude.",
-            Language::ZhCN => "Claude 会话已恢复于: {DIR}\n\n💡 输入任意内容并按 Enter 与 Claude 对话。",
         },
         "telegram.permission_request" => match lang {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
@@ -689,8 +736,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "列出文件夹",
         },
         "telegram.command_cd" => match lang {
-            Language::En => "Change directory",
-            Language::ZhCN => "切换目录",
+            Language::En => "Pick directory (folder list)",
+            Language::ZhCN => "选择目录（文件夹列表）",
         },
         "telegram.command_cd_up" => match lang {
             Language::En => "Go to parent directory (/cd ..)",
@@ -704,13 +751,33 @@ pub fn t(key: &str) -> &str {
             Language::En => "Create directory",
             Language::ZhCN => "创建目录",
         },
-        "telegram.command_claude" => match lang {
-            Language::En => "Start Claude session",
-            Language::ZhCN => "启动 Claude 会话",
+        "telegram.command_agent" => match lang {
+            Language::En => "Start agent session",
+            Language::ZhCN => "启动智能体会话",
         },
-        "telegram.command_claude_history" => match lang {
-            Language::En => "Show Claude history",
-            Language::ZhCN => "查看 Claude 历史",
+        "telegram.command_agents" => match lang {
+            Language::En => "Set default agent for this chat",
+            Language::ZhCN => "设置本聊天默认智能体",
+        },
+        "telegram.command_agent_claude" => match lang {
+            Language::En => "Start Claude Code session",
+            Language::ZhCN => "启动 Claude Code 会话",
+        },
+        "telegram.command_agent_cursor" => match lang {
+            Language::En => "Start Cursor agent session",
+            Language::ZhCN => "启动 Cursor 智能体会话",
+        },
+        "telegram.command_agents_claude" => match lang {
+            Language::En => "Set default agent to Claude",
+            Language::ZhCN => "默认智能体设为 Claude",
+        },
+        "telegram.command_agents_cursor" => match lang {
+            Language::En => "Set default agent to Cursor",
+            Language::ZhCN => "默认智能体设为 Cursor",
+        },
+        "telegram.command_agent_history" => match lang {
+            Language::En => "Show agent history",
+            Language::ZhCN => "查看智能体历史",
         },
         "telegram.command_show_thinking" => match lang {
             Language::En => "Show thinking",

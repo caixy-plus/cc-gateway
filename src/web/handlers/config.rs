@@ -1,7 +1,5 @@
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde_json::json;
-use std::fs;
-
 use crate::config::loader::ConfigLoader;
 use crate::web::handlers::session::AppState;
 
@@ -15,7 +13,6 @@ pub(crate) fn mask_secret(s: &str) -> String {
 
 pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let mut config = crate::config::loader::ConfigLoader::load().unwrap_or_default();
-    // Mask secrets before returning to client
     config.feishu.app_secret = mask_secret(&config.feishu.app_secret);
     config.telegram.bot_token = mask_secret(&config.telegram.bot_token);
     config.feishu.app_id = mask_secret(&config.feishu.app_id);
@@ -24,8 +21,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
         "effective": {
             "show_thinking": state.show_thinking,
             "default_dir": state.default_dir,
-            "agent_config": state.claude_config,
-            "claude_config": state.claude_config,
+            "agent_settings": state.agent_settings,
         }
     }))
 }
@@ -39,7 +35,6 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     };
 
-    // Merge with existing config to preserve fields not sent by client
     let existing = match ConfigLoader::load_from(&path) {
         Ok(c) => c,
         Err(_) => crate::config::model::GatewayConfig::default(),
@@ -65,14 +60,9 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
     if let Some(v) = body.get("port").and_then(|v| v.as_u64()) {
         config.port = v as u16;
     }
-    if let Some(v) = body.get("claude") {
-        if let Ok(c) = serde_json::from_value(v.clone()) {
-            config.claude = c;
-        }
-    }
     if let Some(v) = body.get("agent") {
         if let Ok(c) = serde_json::from_value(v.clone()) {
-            config.agent = Some(c);
+            config.agent = c;
         }
     }
     if let Some(v) = body.get("feishu") {
@@ -86,17 +76,13 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     }
 
-    match serde_json::to_string_pretty(&config) {
-        Ok(content) => {
-            if let Err(e) = fs::write(&path, content) {
-                let body = json!({ "error": format!("Failed to write config: {}", e) });
-                return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
-            }
+    match ConfigLoader::save(&config) {
+        Ok(()) => {
             let body = json!({ "status": "saved" });
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json!({ "error": format!("Failed to serialize config: {}", e) });
+            let body = json!({ "error": format!("Failed to save config: {}", e) });
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
