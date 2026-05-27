@@ -1,10 +1,20 @@
 use anyhow::Result;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use tracing::{error, info, warn};
+
+use crate::config::model::effective_session_retention_per_channel;
+use crate::session::channel_model::{ChannelSession, ClaudeSession, SessionSource};
+use chrono::{DateTime, Utc};
+
+fn clamp_session_retention_per_channel(max_per_channel: usize) -> usize {
+    effective_session_retention_per_channel(max_per_channel as u64)
+}
+
+const CANONICAL_TUI_CHANNEL_ID: &str = "tui";
 
 /// Trim log file to retain at most `max_lines` lines.
 /// Returns `true` if trimming was performed.
@@ -183,96 +193,196 @@ pub fn is_daemon_running() -> bool {
     daemon > 0
 }
 
-/// Clean up TUI channel_sessions that are no longer in use.
-/// When the TUI process is gone, remove the channel_session and its bound claude_sessions.
-pub fn clean_tui_sessions() -> usize {
-    let channels = crate::db::load_all_channel_sessions();
-    let tui_active = is_tui_running();
-    let mut removed = 0usize;
-
-    for channel in &channels {
-        if channel.platform != "tui" {
-            continue;
-        }
-
-        if tui_active {
-            continue;
-        }
-
-        // TUI is not running — clean up this channel's sessions
-        let claude_sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
-
-        // Delete history files and claude_sessions first (FK constraint)
-        for cs in &claude_sessions {
-            let file_id = cs.claude_session_id.as_ref().unwrap_or(&cs.id);
-            if let Some(home) = dirs::home_dir() {
-                let history_file = home
-                    .join(".cc-gateway")
-                    .join("history")
-                    .join(format!("{}.jsonl", file_id));
-                let _ = std::fs::remove_file(&history_file);
-            }
-            crate::db::delete_claude_session(&cs.id);
-            removed += 1;
-        }
-
-        // Now safe to delete the channel_session
-        crate::db::delete_channel_session(&channel.id);
-    }
-
-    removed
+/// Last activity time for retention: prefer session `updated_at`, then `created_at`.
+fn session_last_updated_at(session: &ClaudeSession) -> DateTime<Utc> {
+    session
+        .updated_at
+        .unwrap_or(session.created_at)
 }
 
-/// Keep only the most recent 30 claude_sessions per non-TUI channel.
-/// Returns the number of sessions deleted.
-pub fn clean_excess_sessions() -> usize {
-    const MAX_PER_CHANNEL: usize = 30;
+fn remove_claude_session_record(session: &ClaudeSession) {
+    let file_id = session
+        .claude_session_id
+        .as_ref()
+        .unwrap_or(&session.id);
+    if let Some(home) = dirs::home_dir() {
+        let history_file = home
+            .join(".cc-gateway")
+            .join("history")
+            .join(format!("{}.jsonl", file_id));
+        let _ = std::fs::remove_file(&history_file);
+    }
+    crate::db::delete_claude_session(&session.id);
+}
+
+/// Pick up to `max` sessions per channel: pin the latest-updated per work_dir, then fill by
+/// `updated_at` (newest first). When work_dir count exceeds `max`, only the newest `max` pinned
+/// sessions survive.
+pub(crate) fn select_sessions_to_keep(
+    sessions: &[ClaudeSession],
+    max: usize,
+) -> HashSet<String> {
+    if sessions.len() <= max {
+        return sessions.iter().map(|s| s.id.clone()).collect();
+    }
+
+    let mut by_time: Vec<&ClaudeSession> = sessions.iter().collect();
+    by_time.sort_by(|a, b| {
+        session_last_updated_at(b).cmp(&session_last_updated_at(a))
+    });
+
+    let mut pinned_by_work_dir: HashMap<&str, &ClaudeSession> = HashMap::new();
+    for session in &by_time {
+        pinned_by_work_dir
+            .entry(session.work_dir.as_str())
+            .or_insert(session);
+    }
+
+    let mut keep: Vec<String> = pinned_by_work_dir
+        .values()
+        .map(|session| session.id.clone())
+        .collect();
+
+    if keep.len() > max {
+        let mut pinned: Vec<&ClaudeSession> = pinned_by_work_dir.values().copied().collect();
+        pinned.sort_by(|a, b| {
+            session_last_updated_at(b).cmp(&session_last_updated_at(a))
+        });
+        keep = pinned
+            .into_iter()
+            .take(max)
+            .map(|session| session.id.clone())
+            .collect();
+    }
+
+    let mut keep_set: HashSet<String> = keep.into_iter().collect();
+    for session in by_time {
+        if keep_set.len() >= max {
+            break;
+        }
+        keep_set.insert(session.id.clone());
+    }
+
+    keep_set
+}
+
+fn ensure_canonical_tui_channel(channels: &[ChannelSession]) -> String {
+    if let Some(channel) = channels
+        .iter()
+        .filter(|c| c.platform == "tui" && c.channel_id == CANONICAL_TUI_CHANNEL_ID)
+        .min_by_key(|c| c.created_at)
+    {
+        return channel.id.clone();
+    }
+
+    let channel = ChannelSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "tui tui".to_string(),
+        source: SessionSource::TUI,
+        platform: "tui".to_string(),
+        channel_id: CANONICAL_TUI_CHANNEL_ID.to_string(),
+        work_dir: shellexpand::tilde("~").to_string(),
+        created_at: Utc::now(),
+    };
+    let id = channel.id.clone();
+    crate::db::insert_channel_session(&channel);
+    id
+}
+
+/// Merge orphan TUI channels into the canonical `tui` channel without deleting Claude sessions.
+pub fn consolidate_stale_tui_channels_when(tui_running: bool) -> usize {
+    if tui_running {
+        return 0;
+    }
+
     let channels = crate::db::load_all_channel_sessions();
-    let mut removed = 0usize;
+    let canonical_id = ensure_canonical_tui_channel(&channels);
+    let mut removed_channels = 0usize;
 
-    for channel in &channels {
-        if channel.platform == "tui" {
+    for channel in channels {
+        if channel.platform != "tui" || channel.id == canonical_id {
             continue;
         }
 
-        let mut sessions = crate::db::load_claude_sessions_by_channel_id(&channel.id);
-        if sessions.len() <= MAX_PER_CHANNEL {
-            continue;
-        }
-
-        // Sort by created_at descending (newest first)
-        sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-        // Delete sessions beyond the limit
-        for cs in sessions.iter().skip(MAX_PER_CHANNEL) {
-            let file_id = cs.claude_session_id.as_ref().unwrap_or(&cs.id);
-            if let Some(home) = dirs::home_dir() {
-                let history_file = home
-                    .join(".cc-gateway")
-                    .join("history")
-                    .join(format!("{}.jsonl", file_id));
-                let _ = std::fs::remove_file(&history_file);
-            }
-            crate::db::delete_claude_session(&cs.id);
-            removed += 1;
+        let reassigned =
+            crate::db::reassign_claude_sessions_channel(&channel.id, &canonical_id);
+        if reassigned > 0 {
             info!(
-                "Cleaned excess Claude session {} from channel {} (created: {})",
-                &cs.id[..cs.id.len().min(8)],
+                "Reassigned {} TUI Claude sessions from channel {} to canonical {}",
+                reassigned,
                 &channel.id[..channel.id.len().min(8)],
-                cs.created_at
+                &canonical_id[..canonical_id.len().min(8)]
             );
         }
+
+        crate::db::delete_channel_session(&channel.id);
+        removed_channels += 1;
+        info!(
+            "Removed stale TUI channel {} (channel_id={})",
+            &channel.id[..channel.id.len().min(8)],
+            channel.channel_id
+        );
     }
 
+    removed_channels
+}
+
+/// Merge orphan TUI channels when the interactive TUI process is not running.
+pub fn consolidate_stale_tui_channels() -> usize {
+    consolidate_stale_tui_channels_when(is_tui_running())
+}
+
+fn prune_claude_sessions(sessions: &[ClaudeSession], keep: &HashSet<String>) -> usize {
+    let mut removed = 0usize;
+    for session in sessions {
+        if keep.contains(&session.id) {
+            continue;
+        }
+        remove_claude_session_record(session);
+        removed += 1;
+    }
     removed
 }
 
-pub fn start_background_task(
-    log_path: String,
-    max_lines: usize,
-    max_size_mb: usize,
-    media_retention_days: u64,
-) {
+fn clean_excess_sessions_for_channel(channel_id: &str, max_per_channel: usize) -> usize {
+    let sessions = crate::db::load_claude_sessions_by_channel_id(channel_id);
+    if sessions.len() <= max_per_channel {
+        return 0;
+    }
+
+    let keep = select_sessions_to_keep(&sessions, max_per_channel);
+    let removed = prune_claude_sessions(&sessions, &keep);
+    if removed > 0 {
+        info!(
+            "Cleaned {} excess Claude sessions from channel {}",
+            removed,
+            &channel_id[..channel_id.len().min(8)]
+        );
+    }
+    removed
+}
+
+/// Per channel: keep at most `max_per_channel` Claude sessions (one newest per work_dir when possible).
+/// Returns the number of Claude sessions deleted.
+pub fn clean_excess_sessions(max_per_channel: usize) -> usize {
+    let max_per_channel = clamp_session_retention_per_channel(max_per_channel);
+    let channels = crate::db::load_all_channel_sessions();
+    channels
+        .iter()
+        .map(|channel| clean_excess_sessions_for_channel(&channel.id, max_per_channel))
+        .sum()
+}
+
+/// Result of one background cleanup cycle (log trim + media + sessions).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupCycleResult {
+    pub log_trimmed: bool,
+    pub media_removed: usize,
+    pub tui_channels_consolidated: usize,
+    pub excess_sessions_removed: usize,
+}
+
+fn normalize_log_limits(max_lines: usize, max_size_mb: usize) -> (usize, usize) {
     let max_lines = if max_lines == 0 {
         usize::MAX
     } else {
@@ -283,6 +393,43 @@ pub fn start_background_task(
     } else {
         max_size_mb
     };
+    (max_lines, max_size_mb)
+}
+
+/// Run one cleanup cycle: trim logs, purge old media, prune TUI and excess sessions.
+pub fn run_cleanup_cycle(
+    log_path: &str,
+    max_lines: usize,
+    max_size_mb: usize,
+    media_retention_days: u64,
+    max_sessions_per_channel: usize,
+) -> Result<CleanupCycleResult> {
+    let (max_lines, max_size_mb) = normalize_log_limits(max_lines, max_size_mb);
+    let log_trimmed = trim_log_file(log_path, max_lines, max_size_mb)?;
+    let media_removed = if media_retention_days > 0 {
+        clean_old_media_files(media_retention_days)?
+    } else {
+        0
+    };
+    let max_sessions_per_channel = clamp_session_retention_per_channel(max_sessions_per_channel);
+    let tui_channels_consolidated = consolidate_stale_tui_channels();
+    let excess_sessions_removed = clean_excess_sessions(max_sessions_per_channel);
+    Ok(CleanupCycleResult {
+        log_trimmed,
+        media_removed,
+        tui_channels_consolidated,
+        excess_sessions_removed,
+    })
+}
+
+pub fn start_background_task(
+    log_path: String,
+    max_lines: usize,
+    max_size_mb: usize,
+    media_retention_days: u64,
+    max_sessions_per_channel: usize,
+) {
+    let (max_lines, max_size_mb) = normalize_log_limits(max_lines, max_size_mb);
 
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(8 * 60 * 60));
@@ -291,52 +438,41 @@ pub fn start_background_task(
         loop {
             ticker.tick().await;
 
-            // Trim log
             let path = log_path.clone();
             let lines = max_lines;
             let size = max_size_mb;
-            match tokio::task::spawn_blocking(move || trim_log_file(&path, lines, size)).await {
-                Ok(Ok(true)) => {}
-                Ok(Ok(false)) => {}
-                Ok(Err(e)) => error!("Background log trim failed: {}", e),
-                Err(e) => error!("Background log trim task panicked: {}", e),
-            }
-
-            // Clean old media files
-            if media_retention_days > 0 {
-                match tokio::task::spawn_blocking(move || {
-                    clean_old_media_files(media_retention_days)
-                })
-                .await
-                {
-                    Ok(Ok(n)) => {
-                        if n > 0 {
-                            info!("Background media cleanup removed {} files", n);
-                        }
+            let retention = media_retention_days;
+            let session_cap = max_sessions_per_channel;
+            match tokio::task::spawn_blocking(move || {
+                run_cleanup_cycle(&path, lines, size, retention, session_cap)
+            })
+            .await
+            {
+                Ok(Ok(result)) => {
+                    if result.log_trimmed {
+                        info!("Background log trim completed");
                     }
-                    Ok(Err(e)) => error!("Background media cleanup failed: {}", e),
-                    Err(e) => error!("Background media cleanup panicked: {}", e),
-                }
-            }
-
-            // Clean up stale TUI sessions
-            match tokio::task::spawn_blocking(clean_tui_sessions).await {
-                Ok(n) => {
-                    if n > 0 {
-                        info!("Background TUI session cleanup removed {} sessions", n);
+                    if result.media_removed > 0 {
+                        info!(
+                            "Background media cleanup removed {} files",
+                            result.media_removed
+                        );
                     }
-                }
-                Err(e) => error!("Background TUI session cleanup panicked: {}", e),
-            }
-
-            // Clean excess sessions for other channels
-            match tokio::task::spawn_blocking(clean_excess_sessions).await {
-                Ok(n) => {
-                    if n > 0 {
-                        info!("Background excess session cleanup removed {} sessions", n);
+                    if result.tui_channels_consolidated > 0 {
+                        info!(
+                            "Background TUI channel consolidation removed {} stale channels",
+                            result.tui_channels_consolidated
+                        );
+                    }
+                    if result.excess_sessions_removed > 0 {
+                        info!(
+                            "Background excess session cleanup removed {} sessions",
+                            result.excess_sessions_removed
+                        );
                     }
                 }
-                Err(e) => error!("Background excess session cleanup panicked: {}", e),
+                Ok(Err(e)) => error!("Background cleanup cycle failed: {}", e),
+                Err(e) => error!("Background cleanup cycle panicked: {}", e),
             }
         }
     });

@@ -16,7 +16,10 @@ pub(crate) struct TestEnv {
 
 impl TestEnv {
     pub(crate) fn new() -> Self {
-        let lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let lock = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = tempfile::tempdir_in(std::env::current_dir().unwrap())
             .expect("test temp dir should be created in workspace");
         let previous_home = std::env::var("HOME").ok();

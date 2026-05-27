@@ -336,6 +336,31 @@ fn try_load_claude_sessions_by_channel_id(channel_id: &str) -> Result<Vec<Claude
     Ok(sessions)
 }
 
+pub fn reassign_claude_sessions_channel(from_channel_id: &str, to_channel_id: &str) -> usize {
+    match try_reassign_claude_sessions_channel(from_channel_id, to_channel_id) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(
+                "Failed to reassign Claude sessions from channel {} to {}: {}",
+                from_channel_id, to_channel_id, e
+            );
+            0
+        }
+    }
+}
+
+fn try_reassign_claude_sessions_channel(
+    from_channel_id: &str,
+    to_channel_id: &str,
+) -> Result<usize> {
+    let conn = open_conn()?;
+    let updated = conn.execute(
+        "UPDATE claude_sessions SET channel_session_id = ?1 WHERE channel_session_id = ?2",
+        params![to_channel_id, from_channel_id],
+    )?;
+    Ok(updated)
+}
+
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------

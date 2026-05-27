@@ -55,6 +55,12 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
     if let Some(v) = body.get("media_retention_days").and_then(|v| v.as_u64()) {
         config.media_retention_days = v;
     }
+    if let Some(v) = body
+        .get("session_retention_per_channel")
+        .and_then(|v| v.as_u64())
+    {
+        config.session_retention_per_channel = v;
+    }
     if let Some(v) = body.get("port").and_then(|v| v.as_u64()) {
         config.port = v as u16;
     }

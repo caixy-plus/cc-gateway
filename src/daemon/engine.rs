@@ -38,6 +38,9 @@ impl DaemonEngine {
             self.config.log.max_lines,
             self.config.log.max_size_mb,
             self.config.media_retention_days,
+            crate::config::model::effective_session_retention_per_channel(
+                self.config.session_retention_per_channel,
+            ),
         );
 
         // Start history recorder for WebUI sessions

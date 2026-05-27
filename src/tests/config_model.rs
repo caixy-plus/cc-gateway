@@ -1,4 +1,7 @@
-use crate::config::model::{ClaudeConfig, FeishuConfig, GatewayConfig, LogConfig};
+use crate::config::model::{
+    effective_session_retention_per_channel, ClaudeConfig, FeishuConfig, GatewayConfig, LogConfig,
+    MAX_SESSION_RETENTION_PER_CHANNEL, MIN_SESSION_RETENTION_PER_CHANNEL,
+};
 
 #[test]
 fn test_gateway_config_default() {
@@ -13,6 +16,20 @@ fn test_gateway_config_default() {
     assert_eq!(cfg.feishu.allow_from, "*");
     assert_eq!(cfg.feishu.encrypt_key, "");
     assert_eq!(cfg.default_dir, "~");
+    assert_eq!(cfg.session_retention_per_channel, 30);
+}
+
+#[test]
+fn effective_session_retention_per_channel_clamps_to_bounds_without_error() {
+    assert_eq!(MIN_SESSION_RETENTION_PER_CHANNEL, 10);
+    assert_eq!(MAX_SESSION_RETENTION_PER_CHANNEL, 100);
+    assert_eq!(effective_session_retention_per_channel(30), 30);
+    assert_eq!(effective_session_retention_per_channel(10), 10);
+    assert_eq!(effective_session_retention_per_channel(100), 100);
+    assert_eq!(effective_session_retention_per_channel(5), 10);
+    assert_eq!(effective_session_retention_per_channel(0), 10);
+    assert_eq!(effective_session_retention_per_channel(150), 100);
+    assert_eq!(effective_session_retention_per_channel(u64::MAX), 100);
 }
 
 #[test]
