@@ -42,6 +42,7 @@ cargo run -- start        # Start daemon (spawns background process)
 - **Use TDD for feature work and bug fixes**: write or update a focused failing test first, implement the smallest change that makes it pass, then refactor with tests green.
 - **Run tests based on change scope**: after functional changes, choose the fastest relevant test set from the touched modules and risk area instead of defaulting to full `cargo test` every time. Run full tests when changes touch shared infrastructure, cross-platform behavior, persistence, command/session lifecycle, or before final verification of broad refactors.
 - **Document skipped verification**: if a change is docs-only or tests are intentionally not run, say so in the final response.
+- **Release tagging must match Cargo version**: before pushing a release tag `vX.Y.Z`, ensure `Cargo.toml` `[package].version` is exactly `X.Y.Z`. The release workflow enforces this and will fail if they differ.
 
 ## Architecture
 
