@@ -179,6 +179,7 @@ pub struct ClaudeController {
     message_buffer: Arc<Mutex<Vec<String>>>,
     claude_session_id: Arc<RwLock<Option<String>>>,
     pending_resume_session_id: Arc<RwLock<Option<String>>>,
+    pending_resume_record_id: Arc<RwLock<Option<String>>>,
     mcp_context: Arc<RwLock<Option<McpContext>>>,
 }
 
@@ -197,6 +198,7 @@ impl ClaudeController {
             message_buffer: Arc::new(Mutex::new(Vec::new())),
             claude_session_id: Arc::new(RwLock::new(None)),
             pending_resume_session_id: Arc::new(RwLock::new(None)),
+            pending_resume_record_id: Arc::new(RwLock::new(None)),
             mcp_context: Arc::new(RwLock::new(None)),
         }
     }
@@ -446,6 +448,15 @@ impl ClaudeController {
     pub async fn set_pending_resume_session_id(&self, id: Option<String>) {
         let mut sid = self.pending_resume_session_id.write().await;
         *sid = id;
+    }
+
+    pub async fn set_pending_resume_record_id(&self, id: Option<String>) {
+        let mut sid = self.pending_resume_record_id.write().await;
+        *sid = id;
+    }
+
+    pub async fn take_pending_resume_record_id(&self) -> Option<String> {
+        self.pending_resume_record_id.write().await.take()
     }
 
     pub async fn has_pending_resume_session_id(&self) -> bool {

@@ -343,7 +343,9 @@ fn render(f: &mut Frame, app: &App) {
             all_lines.push((color, line.as_str()));
         }
     }
-
+    if app.claude_busy && app.needs_claude_response {
+        all_lines.push((Some(Color::DarkGray), "..."));
+    }
     let area_height = msg_area.height as usize;
     let total = all_lines.len();
     let visible_start = if app.scroll_offset >= total {
@@ -548,6 +550,11 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::CommandRouter;
+    use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+    use crate::session::channel_model::{ClaudeSession as StoredClaudeSession, ClaudeSessionState};
+    use crate::tests::helpers::TestEnv;
+    use chrono::Utc;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use ratatui::{backend::TestBackend, Terminal};
 
@@ -574,6 +581,100 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|f| render(f, &app)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn claude_history_resume_reuses_existing_tui_session_record() {
+        let env = TestEnv::new();
+        crate::db::init_schema().unwrap();
+        let work_dir = env.home().join("resume-project");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let channel = GLOBAL_CHANNEL_SESSIONS
+            .get_or_create_platform_channel("tui", "tui-history", work_dir.to_str().unwrap())
+            .await;
+        let now = Utc::now();
+        let stored = StoredClaudeSession {
+            id: "stored-session".to_string(),
+            channel_session_id: channel.id.clone(),
+            title: "TUI Session".to_string(),
+            work_dir: work_dir.to_string_lossy().to_string(),
+            active: false,
+            state: ClaudeSessionState::Stopped,
+            claude_session_id: Some("resume-session-id".to_string()),
+            created_at: now,
+            stopped_at: Some(now),
+            updated_at: Some(now),
+        };
+        crate::db::insert_claude_session(&stored);
+        GLOBAL_CHANNEL_SESSIONS.load_from_db();
+
+        let controller = Arc::new(Mutex::new(ClaudeController::new(
+            env.fake_claude_config(),
+            false,
+        )));
+        let router = CommandRouter::new(controller.clone(), work_dir.to_str().unwrap());
+        let mut app = App::new(channel.id.clone());
+
+        process_submit("/claude-history 1", &mut app, &router, &controller)
+            .await
+            .unwrap();
+
+        let sessions = GLOBAL_CHANNEL_SESSIONS.list_claude_sessions_by_channel(&channel.id, None);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "stored-session");
+        assert!(sessions[0].active);
+        assert_eq!(
+            sessions[0].claude_session_id.as_deref(),
+            Some("resume-session-id")
+        );
+        assert!(app.session_active);
+
+        let ctrl = controller.lock().await;
+        ctrl.stop_session().await.unwrap();
+    }
+
+    #[test]
+    fn render_shows_ellipsis_while_waiting_for_first_claude_output() {
+        let mut app = App::new("test-channel".to_string());
+        app.add_message(MsgRole::User, "hello");
+        app.claude_busy = true;
+        app.needs_claude_response = true;
+
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let rendered =
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .fold(String::new(), |mut acc, cell| {
+                    acc.push_str(cell.symbol());
+                    acc
+                });
+
+        assert!(rendered.contains("..."));
+        assert_eq!(app.messages.len(), 1);
+    }
+
+    #[test]
+    fn first_claude_chunk_replaces_transient_waiting_display() {
+        let mut app = App::new("test-channel".to_string());
+        app.add_message(MsgRole::User, "hello");
+        app.needs_claude_response = true;
+
+        let done = handle_poll_event(
+            &TuiPollEvent::Flush("real answer".to_string(), false),
+            &mut app,
+        );
+
+        assert!(!done);
+        assert!(!app.needs_claude_response);
+        assert_eq!(app.messages.len(), 2);
+        assert_eq!(app.messages[1].role, MsgRole::Claude);
+        assert_eq!(app.messages[1].lines, vec!["real answer"]);
     }
 }
 
@@ -642,6 +743,29 @@ async fn process_submit(
                 .await
             {
                 app.add_message(MsgRole::System, &reply);
+            }
+
+            let pending_record_id = {
+                let ctrl = controller.lock().await;
+                ctrl.take_pending_resume_record_id().await
+            };
+            if let Some(record_id) = pending_record_id {
+                match GLOBAL_CHANNEL_SESSIONS
+                    .resume_claude_session_with_controller(&record_id, controller)
+                    .await
+                {
+                    Ok(_) => {
+                        app.session_active = true;
+                        app.poller_running = false;
+                    }
+                    Err(e) => {
+                        app.add_message(
+                            MsgRole::System,
+                            &t_fmt!("builtin.failed_start_claude", ERR = e),
+                        );
+                    }
+                }
+                return Ok(SubmitResult { poll_claude: false });
             }
 
             let has_pending_resume = {
@@ -719,6 +843,7 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
     match event {
         TuiPollEvent::Flush(text, _is_done) => {
             app.last_was_thinking = false;
+            app.needs_claude_response = false;
             app.update_last_message(MsgRole::Claude, text);
             false
         }

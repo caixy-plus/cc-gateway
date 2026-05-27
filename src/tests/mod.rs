@@ -6,7 +6,7 @@ mod feishu_cards;
 mod feishu_flow;
 mod feishu_utils;
 mod feishu_webhook;
-mod helpers;
+pub(crate) mod helpers;
 mod i18n;
 mod mcp_file_delivery;
 mod proto;

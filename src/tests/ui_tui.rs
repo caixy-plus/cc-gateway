@@ -92,3 +92,19 @@ fn interactive_select_backend_cancels_when_input_ends() {
     assert!(matches!(selected, SelectAction::Cancelled));
     assert!(!backend.frames.is_empty());
 }
+
+#[test]
+fn interactive_select_backend_deletes_with_x_key() {
+    let items = vec![
+        ("keep".to_string(), false),
+        ("remove".to_string(), false),
+    ];
+    let mut backend = TestBackend {
+        keys: vec![crossterm::event::KeyCode::Char('x')],
+        frames: Vec::new(),
+    };
+
+    let selected = interactive_select_with_backend(&items, &mut backend);
+
+    assert!(matches!(selected, SelectAction::Deleted(0)));
+}

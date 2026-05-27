@@ -31,6 +31,8 @@ pub(crate) struct TelegramChannelRuntime {
 enum TelegramCallbackAction {
     ChangeDir { chat_id: String, path: String },
     ResumeSession { chat_id: String, session_id: String },
+    StartNewSession { chat_id: String, work_dir: String },
+    DeleteSession { chat_id: String, session_id: String },
 }
 
 impl TelegramChannelRuntime {
@@ -322,23 +324,64 @@ impl TelegramPlatform {
         let rows: Vec<Value> = sessions
             .iter()
             .map(|session| {
-                let status = if session.active {
-                    crate::t!("feishu.status_active")
-                } else {
-                    crate::t!("feishu.status_inactive")
-                };
-                let callback_data = self.register_callback(TelegramCallbackAction::ResumeSession {
-                    chat_id: chat_id.to_string(),
-                    session_id: session.id.clone(),
-                });
+                let resume_callback =
+                    self.register_callback(TelegramCallbackAction::ResumeSession {
+                        chat_id: chat_id.to_string(),
+                        session_id: session.id.clone(),
+                    });
+                let new_callback =
+                    self.register_callback(TelegramCallbackAction::StartNewSession {
+                        chat_id: chat_id.to_string(),
+                        work_dir: session.work_dir.clone(),
+                    });
+                let delete_callback =
+                    self.register_callback(TelegramCallbackAction::DeleteSession {
+                        chat_id: chat_id.to_string(),
+                        session_id: session.id.clone(),
+                    });
                 json!([{
-                    "text": format!("{} ({})", session.title, status),
-                    "callback_data": callback_data,
+                    "text": crate::t!("telegram.resume"),
+                    "callback_data": resume_callback,
+                }, {
+                    "text": crate::t!("telegram.start_new_session"),
+                    "callback_data": new_callback,
+                }, {
+                    "text": crate::t!("telegram.delete_session"),
+                    "callback_data": delete_callback,
                 }])
             })
             .collect();
 
         json!({ "inline_keyboard": rows })
+    }
+
+    pub(crate) fn history_message_text(
+        sessions: &[crate::session::channel_model::ClaudeSession],
+    ) -> String {
+        let china_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let mut lines = vec![crate::t!("telegram.session_history_subtitle").to_string()];
+
+        for (idx, session) in sessions.iter().enumerate() {
+            let status_dot = if session.active {
+                "\u{1F7E2}"
+            } else {
+                "\u{26AA}"
+            };
+            let time = session
+                .created_at
+                .with_timezone(&china_tz)
+                .format("%Y-%m-%d %H:%M")
+                .to_string();
+            lines.push(String::new());
+            lines.push(format!("{}. {} {}", idx + 1, status_dot, session.title));
+            lines.push(format!("\u{1F4C1} {}", session.work_dir));
+            lines.push(format!("\u{1F552} {}", time));
+            if let Some(ref session_id) = session.claude_session_id {
+                lines.push(format!("\u{1F511} {}", session_id));
+            }
+        }
+
+        lines.join("\n")
     }
 
     async fn handle_update(&self, update: Update) -> Result<()> {
@@ -467,7 +510,7 @@ impl TelegramPlatform {
                     let markup = self.history_reply_markup(&chat_id_str, &sessions);
                     self.send_message_with_markup(
                         chat_id,
-                        crate::t!("telegram.choose_history"),
+                        &Self::history_message_text(&sessions),
                         markup,
                     )
                     .await?;
@@ -601,6 +644,68 @@ impl TelegramPlatform {
                     &crate::t_fmt!("telegram.session_resumed", DIR = work_dir),
                 )
                 .await?;
+            }
+            TelegramCallbackAction::StartNewSession {
+                chat_id: action_chat_id,
+                work_dir,
+            } => {
+                if action_chat_id != chat_id_str {
+                    let _ = self
+                        .answer_callback_query(
+                            &callback_query.id,
+                            Some(crate::t!("telegram.callback_expired")),
+                        )
+                        .await;
+                    return Ok(());
+                }
+
+                let runtime = self.get_channel(&chat_id_str).await;
+                let active = GLOBAL_CHANNEL_SESSIONS
+                    .start_claude_session_for_platform(
+                        &runtime.channel_session.id,
+                        &format!("Telegram {}", chat_id),
+                        &self.default_dir,
+                        self.claude_config.clone(),
+                        self.show_thinking,
+                        vec![],
+                        None,
+                        Some(work_dir),
+                        Some(self.mcp_context_for_chat(&chat_id_str)),
+                    )
+                    .await?;
+                let work_dir = active.claude_session.work_dir.clone();
+                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
+                    rt.channel_session.work_dir = work_dir.clone();
+                    rt.active_claude = Some(active);
+                }
+                let _ = self.answer_callback_query(&callback_query.id, None).await;
+                self.send_message(
+                    chat_id,
+                    &crate::t_fmt!("telegram.session_started", DIR = work_dir),
+                )
+                .await?;
+            }
+            TelegramCallbackAction::DeleteSession {
+                chat_id: action_chat_id,
+                session_id,
+            } => {
+                if action_chat_id != chat_id_str {
+                    let _ = self
+                        .answer_callback_query(
+                            &callback_query.id,
+                            Some(crate::t!("telegram.callback_expired")),
+                        )
+                        .await;
+                    return Ok(());
+                }
+
+                let message = if GLOBAL_CHANNEL_SESSIONS.remove_claude_session(&session_id) {
+                    crate::t!("telegram.session_deleted")
+                } else {
+                    crate::t!("telegram.cannot_delete_active")
+                };
+                let _ = self.answer_callback_query(&callback_query.id, None).await;
+                self.send_message(chat_id, message).await?;
             }
         }
 

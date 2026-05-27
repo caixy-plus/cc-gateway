@@ -104,7 +104,9 @@ impl CommandRouter {
             // No active session: handle gateway commands locally
             match cmd {
                 "/help" => CommandAction::Reply(self.builtin.help_text()),
-                "/quit" => CommandAction::Reply("No active session to quit. Use /quit in an active session or type /help for available commands.".to_string()),
+                "/quit" => {
+                    CommandAction::Reply(t!("builtin.no_active_session_to_quit").to_string())
+                }
                 "/cd" => {
                     if arg.is_empty() {
                         CommandAction::Reply(t!("builtin.cd_usage").to_string())
@@ -145,9 +147,11 @@ impl CommandRouter {
                 }
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
-                "/claude-history" | "/claude_history" | "/claude-hsitory" => CommandAction::ShowClaudeHistory {
-                    arg: arg.to_string(),
-                },
+                "/claude-history" | "/claude_history" | "/claude-hsitory" => {
+                    CommandAction::ShowClaudeHistory {
+                        arg: arg.to_string(),
+                    }
+                }
                 _ => {
                     if trimmed.starts_with('/') {
                         CommandAction::UnknownCommand(cmd.to_string())

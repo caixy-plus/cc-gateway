@@ -64,6 +64,33 @@ async fn routes_telegram_menu_aliases_with_underscores() {
 }
 
 #[tokio::test]
+async fn inactive_quit_reply_uses_i18n() {
+    let _env = TestEnv::new();
+    let previous_lang = std::env::var("CC_GATEWAY_LANG").ok();
+    std::env::set_var("CC_GATEWAY_LANG", "zh_CN");
+    crate::i18n::init();
+    let (router, _) = test_router();
+
+    let action = router.route("/quit").await;
+
+    match action {
+        CommandAction::Reply(message) => {
+            assert_eq!(message, crate::t!("builtin.no_active_session_to_quit"));
+        }
+        other => panic!("expected translated reply, got {:?}", other),
+    }
+
+    if let Some(lang) = previous_lang {
+        std::env::set_var("CC_GATEWAY_LANG", lang);
+        crate::i18n::init();
+    } else {
+        std::env::set_var("CC_GATEWAY_LANG", "en");
+        crate::i18n::init();
+        std::env::remove_var("CC_GATEWAY_LANG");
+    }
+}
+
+#[tokio::test]
 async fn exposes_work_dir_after_relative_change_dir() {
     let env = TestEnv::new();
     let (router, controller) = test_router_with_default(env.home().to_str().unwrap());

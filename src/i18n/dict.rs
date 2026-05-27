@@ -400,6 +400,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Cannot delete an active session. Use /quit to stop it first.",
             Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
         },
+        "builtin.no_active_session_to_quit" => match lang {
+            Language::En => "No active session to quit. Use /quit in an active session or type /help for available commands.",
+            Language::ZhCN => "没有可退出的活动会话。请在活动会话中使用 /quit，或输入 /help 查看可用命令。",
+        },
         "builtin.mkdir_usage" => match lang {
             Language::En => "Usage: /mkdir <dirname>",
             Language::ZhCN => "用法: /mkdir <目录名>",
@@ -423,6 +427,10 @@ pub fn t(key: &str) -> &str {
         "builtin.select_dir_prompt" => match lang {
             Language::En => "Select a directory (↑↓ move, Enter to cd, q quit):",
             Language::ZhCN => "选择目录 (↑↓ 移动, Enter 确认, q 退出):",
+        },
+        "builtin.select_history_prompt" => match lang {
+            Language::En => "Select session (↑↓ move, Enter resume, x delete, q cancel):",
+            Language::ZhCN => "选择会话 (↑↓ 移动, Enter 恢复, x 删除, q 取消):",
         },
         "builtin.no_sessions" => match lang {
             Language::En => "No sessions found.",
@@ -723,6 +731,30 @@ pub fn t(key: &str) -> &str {
         "telegram.choose_history" => match lang {
             Language::En => "Choose a Claude session to resume:",
             Language::ZhCN => "请选择要恢复的 Claude 会话:",
+        },
+        "telegram.session_history_subtitle" => match lang {
+            Language::En => "Sessions for this chat",
+            Language::ZhCN => "此聊天的会话",
+        },
+        "telegram.resume" => match lang {
+            Language::En => "Resume",
+            Language::ZhCN => "恢复",
+        },
+        "telegram.start_new_session" => match lang {
+            Language::En => "New",
+            Language::ZhCN => "新开",
+        },
+        "telegram.delete_session" => match lang {
+            Language::En => "Delete",
+            Language::ZhCN => "删除",
+        },
+        "telegram.session_deleted" => match lang {
+            Language::En => "Session deleted.",
+            Language::ZhCN => "会话已删除。",
+        },
+        "telegram.cannot_delete_active" => match lang {
+            Language::En => "Cannot delete an active session. Use /quit to stop it first.",
+            Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
         },
         "telegram.callback_expired" => match lang {
             Language::En => "This action has expired. Please run the command again.",

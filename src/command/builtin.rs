@@ -49,6 +49,8 @@ impl BuiltinCommands {
             let target_sid = target.session_id.clone();
             let ctrl = self.controller.lock().await;
             ctrl.init_work_dir(target.project).await;
+            ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
+                .await;
             ctrl.set_pending_resume_session_id(
                 target
                     .resume_session_id
@@ -101,9 +103,11 @@ impl BuiltinCommands {
             }
 
             let items_for_select = items.clone();
-            let action = tokio::task::spawn_blocking(move || interactive_select(&items_for_select))
-                .await
-                .unwrap_or(SelectAction::Cancelled);
+            let action = tokio::task::spawn_blocking(move || {
+                interactive_select_for_history(&items_for_select)
+            })
+            .await
+            .unwrap_or(SelectAction::Cancelled);
 
             match action {
                 SelectAction::Selected(idx) => {
@@ -111,6 +115,8 @@ impl BuiltinCommands {
                     let target_sid = target.session_id.clone();
                     let ctrl = self.controller.lock().await;
                     ctrl.init_work_dir(target.project).await;
+                    ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
+                        .await;
                     ctrl.set_pending_resume_session_id(
                         target
                             .resume_session_id
@@ -251,7 +257,17 @@ pub(crate) trait SelectBackend {
     fn read_key(&mut self) -> Option<crossterm::event::KeyCode>;
 }
 
-pub(crate) struct RealBackend;
+pub(crate) struct RealBackend {
+    prompt: String,
+}
+
+impl RealBackend {
+    fn new(prompt: &str) -> Self {
+        Self {
+            prompt: prompt.to_string(),
+        }
+    }
+}
 
 impl SelectBackend for RealBackend {
     fn size(&self) -> (u16, u16) {
@@ -265,7 +281,7 @@ impl SelectBackend for RealBackend {
         let _ = stdout.queue(terminal::Clear(terminal::ClearType::All));
         let _ = stdout.queue(cursor::MoveTo(0, 0));
         // Use \r\n because raw mode disables automatic \n -> \r\n translation
-        let _ = write!(stdout, "{}\r\n\r\n", t!("builtin.select_dir_prompt"));
+        let _ = write!(stdout, "{}\r\n\r\n", &self.prompt);
         for line in lines {
             let _ = write!(stdout, "{}\r\n", line);
         }
@@ -369,6 +385,14 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
 }
 
 pub(crate) fn interactive_select(items: &[(String, bool)]) -> SelectAction {
+    interactive_select_with_prompt(items, crate::t!("builtin.select_dir_prompt"))
+}
+
+pub(crate) fn interactive_select_for_history(items: &[(String, bool)]) -> SelectAction {
+    interactive_select_with_prompt(items, crate::t!("builtin.select_history_prompt"))
+}
+
+fn interactive_select_with_prompt(items: &[(String, bool)], prompt: &str) -> SelectAction {
     struct PauseGuard;
     impl Drop for PauseGuard {
         fn drop(&mut self) {
@@ -386,7 +410,7 @@ pub(crate) fn interactive_select(items: &[(String, bool)]) -> SelectAction {
         return SelectAction::Cancelled;
     }
 
-    let mut backend = RealBackend;
+    let mut backend = RealBackend::new(prompt);
     let result = interactive_select_with_backend(items, &mut backend);
     if !raw_was_enabled {
         let _ = crossterm::terminal::disable_raw_mode();
