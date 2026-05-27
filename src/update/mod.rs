@@ -3,6 +3,13 @@ use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+const INSTALL_SH_URL: &str =
+    "https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh";
+const INSTALL_PS1_URL: &str =
+    "https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1";
+const SKIP_SETUP_ENV: &str = "CC_GATEWAY_SKIP_SETUP";
 
 /// A parsed semantic version (major.minor.patch).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +64,6 @@ pub struct GitHubRelease {
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub body: String,
-    pub url: String,
 }
 
 /// Parse a GitHub release JSON payload.
@@ -133,15 +139,15 @@ pub async fn check_update(
     }
 
     let platform = detect_platform();
-    let url = build_download_url(repo, &release.tag_name, &platform);
+    let _url = build_download_url(repo, &release.tag_name, &platform);
 
     Ok(Some(ReleaseInfo {
         tag_name: release.tag_name,
         body: release.body.unwrap_or_default(),
-        url,
     }))
 }
 
+#[allow(dead_code)]
 fn binary_name_for_current_platform() -> &'static str {
     if cfg!(target_os = "windows") {
         "cc-gateway.exe"
@@ -150,6 +156,7 @@ fn binary_name_for_current_platform() -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn extract_binary_from_tar_gz(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
     let decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
@@ -171,6 +178,7 @@ fn extract_binary_from_tar_gz(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>
     anyhow::bail!("archive does not contain {}", binary_name);
 }
 
+#[allow(dead_code)]
 fn extract_binary_from_zip(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
     let reader = Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(reader).context("failed to read zip archive")?;
@@ -195,6 +203,7 @@ fn extract_binary_from_zip(bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
     anyhow::bail!("archive does not contain {}", binary_name);
 }
 
+#[allow(dead_code)]
 fn binary_bytes_from_download(url: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     let binary_name = binary_name_for_current_platform();
     if url.ends_with(".tar.gz") {
@@ -206,6 +215,7 @@ fn binary_bytes_from_download(url: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
+#[allow(dead_code)]
 fn update_tmp_path(target: &Path) -> PathBuf {
     let file_name = target
         .file_name()
@@ -234,6 +244,7 @@ fn make_executable(_path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn local_codesign(path: &Path) {
     let Ok(status) = std::process::Command::new("codesign")
         .arg("-s")
@@ -252,6 +263,7 @@ fn local_codesign(path: &Path) {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn clear_macos_xattrs(path: &Path) {
     let _ = std::process::Command::new("xattr")
         .arg("-cr")
@@ -260,6 +272,7 @@ fn clear_macos_xattrs(path: &Path) {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
     let _ = std::fs::remove_file(target);
     std::fs::copy(tmp_path, target).context("failed to copy binary into place")?;
@@ -270,6 +283,7 @@ fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
     std::fs::rename(tmp_path, target).context("failed to replace binary")?;
     Ok(())
@@ -321,6 +335,7 @@ fn schedule_windows_self_replace(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn install_downloaded_binary(target: &Path, binary: &[u8]) -> Result<()> {
     let tmp_path = update_tmp_path(target);
     std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
@@ -333,6 +348,7 @@ pub(crate) fn install_downloaded_binary(target: &Path, binary: &[u8]) -> Result<
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn download_binary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     let resp = client
         .get(url)
@@ -349,6 +365,7 @@ async fn download_binary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>>
 }
 
 /// Download a binary to a temporary path and atomically replace the target.
+#[allow(dead_code)]
 pub async fn download_and_replace(
     client: &reqwest::Client,
     url: &str,
@@ -372,6 +389,120 @@ async fn download_and_schedule_windows_replace(
     let tmp_path = update_tmp_path(target);
     std::fs::write(&tmp_path, binary).context("failed to write temp file")?;
     schedule_windows_self_replace(&tmp_path, target, restart_daemon, config_path)
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn default_install_dir() -> String {
+    if cfg!(target_os = "windows") {
+        std::env::var("LOCALAPPDATA")
+            .map(|d| format!(r"{}\cc-gateway", d))
+            .unwrap_or_else(|_| r"%LOCALAPPDATA%\cc-gateway".to_string())
+    } else {
+        std::env::var("INSTALL_DIR").unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| format!("{}/.local/bin", h.display()))
+                .unwrap_or_else(|| "$HOME/.local/bin".to_string())
+        })
+    }
+}
+
+async fn daemon_was_running() -> bool {
+    let Ok(config_dir) = crate::config::loader::ConfigLoader::ensure_config_dir() else {
+        return false;
+    };
+    let pid_file = config_dir.join("daemon.pid");
+    let Ok(pid_str) = std::fs::read_to_string(&pid_file) else {
+        return false;
+    };
+    let Ok(pid) = pid_str.trim().parse::<u32>() else {
+        return false;
+    };
+    crate::daemon::is_process_alive(pid)
+}
+
+#[cfg(unix)]
+fn schedule_install_script_and_exit(
+    restart_daemon: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    // Run installer in the current terminal so the user can see progress.
+    // On Unix, overwriting the running executable is allowed (inode stays alive
+    // until process exits), so we don't need to detach.
+    let status = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("curl -fsSL {} | sh", shell_single_quote(INSTALL_SH_URL)))
+        .env(SKIP_SETUP_ENV, "1")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .context("failed to run install script")?;
+
+    if !status.success() {
+        anyhow::bail!("install script failed with exit code: {:?}", status.code());
+    }
+
+    if restart_daemon {
+        let gateway = PathBuf::from(default_install_dir()).join("cc-gateway");
+        if gateway.exists() {
+            let mut cmd = std::process::Command::new(&gateway);
+            cmd.arg("restart");
+            if let Some(path) = config_path {
+                cmd.arg("--config").arg(path);
+            }
+            let status = cmd
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .context("failed to restart daemon after update")?;
+            if !status.success() {
+                anyhow::bail!("failed to restart daemon after update");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn schedule_install_script_and_exit(restart_daemon: bool, config_path: Option<&Path>) -> Result<()> {
+    // Windows cannot replace the running executable; keep the detached updater
+    // style, but DO NOT hide/redirect output so the user sees progress.
+    let updater_pid = std::process::id();
+    let restart = if restart_daemon { "$true" } else { "$false" };
+    let gateway = format!(r"{}\cc-gateway.exe", default_install_dir());
+    let gateway_quoted = powershell_quote(&gateway);
+    let restart_args = match config_path {
+        Some(path) => format!(
+            "@('restart','--config',{})",
+            powershell_quote(&path.to_string_lossy())
+        ),
+        None => "@('restart')".to_string(),
+    };
+    let script = format!(
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $restart = {restart}; $gateway = {gateway}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $env:{skip_env} = '1'; iwr -UseBasicParsing '{install_url}' | iex; if ($restart) {{ & $gateway @restartArgs }}"#,
+        updater_pid = updater_pid,
+        restart = restart,
+        gateway = gateway_quoted,
+        restart_args = restart_args,
+        skip_env = SKIP_SETUP_ENV,
+        install_url = INSTALL_PS1_URL,
+    );
+
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("failed to spawn Windows update install script")?;
+
+    println!("Updater will exit; installation continues in the background.");
+    Ok(())
 }
 
 /// CLI entry point for `cc-gateway update`.
@@ -400,11 +531,10 @@ pub async fn run(
                 // We still need release info to get the download URL.
                 let release = fetch_latest_release(&client, repo).await?;
                 let platform = detect_platform();
-                let url = build_download_url(repo, &release.tag_name, &platform);
+                let _url = build_download_url(repo, &release.tag_name, &platform);
                 ReleaseInfo {
                     tag_name: release.tag_name.clone(),
                     body: release.body.unwrap_or_default(),
-                    url,
                 }
             } else {
                 println!("Already on the latest version.");
@@ -419,18 +549,15 @@ pub async fn run(
     );
     println!("Release notes:");
     println!("{}", info.body);
-    println!("Download URL: {}", info.url);
+    println!("Install script: {}", install_script_url());
 
     if check_only {
         println!("\nUse `cc-gateway update` without --check to install.");
         return Ok(());
     }
 
-    let exe = std::env::current_exe().context("failed to get current executable path")?;
-    println!("Target binary: {}", exe.display());
-
     if !yes {
-        print!("Download and replace? [y/N] ");
+        print!("Download and install update? [y/N] ");
         use std::io::Write;
         let _ = std::io::stdout().flush();
         let mut input = String::new();
@@ -441,32 +568,19 @@ pub async fn run(
         }
     }
 
-    println!("Downloading...");
+    let restart_daemon = daemon_was_running().await;
+    println!("Stopping cc-gateway daemon...");
+    let _ = crate::daemon::stop().await;
 
-    #[cfg(windows)]
-    {
-        println!("Stopping daemon before replacing the Windows executable...");
-        let _ = crate::daemon::stop().await;
-        download_and_schedule_windows_replace(
-            &client,
-            &info.url,
-            &exe,
-            true,
-            config_path.as_deref(),
-        )
-        .await
-        .context("failed to schedule Windows binary replacement")?;
-        println!("Binary downloaded. It will be replaced after this updater exits, then the daemon will restart.");
-        Ok(())
-    }
+    println!("Installing via official install script...");
+    schedule_install_script_and_exit(restart_daemon, config_path.as_deref())?;
+    std::process::exit(0);
+}
 
-    #[cfg(not(windows))]
-    {
-        download_and_replace(&client, &info.url, &exe)
-            .await
-            .context("failed to download and replace binary")?;
-
-        println!("Binary updated. Restarting daemon...");
-        crate::daemon::restart(config_path).await
+fn install_script_url() -> &'static str {
+    if cfg!(target_os = "windows") {
+        INSTALL_PS1_URL
+    } else {
+        INSTALL_SH_URL
     }
 }

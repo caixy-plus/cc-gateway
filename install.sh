@@ -100,6 +100,13 @@ if [ "$OS" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
     xattr -dr com.apple.quarantine "$INSTALL_DIR/${BINARY}" 2>/dev/null || true
 fi
 
+# Post-install setup (config wizard, port, PATH, service files, init) — skipped for `cc-gateway update`.
+if [ -n "${CC_GATEWAY_SKIP_SETUP:-}" ]; then
+    msg "" ""
+    msg "cc-gateway installed successfully to $INSTALL_DIR/${BINARY}" "cc-gateway 已成功安装到 $INSTALL_DIR/${BINARY}"
+    exit 0
+fi
+
 # Create config directory
 CONFIG_DIR="$HOME/.cc-gateway"
 mkdir -p "$CONFIG_DIR/logs"
@@ -264,6 +271,21 @@ if [ -n "$SHELL_CONFIG" ]; then
     msg "To use cc-gateway in this terminal, run:" "请运行以下命令以在当前终端使用 cc-gateway:"
     msg "  source $SHELL_CONFIG" "  source $SHELL_CONFIG"
     msg "Or open a new terminal." "或新开一个终端窗口。"
+fi
+
+msg "" ""
+if [ -t 0 ]; then
+    msg "Start cc-gateway daemon now? [y/N] " "现在启动 cc-gateway 守护进程？[y/N] "
+    read -r START_NOW
+    if echo "$START_NOW" | tr '[:upper:]' '[:lower:]' | grep -q '^y'; then
+        if command -v cc-gateway > /dev/null 2>&1; then
+            cc-gateway start || true
+        else
+            "$INSTALL_DIR/cc-gateway" start || true
+        fi
+    fi
+else
+    msg "Skipping auto-start (non-interactive shell)." "跳过自动启动（非交互式环境）。"
 fi
 
 msg "" ""

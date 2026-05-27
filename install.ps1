@@ -91,6 +91,14 @@ Stop-AllCCGateway
 
 Copy-Item -Path "$TempDir\$Binary.exe" -Destination "$InstallDir\$Binary.exe" -Force
 
+if ($env:CC_GATEWAY_SKIP_SETUP) {
+    Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+    Remove-Item -Force $TempFile -ErrorAction SilentlyContinue
+    Write-Msg "" ""
+    Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
+    exit 0
+}
+
 # Config
 $ConfigDir = "$env:USERPROFILE\.cc-gateway"
 New-Item -ItemType Directory -Path "$ConfigDir\logs" -Force | Out-Null
@@ -190,6 +198,20 @@ Remove-Item -Force $TempFile -ErrorAction SilentlyContinue
 Write-Msg "" ""
 Write-Msg "Running initial setup..." "正在运行初始设置..."
 & "$InstallDir\$Binary.exe" init
+
+Write-Msg "" ""
+if ([Environment]::UserInteractive) {
+    $ans = Read-Host (if ($lang -eq 'zh') { "现在启动 cc-gateway 守护进程？[y/N]" } else { "Start cc-gateway daemon now? [y/N]" })
+    if ($ans -match '^(y|Y)') {
+        try {
+            & "$InstallDir\$Binary.exe" start | Out-Null
+        } catch {
+            Write-Msg "Failed to start daemon: $_" "启动守护进程失败: $_"
+        }
+    }
+} else {
+    Write-Msg "Skipping auto-start (non-interactive shell)." "跳过自动启动（非交互式环境）。"
+}
 
 Write-Msg "" ""
 Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
