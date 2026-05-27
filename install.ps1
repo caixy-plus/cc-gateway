@@ -123,7 +123,8 @@ Write-Msg "" ""
 Write-Msg "Restarting cc-gateway daemon..." "正在重启 cc-gateway 守护进程..."
 try {
     # Run restart in background to avoid blocking the installer.
-    Start-Process -FilePath "$InstallDir\$Binary.exe" -ArgumentList @("restart") -WindowStyle Hidden | Out-Null
+    # Use the same console so users can see output.
+    Start-Process -FilePath "$InstallDir\$Binary.exe" -ArgumentList @("restart") -NoNewWindow | Out-Null
 } catch {
     Write-Msg "Failed to restart daemon: $_" "重启守护进程失败: $_"
 }
