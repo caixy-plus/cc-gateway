@@ -8,14 +8,14 @@
 $ cc-gateway
 cc-gateway 交互模式  输入 '/help' 查看命令，'/quit' 退出。
 
-cc-gateway> /claude
-Claude 会话已启动于: /Users/you/Workspace
+cc-gateway> /agent
+智能体会话已启动于: /Users/you/Workspace
 
 💬 ~/Workspace ▶ hello Claude
 Hello! How can I help you today?
 
 💬 ~/Workspace ▶ /quit
-Claude 会话已停止。
+智能体会话已停止。
 
 cc-gateway> /quit
 ```
@@ -26,8 +26,8 @@ cc-gateway> /quit
 
 ### 会话切换
 
-- `/claude` — 进入 Claude 会话模式。提示符变为 `💬 ~/Workspace ▶`
-- 在会话模式下，你输入的所有内容直接发送给 Claude
+- `/agent` — 进入智能体会话模式。提示符变为 `💬 ~/Workspace ▶`
+- 在会话模式下，你输入的所有内容直接发送给当前智能体
 - `/quit` — 停止会话并返回网关模式
 - 未进入会话时，`/quit` 直接退出程序
 
@@ -82,7 +82,7 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 1. 打开飞书并找到你的机器人
 2. 直接发送消息 — 当会话激活时它们会被转发给 Claude Code
-3. 使用与 CLI 模式相同的网关命令: `/cd`, `/claude`, `/pwd`, `/ll`, `/help`, `/quit`
+3. 使用与 CLI 模式相同的网关命令: `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/help`, `/quit`
 
 每个聊天 (群聊或私聊) 都有独立的 Claude 子进程，不同聊天的消息不会相互混淆。
 
@@ -107,6 +107,6 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 ## 小贴士
 
-- 使用 `/claude --resume <id>` 恢复之前的 Claude 会话
+- 使用 `/agent-history` 查看最近会话，再用 `/agent-history <n>` 按索引恢复
 - 将敏感凭证保存在环境变量中，而非 config.json
 - 如果默认端口被其他程序占用，可修改 `config.json` 中的 `port`，或让安装脚本自动检测空闲端口

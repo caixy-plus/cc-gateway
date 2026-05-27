@@ -12,9 +12,20 @@ All string values support `${VAR_NAME}` environment variable substitution.
     "level": "info",
     "file": "~/.cc-gateway/logs/gateway.log"
   },
-  "claude": {
-    "cli_path": "claude",
-    "default_args": "--dangerously-skip-permissions"
+  "agent": {
+    "default": "claude",
+    "claude": {
+      "cli_path": "claude",
+      "default_args": "--dangerously-skip-permissions",
+      "mode": "agent",
+      "permission": "prompt"
+    },
+    "cursor": {
+      "cli_path": "agent",
+      "default_args": "",
+      "mode": "agent",
+      "permission": "prompt"
+    }
   },
   "feishu": {
     "enabled": true,
@@ -56,14 +67,24 @@ All string values support `${VAR_NAME}` environment variable substitution.
 
 > **Note:** The daemon starts **all platforms whose `enabled` flag is `true`** simultaneously. You can run Feishu and Telegram at the same time by enabling both.
 
-### `claude`
+### `agent`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `cli_path` | string | `"claude"` | Claude Code CLI binary path |
-| `default_args` | string | `"--dangerously-skip-permissions"` | Default arguments passed to Claude CLI on every session start |
+| `default` | string | `"claude"` | Default provider used by `/agent` when no provider is specified |
+| `claude` | object |  | Provider profile for `claude` |
+| `cursor` | object |  | Provider profile for `cursor` |
 
-You can override or append arguments per session via `/claude <args>`.
+Each provider profile supports:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cli_path` | string | `"claude"` / `"agent"` | CLI binary path for the provider |
+| `default_args` | string | `""` | Default args passed to the provider on session start |
+| `mode` | string | `"agent"` | Provider mode (passed to the provider if supported) |
+| `permission` | string | `"prompt"` | Permission policy: `prompt`, `allow`, `deny` |
+
+You can override or append arguments per session via `/agent [provider] <args>`.
 
 ### `telegram`
 

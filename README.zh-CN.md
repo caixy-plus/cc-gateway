@@ -5,9 +5,9 @@
 ## 功能特性
 
 - **远程控制**: 通过手机上的飞书 (Lark) 或 Telegram 机器人控制本地 Claude Code
-- **聊天隔离**: 每个聊天都有独立的 Claude 子进程 — 不同群聊或用户的消息不会相互混淆
+- **聊天隔离**: 每个聊天都有独立的智能体子进程 — 不同群聊或用户的消息不会相互混淆
 - **本地 CLI 聊天**: 交互式命令行聊天，支持 Tab 补全和行内提示
-- **会话切换**: `/claude` 进入 Claude 会话模式；除 `/quit` 外所有内容直接转发给 Claude
+- **会话切换**: `/agent` 进入智能体会话模式；除网关内置命令外所有内容直接转发给当前智能体
 - **目录选择器**: `/ll` 打开交互式目录选择器 (CLI 中为 TUI，飞书中为卡片)
 - **守护进程模式**: 使用 `start/stop/restart/log` 命令作为后台服务运行，通过端口绑定保证单实例
 
@@ -59,7 +59,7 @@ cargo build --release
 
    ```sh
    cc-gateway
-   cc-gateway> /claude
+   cc-gateway> /agent
    💬 ~/Workspace ▶ hello, review this code for me
    ```
 
@@ -86,17 +86,23 @@ cargo build --release
 | 命令 | 说明 |
 |---------|-------------|
 | `/help` | 显示可用命令 |
-| `/quit` | 退出当前 Claude 会话 (未激活时 = 退出程序) |
-| `/cd <path>` | 更改工作目录并重启 Claude |
-| `/claude [args...]` | 启动或重启 Claude 会话 (传递参数给 Claude CLI) |
+| `/quit` | 退出当前智能体会话 (未激活时 = 退出程序) |
+| `/cd <path>` | 更改工作目录 |
+| `/cd_default` | 将工作目录更改为默认目录 |
+| `/agent [claude|cursor] [args...]` | 启动或重启智能体会话 (传递参数给对应 CLI) |
+| `/agents [claude|cursor]` | 选择 / 设置本频道默认智能体 |
+| `/agent-history [n]` | 显示最近会话并按索引恢复 |
 | `/pwd` | 显示当前工作目录 |
 | `/ll` | 打开交互式目录选择器 |
+| `/mkdir <目录名>` | 创建新目录 |
+| `/show-thinking` | 始终显示可用的 Thinking 输出 |
+| `/hide-thinking` | 隐藏 Thinking 输出 |
 
 ### 会话切换
 
-运行 `/claude` 后，网关进入 **会话模式**:
-- 提示符变为 `💬 ~/Workspace ▶` 表示正在与 Claude 聊天
-- 你输入的所有内容直接发送给 Claude (无需前缀)
+运行 `/agent` 后，网关进入 **会话模式**:
+- 提示符变为 `💬 ~/Workspace ▶` 表示正在与智能体聊天
+- 你输入的所有内容直接发送给当前智能体 (无需前缀)
 - 输入 `/quit` 停止会话并返回网关命令模式
 
 ## 配置

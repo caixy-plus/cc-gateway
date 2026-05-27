@@ -5,9 +5,9 @@ Gateway for controlling Claude Code via Feishu/Lark, Telegram, and CLI.
 ## Features
 
 - **Remote Control**: Control your local Claude Code from your phone via Feishu (Lark) or Telegram bot
-- **Per-Chat Isolation**: Each chat gets its own Claude subprocess — messages from different groups or users never mix
+- **Per-Chat Isolation**: Each chat gets its own agent subprocess — messages from different groups or users never mix
 - **Local CLI Chat**: Interactive command-line chat with tab completion and inline hints
-- **Session Switching**: `/claude` enters Claude session mode; everything except `/quit` is forwarded directly to Claude
+- **Session Switching**: `/agent` enters agent session mode; everything except gateway builtins is forwarded to the active agent
 - **Directory Picker**: `/ll` opens an interactive directory picker (TUI in CLI, card in Feishu)
 - **Daemon Mode**: Run as a background service with `start/stop/restart/log` commands. Single-instance enforced via port binding.
 
@@ -59,8 +59,8 @@ cargo build --release
 
    ```sh
    cc-gateway
-   cc-gateway> /claude
-   ǔcw Working directory ▶ hello, review this code for me
+   cc-gateway> /agent
+   💬 ~/Workspace ▶ hello, review this code for me
    ```
 
 4. **Stop the daemon**
@@ -86,17 +86,23 @@ cargo build --release
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/quit` | Quit current Claude session (inactive = exit program) |
-| `/cd <path>` | Change working directory and restart Claude |
-| `/claude [args...]` | Start or restart Claude session (pass args to Claude CLI) |
+| `/quit` | Quit current agent session (inactive = exit program) |
+| `/cd <path>` | Change working directory |
+| `/cd_default` | Change working directory to default |
+| `/agent [claude|cursor] [args...]` | Start or restart an agent session (pass args to the configured CLI) |
+| `/agents [claude|cursor]` | Pick / set this channel's default agent |
+| `/agent-history [n]` | Show recent sessions and resume by index |
 | `/pwd` | Show current working directory |
 | `/ll` | Open interactive directory picker |
+| `/mkdir <dirname>` | Create a directory |
+| `/show-thinking` | Always show Thinking output when available |
+| `/hide-thinking` | Hide Thinking output |
 
 ### Session Switching
 
-After running `/claude`, the gateway enters **session mode**:
-- The prompt changes to `ǔcw ~/Workspace ▶` to indicate you are chatting with Claude
-- Everything you type is sent directly to Claude (no prefix needed)
+After running `/agent`, the gateway enters **session mode**:
+- The prompt changes to `💬 ~/Workspace ▶` to indicate you are chatting with the agent
+- Everything you type is sent directly to the active agent (no prefix needed)
 - Type `/quit` to stop the session and return to gateway command mode
 
 ## Configuration

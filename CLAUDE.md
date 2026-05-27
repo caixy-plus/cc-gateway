@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cc-gateway is a Rust gateway that exposes local Claude Code sessions to remote users via chat bot platforms (Feishu/Lark, Telegram) and an interactive local CLI. It spawns Claude Code as a subprocess, communicates over stdin/stdout using the `stream-json` protocol, and bridges messages between Claude and external interfaces.
+cc-gateway is a Rust gateway that exposes local agent sessions to remote users via chat bot platforms (Feishu/Lark, Telegram) and an interactive local CLI. It spawns provider CLIs (e.g. `claude`, Cursor `agent acp`), communicates over stdin/stdout, and bridges messages between the provider and external interfaces.
 
 ## Project Structure
 
@@ -55,16 +55,17 @@ cargo run -- start        # Start daemon (spawns background process)
 - **`daemon/mod.rs`**: PID-file-based daemon management with triple singleton lock: port binding (configurable via `port`), `.daemon-starting.lock` for `start()` atomicity, and PID file `flock` held for daemon lifetime. `start()` spawns a detached child running `cc-gateway _daemon`. `stop()` sends SIGTERM (Unix) or `taskkill` (Windows). `run()` loads config, writes PID file, and starts `DaemonEngine`.
 - **`daemon/engine.rs`**: Core async engine. Starts all enabled `Platform` integrations (`feishu.enabled`, `telegram.enabled`) concurrently, then waits for shutdown signal (SIGTERM/SIGINT). On shutdown, calls `platform.shutdown()` on each enabled platform to gracefully terminate all active chat sessions.
 
-### Claude Session (`src/claude/`)
+### Agent Runtime (`src/agent/` + `src/runtime/`)
 
-- **`claude/session.rs`**: Spawns the `claude` subprocess with `--input-format stream-json --output-format stream-json --permission-prompt-tool stdio` plus any `default_args` from config. Reads stdout line-by-line, deserializes into `OutputEvent`, and sends them over an async channel. Writes `InputMessage` JSON lines to stdin. Extra args from `/claude <args>` are appended after config defaults.
-- **`claude/protocol.rs`**: Defines the `stream-json` protocol types. `InputMessage` (user messages, permission responses) and `OutputEvent` (system, assistant, result, control_request, error). Key helper: `is_permission_request()` detects tool permission requests.
-- **`claude/controller.rs`**: Owns the active `AgentSession`, exposes `start_session`, `stop_session`, `send_message`. Emits `ControllerEvent` (Text, Thinking, ToolUse, ToolResult, PermissionRequest, Error, Done) over an async channel. Manages `work_dir` and `pending_permission` state. Validates all paths are under the user's home directory via `ensure_under_home`.
+- **`agent/session.rs`**: Provider-neutral runtime (`AgentRuntime`) that spawns either Claude Code (stream-json) or Cursor ACP (`agent acp`) based on selected provider profile.
+- **`agent/cursor_acp.rs`**: Cursor ACP JSON-RPC client over stdio (initialize/auth/session/new/session/load/session/prompt).
+- **`runtime/session.rs`** / **`runtime/protocol.rs`**: Claude Code stream-json protocol session/types.
+- **`runtime/controller.rs`**: Owns the active `AgentRuntime`, exposes start/stop/send. Emits `ControllerEvent` (Text, Thinking, ToolUse, ToolResult, PermissionRequest, Error, Done). Manages `work_dir` and pending permission/resume state.
 
 ### Command Routing (`src/command/`)
 
-- **`command/router.rs`**: First line of message handling. When a Claude session is active, only `/quit` is handled locally; everything else is forwarded directly to Claude. When inactive, checks builtins (`/help`, `/cd`, `/claude`, `/pwd`, `/ll`, `/quit`) first, then forwards regular text to Claude. Returns `Some(response)` for immediate replies, `None` when the message was sent to Claude (responses come via the event channel).
-- **`command/builtin.rs`**: Implements gateway commands: `/help`, `/cd`, `/claude`, `/pwd`, `/ll`, `/quit`. `/cd` canonicalizes paths and restarts the session. `/ll` uses `crossterm` for an interactive TUI directory picker (directory-only, `/` suffix, Enter changes directory without starting a session).
+- **`command/router.rs`**: First line of message handling. When a session is active, gateway controls (e.g. `/quit`) are handled locally; other text is forwarded to the active agent. When inactive, parses builtins (`/help`, `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/mkdir`, `/show-thinking`, `/hide-thinking`, `/quit`).
+- **`command/builtin.rs`**: Implements gateway commands and help text.
 - **`command/forward.rs`**: Forwards regular text as user messages to Claude. Returns an error prompt if no session is active.
 
 ### Platform Layer (`src/platform/`)
@@ -74,7 +75,7 @@ cargo run -- start        # Start daemon (spawns background process)
   - `/ll` in Feishu is intercepted before routing: sends an interactive card listing folders from `default_dir`. Card buttons carry `value: { "cmd": "cd", "path": "...", "chat_id": "..." }`.
   - `/cd` in Feishu is intercepted before routing: resolves and canonicalizes the path, enforces that the result stays within `default_dir`, then calls `set_work_dir`.
   - Card callbacks with `cmd == "cd"` are handled directly: call `controller.init_work_dir(path)` and reply with confirmation text.
-  - Unknown slash commands when no session is active receive "Unknown command. Available commands: /help, /cd, /claude, /ll, /quit".
+  - Unknown slash commands when no session is active receive a list of available commands (see `feishu.unknown_command`).
 - **`platform/telegram/mod.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Each chat gets its own `TgChatSession` (isolated Claude subprocess). Routes messages through `CommandRouter` and streams Claude responses back via `sendMessage`.
 - **`platform/proto/mod.rs`**: Protobuf frame codec for Feishu pbbp2 (METHOD_CONTROL / METHOD_DATA, SERVICE_IM / SERVICE_CARD).
 
@@ -91,8 +92,8 @@ cargo run -- start        # Start daemon (spawns background process)
 ### Configuration (`src/config/`)
 
 - **`config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.
-- **`config/model.rs`**: `GatewayConfig` with `log`, `claude`, `feishu`, `telegram` sections, plus top-level fields: `port`, `default_dir`, `show_thinking`, `media_retention_days`.
-- **`config/wizard.rs`**: Interactive config editor invoked by `cc-gateway config`. Prompts for log, claude, and platform settings.
+- **`config/model.rs`**: `GatewayConfig` with `log`, `agent` (provider profiles), `feishu`, `telegram` sections, plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
+- **`config/wizard.rs`**: Interactive config editor invoked by `cc-gateway config`.
 
 ### Web Server (`src/web/`)
 
@@ -123,10 +124,10 @@ cargo run -- start        # Start daemon (spawns background process)
 
 - Checks GitHub Releases (`caixy-plus/cc-gateway`) for newer versions. Used by the WebUI version badge and can be triggered from the sidebar.
 
-### Claude Session ID & Resume (`src/claude/session.rs`)
+### Provider Session ID & Resume
 
-- After spawning the `claude` subprocess, the code reads `~/.claude/sessions/{pid}.json` with retries to extract Claude's internal session ID.
-- This ID is stored in `Session.agent_session_id` and passed back via `--resume` on the next `/claude` invocation so Claude Code resumes the same conversation.
+- Claude Code: after spawning the `claude` subprocess, cc-gateway reads `~/.claude/sessions/{pid}.json` to extract Claude's internal session id, persists it as `provider_session_id`, and uses it to resume when supported.
+- Cursor ACP: attempts `session/load` using persisted `provider_session_id` when appropriate; falls back to `session/new` if the stored session id is not found.
 
 ## Testing Patterns
 
@@ -143,7 +144,7 @@ This pattern lets unit tests verify layout math, scroll behavior, selection stat
 
 ## Key Patterns
 
-- **Session switching**: `/claude` starts a session and changes the prompt to `💬 ~/Workspace ▶`. Everything except `/quit` is forwarded to Claude. `/quit` stops the session in gateway; exits the program when no session is active.
+- **Session switching**: `/agent` starts a session and changes the prompt to `💬 ~/Workspace ▶`. Everything except gateway controls is forwarded to the active agent. `/quit` stops the session in gateway; exits the program when no session is active.
 - **Stream-json protocol**: All Claude communication is newline-delimited JSON. Each line is one event. Claude must be launched with `--input-format stream-json --output-format stream-json`.
 - **Event channels**: `AgentController` uses an `mpsc::unbounded_channel` to decouple the stdout reader from the consumer (CLI or platform). Consumers poll `recv_event()`.
 - **Detached daemon**: The daemon is a separate OS process. `start()` spawns `cc-gateway _daemon` with stdin/stdout/stderr nulled and a new process group (Unix).

@@ -8,14 +8,14 @@ Run `cc-gateway` without any subcommand to enter interactive chat mode:
 $ cc-gateway
 cc-gateway interactive mode  Type '/help' for commands, '/quit' to exit.
 
-cc-gateway> /claude
-Claude session started in: /Users/you/Workspace
+cc-gateway> /agent
+agent session started in: /Users/you/Workspace
 
 💬 ~/Workspace ▶ hello Claude
 Hello! How can I help you today?
 
 💬 ~/Workspace ▶ /quit
-Claude session stopped.
+agent session stopped.
 
 cc-gateway> /quit
 ```
@@ -26,8 +26,8 @@ Press `Tab` after typing `/` to see a list of available commands with inline des
 
 ### Session Switching
 
-- `/claude` — enters Claude session mode. The prompt changes to `💬 ~/Workspace ▶`
-- In session mode, everything you type goes directly to Claude
+- `/agent` — enters agent session mode. The prompt changes to `💬 ~/Workspace ▶`
+- In session mode, everything you type goes directly to the active agent
 - `/quit` — stops the session and returns to gateway mode
 - When not in a session, `/quit` exits the program entirely
 
@@ -82,7 +82,7 @@ Once the daemon is running with Feishu configured, you can:
 
 1. Open Feishu and find your bot
 2. Send messages directly — they are forwarded to Claude Code when a session is active
-3. Use gateway commands just like in CLI mode: `/cd`, `/claude`, `/pwd`, `/ll`, `/help`, `/quit`
+3. Use gateway commands just like in CLI mode: `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/help`, `/quit`
 
 Each chat (group or private) gets its own isolated Claude subprocess, so messages from different chats never mix.
 
@@ -107,6 +107,6 @@ Each chat gets its own isolated Claude subprocess. The Telegram platform uses lo
 
 ## Tips
 
-- Use `/claude --resume <id>` to resume a previous Claude session
+- Use `/agent-history` to list recent sessions, then `/agent-history <n>` to resume by index
 - Keep sensitive credentials in environment variables, not in config.json
 - If the default port is occupied by another program, change `port` in `config.json` or let the install script auto-detect a free port

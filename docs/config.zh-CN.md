@@ -12,9 +12,20 @@ cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
     "level": "info",
     "file": "~/.cc-gateway/logs/gateway.log"
   },
-  "claude": {
-    "cli_path": "claude",
-    "default_args": "--dangerously-skip-permissions"
+  "agent": {
+    "default": "claude",
+    "claude": {
+      "cli_path": "claude",
+      "default_args": "--dangerously-skip-permissions",
+      "mode": "agent",
+      "permission": "prompt"
+    },
+    "cursor": {
+      "cli_path": "agent",
+      "default_args": "",
+      "mode": "agent",
+      "permission": "prompt"
+    }
   },
   "feishu": {
     "enabled": true,
@@ -56,14 +67,24 @@ cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
 
 > **注意:** 守护进程会同时启动所有 `enabled` 为 `true` 的平台。你可以同时启用飞书和 Telegram，两者会并发运行。
 
-### `claude`
+### `agent`
 
 | 字段 | 类型 | 默认值 | 说明 |
 |-------|------|---------|-------------|
-| `cli_path` | string | `"claude"` | Claude Code CLI 二进制路径 |
-| `default_args` | string | `"--dangerously-skip-permissions"` | 每次启动会话时传递给 Claude CLI 的默认参数 |
+| `default` | string | `"claude"` | `/agent` 未指定 provider 时使用的默认 provider |
+| `claude` | object |  | `claude` provider 配置 |
+| `cursor` | object |  | `cursor` provider 配置 |
 
-你可以通过 `/claude <args>` 为每个会话覆盖或追加参数。
+每个 provider 配置支持：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|-------|------|---------|-------------|
+| `cli_path` | string | `"claude"` / `"agent"` | provider CLI 二进制路径 |
+| `default_args` | string | `""` | 每次启动会话时传递给 provider 的默认参数 |
+| `mode` | string | `"agent"` | provider 模式（如果 provider 支持） |
+| `permission` | string | `"prompt"` | 权限策略：`prompt` / `allow` / `deny` |
+
+你可以通过 `/agent [provider] <args>` 为每个会话覆盖或追加参数。
 
 ### `telegram`
 

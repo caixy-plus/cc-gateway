@@ -42,7 +42,6 @@
   - `/agent` uses `agent.default`
   - `/agent cursor` uses `agent.cursor`
   - `/agent claude` uses `agent.claude`
-  - `/claude` remains a Claude alias
 - Generalized persisted session metadata:
   - `provider`
   - `provider_session_id`
@@ -144,7 +143,6 @@ Improve:
 - Show provider in history item labels, for example:
   - `[cursor] abc12345... (project: ..., 10 messages, last: ...)`
   - `[claude] abc12345... (project: ..., 10 messages, last: ...)`
-- Keep `/claude-history` as a compatibility alias.
 - Prefer `/agent-history` in help text.
 
 Likely files:
