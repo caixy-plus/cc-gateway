@@ -385,6 +385,7 @@ pub async fn status() -> Result<()> {
 }
 
 pub async fn restart(config_path: Option<PathBuf>) -> Result<()> {
+    println!("{}", t!("daemon.restarting"));
     stop().await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     start(config_path).await

@@ -30,6 +30,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "cc-gateway daemon is not running.",
             Language::ZhCN => "cc-gateway 守护进程未在运行。",
         },
+        "daemon.restarting" => match lang {
+            Language::En => "Restarting cc-gateway daemon...",
+            Language::ZhCN => "正在重启 cc-gateway 守护进程...",
+        },
         "daemon.auto_start_enabled_macos" => match lang {
             Language::En => "Enabled auto-start at login (launchd).",
             Language::ZhCN => "已启用登录时自动启动 (launchd)。",
