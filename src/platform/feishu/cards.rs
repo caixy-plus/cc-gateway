@@ -22,6 +22,24 @@ pub fn build_dir_picker_card(
 
     const MAX_DIRS: usize = 40;
     let start = page * MAX_DIRS;
+    if start >= dirs.len() {
+        // Page is out of bounds (e.g. stale card after directory changes)
+        elements.push(json!({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": crate::t!("builtin.no_subdirs")
+            }
+        }));
+        return json!({
+            "schema": "2.0",
+            "header": {
+                "title": { "tag": "plain_text", "content": crate::t!("feishu.select_dir_title") },
+                "template": "indigo"
+            },
+            "body": { "elements": elements }
+        });
+    }
     let end = ((page + 1) * MAX_DIRS).min(dirs.len());
     let page_dirs = &dirs[start..end];
 

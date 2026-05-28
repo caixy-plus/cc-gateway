@@ -110,6 +110,22 @@ impl FeishuPlatform {
         info!("Starting Feishu platform...");
         self.spawn_deliver_listener();
 
+        // Spawn periodic cleanup for interaction store and pending permissions
+        let interaction_store = self.interaction_store.clone();
+        let pending_permissions = self.pending_permissions.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(300));
+            ticker.tick().await; // skip the immediate tick
+            loop {
+                ticker.tick().await;
+                interaction_store.cleanup_expired();
+                let now = std::time::Instant::now();
+                pending_permissions.retain(|_, ctx| {
+                    now.duration_since(ctx.created_at) < std::time::Duration::from_secs(600)
+                });
+            }
+        });
+
         loop {
             let (ws_url, client_config) = match self.get_ws_endpoint().await {
                 Ok(v) => v,

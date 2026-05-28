@@ -118,7 +118,7 @@ pub async fn handle_restart(State(state): State<AppState>) -> (StatusCode, Strin
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(false)
+        .kill_on_drop(true)
         .spawn()
     {
         let body = json!({ "error": format!("Failed to spawn restart command: {}", e) });
@@ -148,7 +148,7 @@ pub async fn handle_update(State(state): State<AppState>) -> (StatusCode, String
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(false)
+        .kill_on_drop(true)
         .spawn()
     {
         let body = json!({ "error": format!("Failed to spawn update command: {}", e) });

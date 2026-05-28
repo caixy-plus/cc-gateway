@@ -43,6 +43,10 @@ pub async fn handle_deliver(mut multipart: Multipart) -> (StatusCode, String) {
     }
 
     let expanded = shellexpand::tilde(&path).to_string();
+    if let Err(e) = crate::runtime::controller::ensure_under_home(&expanded) {
+        let body = json!({ "error": format!("Path not allowed: {}", e) });
+        return (StatusCode::FORBIDDEN, body.to_string());
+    }
     let msg_opt = if message.is_empty() {
         None
     } else {
