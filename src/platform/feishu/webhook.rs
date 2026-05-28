@@ -140,9 +140,49 @@ impl FeishuPlatform {
             .get("content-length")
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
+        // We require Content-Length for /webhook POST requests.
+        // This keeps the implementation simple and ensures our size limit can't be bypassed
+        // via chunked transfer encoding.
+        if method == "POST" && path == "/webhook" && !headers.contains_key("content-length") {
+            warn!(
+                "[Feishu] Webhook request from {} rejected: missing Content-Length",
+                addr
+            );
+            let _ = writer
+                .write_all(
+                    build_http_response(411, r#"{"code":1,"msg":"length required"}"#).as_bytes(),
+                )
+                .await;
+            return Ok(());
+        }
+        const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024; // 1 MB
+        if content_length > MAX_WEBHOOK_BODY_BYTES {
+            warn!(
+                "[Feishu] Webhook request from {} rejected: Content-Length {} exceeds limit",
+                addr, content_length
+            );
+            let _ = writer
+                .write_all(
+                    build_http_response(413, r#"{"code":1,"msg":"request body too large"}"#)
+                        .as_bytes(),
+                )
+                .await;
+            return Ok(());
+        }
         let mut body = vec![0u8; content_length];
         if content_length > 0 {
-            reader.read_exact(&mut body).await?;
+            if let Err(e) = reader.read_exact(&mut body).await {
+                warn!(
+                    "[Feishu] Webhook request from {} read body failed (len={}): {}",
+                    addr, content_length, e
+                );
+                let _ = writer
+                    .write_all(
+                        build_http_response(400, r#"{"code":1,"msg":"bad request"}"#).as_bytes(),
+                    )
+                    .await;
+                return Ok(());
+            }
         }
 
         debug!(

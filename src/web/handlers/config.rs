@@ -11,11 +11,21 @@ pub(crate) fn mask_secret(s: &str) -> String {
     }
 }
 
+/// Check if the frontend sent back a masked secret rather than a real one.
+///
+/// We consider it masked if it exactly matches the mask we would generate from the
+/// existing secret. This avoids false-positives when a real secret happens to contain `***`.
+fn is_masked_value(incoming: &str, existing_secret: &str) -> bool {
+    if incoming.is_empty() {
+        return false;
+    }
+    incoming == mask_secret(existing_secret)
+}
+
 pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let mut config = crate::config::loader::ConfigLoader::load().unwrap_or_default();
     config.feishu.app_secret = mask_secret(&config.feishu.app_secret);
     config.telegram.bot_token = mask_secret(&config.telegram.bot_token);
-    config.feishu.app_id = mask_secret(&config.feishu.app_id);
     Json(serde_json::json!({
         "config": config,
         "effective": {
@@ -55,6 +65,10 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         config.session_retention_per_channel = v;
     }
     if let Some(v) = body.get("port").and_then(|v| v.as_u64()) {
+        if v == 0 || v > 65535 {
+            let body = json!({ "error": format!("Port must be between 1 and 65535, got {}", v) });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
         config.port = v as u16;
     }
     if let Some(v) = body.get("agent") {
@@ -63,13 +77,28 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     }
     if let Some(v) = body.get("feishu") {
-        if let Ok(c) = serde_json::from_value(v.clone()) {
-            config.feishu = c;
+        if let Ok(c) = serde_json::from_value::<crate::config::model::FeishuConfig>(v.clone()) {
+            // Preserve real secrets if the frontend sent back masked values
+            if !is_masked_value(&c.app_secret, &config.feishu.app_secret) {
+                config.feishu.app_secret = c.app_secret;
+            }
+            config.feishu.enabled = c.enabled;
+            config.feishu.app_id = c.app_id;
+            config.feishu.allow_from = c.allow_from;
+            config.feishu.encrypt_key = c.encrypt_key;
+            config.feishu.mode = c.mode;
+            config.feishu.webhook_bind = c.webhook_bind;
         }
     }
     if let Some(v) = body.get("telegram") {
-        if let Ok(c) = serde_json::from_value(v.clone()) {
-            config.telegram = c;
+        if let Ok(c) = serde_json::from_value::<crate::config::model::TelegramConfig>(v.clone()) {
+            // Preserve real secrets if the frontend sent back masked values
+            if !is_masked_value(&c.bot_token, &config.telegram.bot_token) {
+                config.telegram.bot_token = c.bot_token;
+            }
+            config.telegram.enabled = c.enabled;
+            config.telegram.allow_from = c.allow_from;
+            config.telegram.webhook_url = c.webhook_url;
         }
     }
 
