@@ -48,6 +48,10 @@ cargo run -- start        # Start daemon (spawns background process)
 - **Run tests based on change scope**: after functional changes, choose the fastest relevant test set from the touched modules and risk area instead of defaulting to full `cargo test` every time. Run full tests when changes touch shared infrastructure, cross-platform behavior, persistence, command/session lifecycle, or before final verification of broad refactors.
 - **Document skipped verification**: if a change is docs-only or tests are intentionally not run, say so in the final response.
 - **Release tagging must match Cargo version**: before pushing a release tag `vX.Y.Z`, ensure `Cargo.toml` `[package].version` is exactly `X.Y.Z`. The release workflow enforces this and will fail if they differ.
+- **Version bump rule (project convention)**: use `MAJOR.MINOR.PATCH`.
+  - `PATCH` ranges **0–9**. When it reaches **9**, the next bump rolls over to `0` and increments `MINOR`.
+  - `MINOR` ranges **0–19**. When it reaches **19**, the next bump rolls over to `0` and increments `MAJOR`.
+  - Example: `1.5.9` → `1.6.0`; `1.19.9` → `2.0.0`.
 
 ## Architecture
 
