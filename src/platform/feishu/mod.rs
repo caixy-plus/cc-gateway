@@ -2,8 +2,8 @@
 pub(crate) mod auth_middleware;
 pub(crate) mod cards;
 pub(crate) mod handle;
-pub(crate) mod interaction;
 pub(crate) mod inbound;
+pub(crate) mod interaction;
 pub(crate) mod media;
 pub(crate) mod webhook;
 pub(crate) mod ws;

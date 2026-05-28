@@ -37,21 +37,23 @@ async fn webui_cd_updates_active_agent_session_work_dir() {
         .unwrap();
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &runtime.channel_session.id,
-            "WebUI cd active",
-            root.to_str().unwrap(),
-            env.fake_agent_profiles(),
-            false,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "WebUI cd active".to_string(),
+                default_dir: root.to_string_lossy().to_string(),
+                agent_settings: env.fake_agent_profiles(),
+                show_thinking: false,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await
         .unwrap();
     let session_id = active.agent_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
 
     let (status, body) = handle_cd(Json(CdRequest {
         session_id: Some(session_id.clone()),

@@ -433,7 +433,10 @@ fn schedule_install_script_and_exit(
     // until process exits), so we don't need to detach.
     let status = std::process::Command::new("/bin/sh")
         .arg("-c")
-        .arg(format!("curl -fsSL {} | sh", shell_single_quote(INSTALL_SH_URL)))
+        .arg(format!(
+            "curl -fsSL {} | sh",
+            shell_single_quote(INSTALL_SH_URL)
+        ))
         .env(SKIP_SETUP_ENV, "1")
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -469,7 +472,10 @@ fn schedule_install_script_and_exit(
 }
 
 #[cfg(windows)]
-fn schedule_install_script_and_exit(restart_daemon: bool, config_path: Option<&Path>) -> Result<()> {
+fn schedule_install_script_and_exit(
+    restart_daemon: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
     // Windows cannot replace the running executable; keep the detached updater
     // style, but DO NOT hide/redirect output so the user sees progress.
     let updater_pid = std::process::id();
@@ -494,7 +500,13 @@ fn schedule_install_script_and_exit(restart_daemon: bool, config_path: Option<&P
     );
 
     std::process::Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

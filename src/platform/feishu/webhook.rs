@@ -115,7 +115,7 @@ impl FeishuPlatform {
         if reader.read_line(&mut request_line).await? == 0 {
             return Ok(());
         }
-        let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
         if parts.len() < 2 {
             return Ok(());
         }

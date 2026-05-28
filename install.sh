@@ -214,6 +214,7 @@ fi
 msg "" ""
 msg "cc-gateway installed successfully to $INSTALL_DIR/${BINARY}" "cc-gateway 已成功安装到 $INSTALL_DIR/${BINARY}"
 msg "Run '${BINARY} --help' to get started" "运行 '${BINARY} --help' 开始使用"
+msg "Open WebUI: '${BINARY} webui' (starts daemon if needed)" "打开 WebUI：'${BINARY} webui'（如未启动会自动 start）"
 msg "" ""
 msg "For Feishu bot setup instructions, see:" "飞书机器人配置说明请参阅:"
 msg "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup" "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"

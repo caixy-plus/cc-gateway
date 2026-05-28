@@ -34,10 +34,9 @@ fn webui_channel_id() -> Option<String> {
 async fn get_work_dir_async(session_id: Option<&str>) -> String {
     if let Some(channel_id) = webui_channel_id() {
         if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
-            if let Some(ref active) = runtime.active_agent {
-                if session_id
-                    .map(|id| id == active.agent_session.id)
-                    .unwrap_or(true)
+            if let Some(session_id) = session_id {
+                if let Some(active) =
+                    GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, session_id)
                 {
                     let ctrl = active.controller.lock().await;
                     let wd = ctrl.get_work_dir().await;
@@ -69,11 +68,10 @@ async fn set_session_work_dir(session_id: Option<&str>, dir: String) {
         GLOBAL_CHANNEL_SESSIONS.update_agent_session_work_dir(session_id, &dir);
     }
     if let Some(channel_id) = webui_channel_id() {
-        if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
-            if let Some(ref active) = runtime.active_agent {
-                if session_id
-                    .map(|id| id == active.agent_session.id)
-                    .unwrap_or(true)
+        if let Some(_runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
+            if let Some(session_id) = session_id {
+                if let Some(active) =
+                    GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, session_id)
                 {
                     let ctrl = active.controller.lock().await;
                     ctrl.init_work_dir(dir.clone()).await;
@@ -106,7 +104,7 @@ pub async fn handle_ll(Json(req): Json<LlRequest>) -> (StatusCode, String) {
     let expanded = match resolve_requested_dir(req.session_id.as_deref(), &path).await {
         Ok(dir) => dir,
         Err(e) => {
-            let body = json!({ "error": e.to_string() });
+            let body = json!({ "error_key": "webui.failed_set_dir", "error": e.to_string() });
             return (StatusCode::BAD_REQUEST, body.to_string());
         }
     };
@@ -134,8 +132,7 @@ pub async fn handle_ll(Json(req): Json<LlRequest>) -> (StatusCode, String) {
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body =
-                json!({ "error": format!("Failed to read directory '{}': {}", expanded, e) });
+            let body = json!({ "error_key": "webui.failed_list_dir", "error": format!("Failed to read directory '{}': {}", expanded, e) });
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
@@ -151,7 +148,7 @@ pub async fn handle_cd(Json(req): Json<CdRequest>) -> (StatusCode, String) {
     let target_str = match resolve_requested_dir(req.session_id.as_deref(), &req.path).await {
         Ok(dir) => dir,
         Err(e) => {
-            let body = json!({ "error": e.to_string() });
+            let body = json!({ "error_key": "webui.failed_set_dir", "error": e.to_string() });
             return (StatusCode::BAD_REQUEST, body.to_string());
         }
     };

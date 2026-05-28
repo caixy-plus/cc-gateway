@@ -102,7 +102,7 @@ pub fn build_dir_picker_card(
                 "tag": "lark_md",
                 "content": crate::t_fmt!("feishu.page_info",
                     PAGE = page + 1,
-                    TOTAL = (dirs.len() + MAX_DIRS - 1) / MAX_DIRS)
+                    TOTAL = dirs.len().div_ceil(MAX_DIRS))
             }
         }));
         elements.extend(pagination_buttons);

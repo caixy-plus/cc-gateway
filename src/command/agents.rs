@@ -115,11 +115,13 @@ mod tests {
     fn interactive_select_provider_picks_index() {
         let items = build_provider_items(&AgentProvider::Claude);
         let mut backend = TestBackend {
-            keys: std::collections::VecDeque::from([crossterm::event::KeyCode::Down, crossterm::event::KeyCode::Enter]),
+            keys: std::collections::VecDeque::from([
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyCode::Enter,
+            ]),
             frames: Vec::new(),
         };
-        let action =
-            crate::command::builtin::interactive_select_with_backend(&items, &mut backend);
+        let action = crate::command::builtin::interactive_select_with_backend(&items, &mut backend);
         assert!(matches!(action, SelectAction::Selected(1)));
         assert_eq!(provider_at_index(1), Some(AgentProvider::Cursor));
     }

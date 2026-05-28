@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod agent;
-mod runtime;
 mod cli;
 mod command;
 mod config;
@@ -13,6 +12,7 @@ mod history;
 mod i18n;
 mod platform;
 mod prompt;
+mod runtime;
 mod session;
 mod update;
 mod utils;
@@ -70,6 +70,12 @@ enum Commands {
         /// Print default config to stdout
         #[arg(long)]
         init: bool,
+    },
+    /// Open WebUI in the default browser (starts daemon if not running)
+    Webui {
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
     /// Check for updates and optionally install the latest release
     Update {
@@ -142,6 +148,9 @@ async fn main() -> Result<()> {
             } else {
                 config::wizard::run_interactive_config()?;
             }
+        }
+        Some(Commands::Webui { config }) => {
+            daemon::webui(config).await?;
         }
         Some(Commands::Update {
             check,

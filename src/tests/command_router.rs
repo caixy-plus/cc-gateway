@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::runtime::controller::AgentController;
 use crate::command::router::{CommandAction, CommandRouter};
-use crate::config::model::{AgentProvider, AgentProfiles};
+use crate::config::model::{AgentProfiles, AgentProvider};
+use crate::runtime::controller::AgentController;
 
 use super::helpers::TestEnv;
 
@@ -135,7 +135,9 @@ async fn parses_core_commands_without_starting_claude() {
     ));
     assert!(matches!(
         router.route("/agents_cursor").await,
-        CommandAction::SelectChannelAgent { provider: Some(AgentProvider::Cursor) }
+        CommandAction::SelectChannelAgent {
+            provider: Some(AgentProvider::Cursor)
+        }
     ));
     assert!(matches!(
         router.route("/agent cursor --force").await,
@@ -151,7 +153,9 @@ async fn parses_core_commands_without_starting_claude() {
     ));
     assert!(matches!(
         router.route("/agents cursor").await,
-        CommandAction::SelectChannelAgent { provider: Some(AgentProvider::Cursor) }
+        CommandAction::SelectChannelAgent {
+            provider: Some(AgentProvider::Cursor)
+        }
     ));
     assert!(matches!(
         router.route("/pwd").await,

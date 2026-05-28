@@ -45,16 +45,16 @@ pub struct Frame {
 impl Frame {
     pub fn encode(&self, buf: &mut impl BufMut) {
         // field 1: SeqID (varint)
-        buf.put_u8((1 << 3) | 0);
+        buf.put_u8(1 << 3);
         encode_varint(buf, self.seq_id);
         // field 2: LogID (varint)
-        buf.put_u8((2 << 3) | 0);
+        buf.put_u8(2 << 3);
         encode_varint(buf, self.log_id);
         // field 3: service (varint)
-        buf.put_u8((3 << 3) | 0);
+        buf.put_u8(3 << 3);
         encode_varint(buf, self.service as u64);
         // field 4: method (varint)
-        buf.put_u8((4 << 3) | 0);
+        buf.put_u8(4 << 3);
         encode_varint(buf, self.method as u64);
         // field 5: headers (repeated, length-delimited)
         for h in &self.headers {

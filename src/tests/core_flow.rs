@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::runtime::event_poller::EventPollSink;
 use crate::db;
+use crate::runtime::event_poller::{BufferedSink, EventPollSink};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::channel_model::AgentSessionState;
 
@@ -181,21 +181,27 @@ async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &channel.id,
-            "Thinking Flow",
-            work_dir.to_str().unwrap(),
-            config,
-            show_thinking,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: channel.id.clone(),
+                title: "Thinking Flow".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: config,
+                show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
-    let mut sink = ChunkSink { chunks: Vec::new() };
+    let mut sink = BufferedSink::new(
+        ChunkSink { chunks: Vec::new() },
+        std::time::Duration::from_millis(10),
+        2000,
+    );
     GLOBAL_CHANNEL_SESSIONS
-        .send_and_poll_active_runtime(&active, "hello", &mut sink)
+        .send_and_poll_active_runtime_buffered(&active, "hello", &mut sink)
         .await?;
     {
         let ctrl = active.controller.lock().await;
@@ -205,7 +211,7 @@ async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
         .stop_channel_session(&channel.id)
         .await?;
 
-    Ok(sink.chunks)
+    Ok(sink.into_inner().chunks)
 }
 
 #[tokio::test]
@@ -221,16 +227,18 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &channel.id,
-            "Core Flow",
-            work_dir.to_str().unwrap(),
-            fake_config.clone(),
-            false,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: channel.id.clone(),
+                title: "Core Flow".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: fake_config.clone(),
+                show_thinking: false,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
 
@@ -239,12 +247,17 @@ async fn core_session_lifecycle_with_fake_claude_updates_db_and_resumes() -> Res
     assert_eq!(stored.len(), 1);
     assert!(stored[0].active);
 
-    let mut sink = CollectSink {
-        text: String::new(),
-    };
+    let mut buffered = BufferedSink::new(
+        CollectSink {
+            text: String::new(),
+        },
+        std::time::Duration::from_millis(10),
+        2000,
+    );
     GLOBAL_CHANNEL_SESSIONS
-        .send_and_poll_active_runtime(&active, "hello", &mut sink)
+        .send_and_poll_active_runtime_buffered(&active, "hello", &mut buffered)
         .await?;
+    let sink = buffered.into_inner();
     assert!(sink.text.contains("fake reply"));
 
     {
@@ -304,16 +317,18 @@ async fn start_session_uses_work_dir_override_as_process_cwd_and_persisted_work_
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &channel.id,
-            "Override Flow",
-            root.to_str().unwrap(),
-            config,
-            false,
-            vec![],
-            None,
-            Some(child.to_string_lossy().to_string()),
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: channel.id.clone(),
+                title: "Override Flow".to_string(),
+                default_dir: root.to_string_lossy().to_string(),
+                agent_settings: config,
+                show_thinking: false,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: Some(child.to_string_lossy().to_string()),
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
 
@@ -359,16 +374,18 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
         .await;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &channel.id,
-            "Resume WorkDir",
-            current.to_str().unwrap(),
-            config.clone(),
-            false,
-            vec![],
-            None,
-            Some(original.to_string_lossy().to_string()),
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: channel.id.clone(),
+                title: "Resume WorkDir".to_string(),
+                default_dir: current.to_string_lossy().to_string(),
+                agent_settings: config.clone(),
+                show_thinking: false,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: Some(original.to_string_lossy().to_string()),
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
     let session_id = active.agent_session.id.clone();
@@ -446,10 +463,8 @@ done
 
 #[tokio::test]
 async fn controller_start_session_with_explicit_claude_provider() -> Result<()> {
+    use crate::config::model::{AgentProfiles, AgentProvider, AgentProviderConfig};
     use crate::runtime::controller::AgentController;
-    use crate::config::model::{
-        AgentProvider, AgentProviderConfig, AgentProfiles,
-    };
 
     let env = TestEnv::new();
     let work_dir = env.home().join("controller-claude");
@@ -476,7 +491,8 @@ async fn controller_start_session_with_explicit_claude_provider() -> Result<()> 
     {
         let ctrl = std::sync::Arc::new(tokio::sync::Mutex::new(controller));
         let c = ctrl.lock().await;
-        c.init_work_dir(work_dir.to_string_lossy().to_string()).await;
+        c.init_work_dir(work_dir.to_string_lossy().to_string())
+            .await;
         c.set_pending_resume_session_id(Some("fake-claude-session".to_string()))
             .await;
         c.start_session_with_provider(
@@ -495,9 +511,7 @@ async fn controller_start_session_with_explicit_claude_provider() -> Result<()> 
 
 #[tokio::test]
 async fn resume_session_uses_stored_provider_not_agent_default() -> Result<()> {
-    use crate::config::model::{
-        AgentProvider, AgentProviderConfig, AgentProfiles,
-    };
+    use crate::config::model::{AgentProfiles, AgentProvider, AgentProviderConfig};
     use crate::session::channel_model::{AgentSession, AgentSessionState};
 
     let env = TestEnv::new();

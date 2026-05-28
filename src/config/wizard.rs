@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use std::io::{self, Write};
 
 use crate::config::loader::ConfigLoader;
-use crate::config::model::{AgentProfiles, AgentProviderConfig, FeishuConfig, GatewayConfig, LogConfig};
+use crate::config::model::{
+    AgentProfiles, AgentProviderConfig, FeishuConfig, GatewayConfig, LogConfig,
+};
 use crate::{t, t_fmt};
 
 pub fn run_interactive_config() -> Result<()> {

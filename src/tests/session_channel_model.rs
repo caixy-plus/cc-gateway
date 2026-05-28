@@ -46,7 +46,7 @@ fn test_channel_session_new_tui() {
     let cs = ChannelSession::new_tui("/home/user");
     assert_eq!(cs.title, "TUI");
     assert_eq!(cs.platform, "tui");
-    assert_eq!(cs.source, SessionSource::TUI);
+    assert_eq!(cs.source, SessionSource::Tui);
     assert_eq!(cs.channel_id, "tui");
 }
 

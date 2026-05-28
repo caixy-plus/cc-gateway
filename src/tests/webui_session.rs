@@ -79,7 +79,7 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
     let work_dir = env.home().join("webui-project");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        agent_settings: env.fake_agent_profiles().into(),
+        agent_settings: env.fake_agent_profiles(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -90,21 +90,22 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &runtime.channel_session.id,
-            "WebUI flow",
-            work_dir.to_str().unwrap(),
-            state.agent_settings.clone(),
-            state.show_thinking,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "WebUI flow".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
     let session_id = active.agent_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS
-        .set_webui_active_agent(&runtime.channel_session.id, Some(active.clone()));
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active.clone());
     assert!(
         GLOBAL_CHANNEL_SESSIONS
             .get_agent_session(&session_id)
@@ -150,7 +151,7 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
     let work_dir = env.home().join("webui-active-no-poller");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        agent_settings: env.fake_agent_profiles().into(),
+        agent_settings: env.fake_agent_profiles(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -161,20 +162,22 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &runtime.channel_session.id,
-            "Active without poller",
-            work_dir.to_str().unwrap(),
-            state.agent_settings.clone(),
-            state.show_thinking,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "Active without poller".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
     let session_id = active.agent_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
 
     let mut rx = EVENT_BUS.subscribe();
     let (status, body) = short_timeout(
@@ -207,7 +210,7 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
     let work_dir = env.home().join("webui-empty-assistant");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        agent_settings: env.fake_agent_profiles().into(),
+        agent_settings: env.fake_agent_profiles(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -218,20 +221,22 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &runtime.channel_session.id,
-            "No empty assistant event",
-            work_dir.to_str().unwrap(),
-            state.agent_settings.clone(),
-            state.show_thinking,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "No empty assistant event".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
     let session_id = active.agent_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
 
     let mut rx = EVENT_BUS.subscribe();
     let (status, body) = short_timeout(
@@ -265,7 +270,7 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
     let work_dir = env.home().join("webui-list-delete");
     std::fs::create_dir_all(&work_dir)?;
     let state = AppState {
-        agent_settings: env.fake_agent_profiles().into(),
+        agent_settings: env.fake_agent_profiles(),
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -319,7 +324,7 @@ async fn webui_created_session_keeps_selected_work_dir_when_listed_and_started()
     let selected_dir = env.home().join("Downloads");
     std::fs::create_dir_all(&selected_dir)?;
     let state = AppState {
-        agent_settings: env.fake_agent_profiles().into(),
+        agent_settings: env.fake_agent_profiles(),
         show_thinking: false,
         default_dir: default_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -393,7 +398,7 @@ async fn webui_create_session_treats_tilde_as_config_default_dir() -> Result<()>
     let default_dir = env.home().join("configured-default");
     std::fs::create_dir_all(&default_dir)?;
     let state = AppState {
-        agent_settings: env.fake_agent_profiles().into(),
+        agent_settings: env.fake_agent_profiles(),
         show_thinking: false,
         default_dir: default_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
@@ -429,20 +434,22 @@ async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Re
         .await?;
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(
-            &runtime.channel_session.id,
-            "Active delete protection",
-            work_dir.to_str().unwrap(),
-            env.fake_agent_profiles(),
-            false,
-            vec![],
-            None,
-            None,
-            None,
-            None,
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "Active delete protection".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: env.fake_agent_profiles(),
+                show_thinking: false,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
         )
         .await?;
     let session_id = active.agent_session.id.clone();
-    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, Some(active));
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
 
     let (status, body) = handle_delete_session(Path(session_id.clone())).await;
 
@@ -460,7 +467,8 @@ async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Re
     assert!(GLOBAL_CHANNEL_SESSIONS
         .get_webui_runtime(&runtime.channel_session.id)
         .unwrap()
-        .active_agent
+        .active_agents
+        .get(&session_id)
         .is_some());
 
     let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;

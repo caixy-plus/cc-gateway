@@ -78,6 +78,14 @@ pub fn t(key: &str) -> &str {
             Language::En => "systemctl enable failed",
             Language::ZhCN => "systemctl 启用失败",
         },
+        "daemon.webui_starting" => match lang {
+            Language::En => "Daemon not running, starting...",
+            Language::ZhCN => "守护进程未运行，正在启动...",
+        },
+        "daemon.webui_opening" => match lang {
+            Language::En => "Opening WebUI at {URL}...",
+            Language::ZhCN => "正在打开 WebUI: {URL}...",
+        },
 
         // config/wizard.rs
         "wizard.title" => match lang {
@@ -735,9 +743,29 @@ pub fn t(key: &str) -> &str {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
         },
+        "cursor.resume_may_ignore_flags" => match lang {
+            Language::En => "Note: Cursor session resume may not honor CLI flags like --yolo/--print. If the resumed session behaves unexpectedly, create a new session.",
+            Language::ZhCN => "提示：Cursor 会话恢复可能不会完全生效 CLI 启动参数（如 --yolo/--print）。如果恢复后行为异常，请新建会话。",
+        },
+        "cursor.session_not_found_new_session" => match lang {
+            Language::En => "Cursor session not found ({ID}); a new session was started. If you rely on flags like --yolo/--print, consider creating a new session explicitly.",
+            Language::ZhCN => "未找到 Cursor 会话（{ID}），已自动新建会话。如果你依赖 --yolo/--print 等启动参数，建议显式新建会话。",
+        },
         "telegram.command_help" => match lang {
             Language::En => "Show help",
             Language::ZhCN => "查看帮助",
+        },
+        "telegram.help_title" => match lang {
+            Language::En => "cc-gateway commands (Telegram):",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：",
+        },
+        "telegram.help_footer" => match lang {
+            Language::En => "Any other text will be forwarded to the active agent.",
+            Language::ZhCN => "其他文本将直接发送给活动智能体。",
+        },
+        "telegram.help_text" => match lang {
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",
@@ -868,8 +896,12 @@ pub fn t(key: &str) -> &str {
 
         // web/handlers/session.rs
         "webui.permission_request" => match lang {
-            Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
-            Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
+            Language::En => "Permission request: {NAME}\nID: {ID}",
+            Language::ZhCN => "权限请求: {NAME}\nID: {ID}",
+        },
+        "webui.permission_request_input" => match lang {
+            Language::En => "Input:",
+            Language::ZhCN => "输入:",
         },
         "webui.confirm_request" => match lang {
             Language::En => "Confirm: {PROMPT} (id: {ID})\nOptions: {OPTIONS}\n",
@@ -946,10 +978,11 @@ macro_rules! t {
 #[macro_export]
 macro_rules! t_fmt {
     ($key:literal $(, $name:ident = $value:expr)* $(,)?) => {{
-        let mut _args: ::std::vec::Vec<(&str, ::std::string::String)> = ::std::vec::Vec::new();
-        $(
-            _args.push((stringify!($name), ::std::string::ToString::to_string(&$value)));
-        )*
+        let _args: ::std::vec::Vec<(&str, ::std::string::String)> = ::std::vec![
+            $(
+                (stringify!($name), ::std::string::ToString::to_string(&$value))
+            ),*
+        ];
         let _refs: ::std::vec::Vec<(&str, &str)> = _args.iter().map(|(k, v)| (*k, v.as_str())).collect();
         $crate::i18n::dict::tfmt($key, &_refs)
     }};

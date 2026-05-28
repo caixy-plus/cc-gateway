@@ -1,6 +1,6 @@
 [package]
 name = "cc-gateway"
-version = "1.5.7"
+version = "1.5.8"
 edition = "2021"
 authors = ["caixinyun"]
 description = "Gateway for controlling Claude Code via Feishu/Lark, Telegram, and CLI"
@@ -56,6 +56,9 @@ dashmap = "6.1"
 rustyline = "14.0"
 crossterm = "0.28"
 ratatui = "0.29"
+
+# Open URLs in default browser
+open = "5"
 
 # Path expansion
 shellexpand = "3.1"

@@ -34,8 +34,7 @@ impl FeishuPlatform {
         .await
         {
             Ok((bytes, content_type)) => {
-                match save_downloaded_resource(bytes, &content_type).await
-                {
+                match save_downloaded_resource(bytes, &content_type).await {
                     Ok(item) => Some(item),
                     Err(e) => {
                         warn!(
@@ -57,10 +56,7 @@ impl FeishuPlatform {
     }
 
     /// Download attachments (if any) into `~/.cc-gateway/media/` and build agent markdown text.
-    pub(crate) async fn resolve_inbound_content(
-        &self,
-        msg: &NormalizedMessage,
-    ) -> Result<String> {
+    pub(crate) async fn resolve_inbound_content(&self, msg: &NormalizedMessage) -> Result<String> {
         let token = self.get_tenant_access_token().await?;
         let message_id = msg.message_id.as_str();
         let content_raw = Self::feishu_message_content_raw(msg);

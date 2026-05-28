@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::runtime::controller::AgentController;
 use crate::command::agents;
 use crate::command::builtin::BuiltinCommands;
 use crate::config::model::AgentProvider;
+use crate::runtime::controller::AgentController;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
 
@@ -42,9 +42,7 @@ pub enum CommandAction {
     /// Show recent Claude sessions and allow resuming
     ShowAgentHistory { arg: String },
     /// Set this channel's default agent (`/agents` picker or `/agents claude|cursor`)
-    SelectChannelAgent {
-        provider: Option<AgentProvider>,
-    },
+    SelectChannelAgent { provider: Option<AgentProvider> },
     /// Forward regular text to the active Claude session
     ForwardToAgent(String),
     /// Unknown slash command when no session is active
@@ -98,7 +96,7 @@ impl CommandRouter {
 
         let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
         let cmd = parts[0];
-        let arg = parts.get(1).map(|s| *s).unwrap_or("");
+        let arg = parts.get(1).copied().unwrap_or("");
 
         // Check if we are in Claude session mode
         let session_active = {
@@ -180,10 +178,8 @@ impl CommandRouter {
                     arg: arg.to_string(),
                 },
                 "/agents" | "/agents_claude" | "/agents_cursor" => {
-                    let mut args: Vec<String> = arg
-                        .split_whitespace()
-                        .map(|s| s.to_string())
-                        .collect();
+                    let mut args: Vec<String> =
+                        arg.split_whitespace().map(|s| s.to_string()).collect();
                     let provider = match cmd {
                         "/agents_claude" => Some(AgentProvider::Claude),
                         "/agents_cursor" => Some(AgentProvider::Cursor),
@@ -217,7 +213,7 @@ impl CommandRouter {
                 let ctrl = self.controller.lock().await;
                 let provider =
                     crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
-                match ctrl.stop_session().await {
+                match ctrl.force_stop_session().await {
                     Ok(()) => Some(crate::command::agents::session_stopped_message(&provider)),
                     Err(e) => Some(t_fmt!("builtin.failed_stop_session", ERR = e)),
                 }

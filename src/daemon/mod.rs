@@ -385,6 +385,75 @@ pub async fn status() -> Result<()> {
     Ok(())
 }
 
+/// Open WebUI in the default browser, starting the daemon if not already running.
+pub async fn webui(config_path: Option<PathBuf>) -> Result<()> {
+    webui_with(
+        config_path,
+        |path| async move { start(path).await },
+        |url| open::that(url).context("Failed to open browser"),
+    )
+    .await
+}
+
+pub(crate) async fn webui_with<FStart, FStartFut, FOpen>(
+    config_path: Option<PathBuf>,
+    start_fn: FStart,
+    open_fn: FOpen,
+) -> Result<()>
+where
+    FStart: FnOnce(Option<PathBuf>) -> FStartFut,
+    FStartFut: std::future::Future<Output = Result<()>>,
+    FOpen: FnOnce(&str) -> Result<()>,
+{
+    let config = if let Some(ref path) = config_path {
+        ConfigLoader::load_from(path)?
+    } else {
+        ConfigLoader::load()?
+    };
+
+    if !is_daemon_running_for_webui_check().await? {
+        println!("{}", t!("daemon.webui_starting"));
+        start_fn(config_path).await?;
+    }
+
+    let url = format!("http://127.0.0.1:{}", config.port);
+    println!("{}", t_fmt!("daemon.webui_opening", URL = url));
+    open_fn(&url)?;
+    Ok(())
+}
+
+async fn is_daemon_running_for_webui_check() -> Result<bool> {
+    let config_dir = ConfigLoader::ensure_config_dir()?;
+    let pid_file = config_dir.join(DAEMON_PID_FILE);
+
+    let mut pid: Option<u32> = None;
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(p) = pid_str.trim().parse::<u32>() {
+            pid = Some(p);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if pid.is_none() {
+            pid = std::process::Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq cc-gateway.exe", "/NH", "/FO", "CSV"])
+                .output()
+                .ok()
+                .and_then(|output| {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    stdout.lines().next().and_then(|line| {
+                        line.split(',')
+                            .nth(1)
+                            .and_then(|s| s.trim_matches('"').parse::<u32>().ok())
+                    })
+                });
+        }
+    }
+
+    Ok(pid.map(is_process_alive).unwrap_or(false))
+}
+
 pub async fn restart(config_path: Option<PathBuf>) -> Result<()> {
     println!("{}", t!("daemon.restarting"));
     stop().await?;

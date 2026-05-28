@@ -5,6 +5,17 @@ use tracing::warn;
 use super::TelegramPlatform;
 use crate::platform::inbound_media::{self, SavedInboundMedia};
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InboundContent<'a> {
+    pub(crate) text: Option<&'a str>,
+    pub(crate) caption: Option<&'a str>,
+    pub(crate) photo: Option<&'a [TelegramPhotoSize]>,
+    pub(crate) document: Option<&'a TelegramFileRef>,
+    pub(crate) video: Option<&'a TelegramFileRef>,
+    pub(crate) audio: Option<&'a TelegramFileRef>,
+    pub(crate) voice: Option<&'a TelegramVoice>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TelegramFileRef {
     #[serde(rename = "file_id")]
@@ -71,8 +82,7 @@ impl TelegramPlatform {
     async fn save_telegram_file(&self, file_id: &str) -> Option<SavedInboundMedia> {
         match self.download_telegram_file(file_id).await {
             Ok((bytes, content_type)) => {
-                match inbound_media::save_bytes_to_media_dir(&bytes, Some(&content_type)).await
-                {
+                match inbound_media::save_bytes_to_media_dir(&bytes, Some(&content_type)).await {
                     Ok(item) => Some(item),
                     Err(e) => {
                         warn!("Failed to save Telegram file {}: {}", file_id, e);
@@ -89,54 +99,44 @@ impl TelegramPlatform {
 
     pub(crate) async fn resolve_inbound_content(
         &self,
-        text: Option<&str>,
-        caption: Option<&str>,
-        photo: Option<&[TelegramPhotoSize]>,
-        document: Option<&TelegramFileRef>,
-        video: Option<&TelegramFileRef>,
-        audio: Option<&TelegramFileRef>,
-        voice: Option<&TelegramVoice>,
+        inbound: InboundContent<'_>,
     ) -> Result<String> {
         let mut saved = Vec::new();
-        let user_text = text
+        let user_text = inbound
+            .text
             .filter(|t| !t.is_empty())
-            .or(caption.filter(|t| !t.is_empty()))
+            .or(inbound.caption.filter(|t| !t.is_empty()))
             .unwrap_or("")
             .to_string();
 
-        if let Some(photos) = photo {
+        if let Some(photos) = inbound.photo {
             if let Some(largest) = photos.last() {
-                if let Some(item) = self.save_telegram_file(&largest.file_id).await
-                {
+                if let Some(item) = self.save_telegram_file(&largest.file_id).await {
                     saved.push(item);
                 }
             }
         }
 
-        if let Some(doc) = document {
-            if let Some(item) = self.save_telegram_file(&doc.file_id).await
-            {
+        if let Some(doc) = inbound.document {
+            if let Some(item) = self.save_telegram_file(&doc.file_id).await {
                 saved.push(item);
             }
         }
 
-        if let Some(vid) = video {
-            if let Some(item) = self.save_telegram_file(&vid.file_id).await
-            {
+        if let Some(vid) = inbound.video {
+            if let Some(item) = self.save_telegram_file(&vid.file_id).await {
                 saved.push(item);
             }
         }
 
-        if let Some(aud) = audio {
-            if let Some(item) = self.save_telegram_file(&aud.file_id).await
-            {
+        if let Some(aud) = inbound.audio {
+            if let Some(item) = self.save_telegram_file(&aud.file_id).await {
                 saved.push(item);
             }
         }
 
-        if let Some(v) = voice {
-            if let Some(item) = self.save_telegram_file(&v.file_id).await
-            {
+        if let Some(v) = inbound.voice {
+            if let Some(item) = self.save_telegram_file(&v.file_id).await {
                 saved.push(item);
             }
         }

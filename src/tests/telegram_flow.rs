@@ -1,7 +1,7 @@
-use crate::runtime::file_delivery::McpDeliveryTarget;
 use crate::config::model::{AgentProfiles, TelegramConfig};
 use crate::db;
 use crate::platform::telegram::TelegramPlatform;
+use crate::runtime::file_delivery::McpDeliveryTarget;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::channel_model::{AgentSession, AgentSessionState};
 
@@ -85,7 +85,11 @@ fn telegram_bot_commands_payload_uses_valid_menu_commands() {
         "quit",
     ];
     for name in expected {
-        assert!(names.contains(&name), "missing telegram menu command: {}", name);
+        assert!(
+            names.contains(&name),
+            "missing telegram menu command: {}",
+            name
+        );
     }
     assert_eq!(names.len(), expected.len());
     assert!(names

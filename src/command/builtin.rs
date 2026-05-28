@@ -249,8 +249,7 @@ pub fn render_file_list(
     let visible_rows = max_visible_rows.min(total_rows.saturating_sub(scroll_row));
 
     let mut lines = Vec::with_capacity(visible_rows);
-    for idx in scroll_row..scroll_row + visible_rows {
-        let (name, _is_dir) = &items[idx];
+    for (idx, (name, _is_dir)) in items.iter().enumerate().skip(scroll_row).take(visible_rows) {
         lines.push(file_cell(name, idx == selected));
     }
 
@@ -324,9 +323,7 @@ pub(crate) fn interactive_select_with_backend(
 
         match backend.read_key() {
             Some(crossterm::event::KeyCode::Up) => {
-                if selected > 0 {
-                    selected -= 1;
-                }
+                selected = selected.saturating_sub(1);
             }
             Some(crossterm::event::KeyCode::Down) => {
                 if selected < items.len().saturating_sub(1) {
@@ -407,7 +404,10 @@ pub(crate) fn interactive_select_for_history(items: &[(String, bool)]) -> Select
     interactive_select_with_prompt(items, crate::t!("builtin.select_history_prompt"))
 }
 
-pub(crate) fn interactive_select_with_prompt(items: &[(String, bool)], prompt: &str) -> SelectAction {
+pub(crate) fn interactive_select_with_prompt(
+    items: &[(String, bool)],
+    prompt: &str,
+) -> SelectAction {
     struct PauseGuard;
     impl Drop for PauseGuard {
         fn drop(&mut self) {

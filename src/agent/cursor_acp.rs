@@ -125,6 +125,13 @@ impl CursorAcpSession {
         } else {
             config.mode.trim()
         };
+        if resume_session_id.is_some()
+            && (config.default_args.contains("--yolo") || config.default_args.contains("--print"))
+        {
+            let _ = event_tx.send(AgentEvent::Text(
+                crate::t!("cursor.resume_may_ignore_flags").to_string(),
+            ));
+        }
         let result = if let Some(ref sid) = resume_session_id {
             match session
                 .send_request(
@@ -144,9 +151,10 @@ impl CursorAcpSession {
                     // If the stored session id is no longer recognized, fall back to starting a new session.
                     let err = e.to_string();
                     if is_cursor_session_not_found_error(&err) {
-                        let _ = event_tx.send(AgentEvent::Text(
-                            "Cursor session not found; starting a new session.".to_string(),
-                        ));
+                        let _ = event_tx.send(AgentEvent::Text(crate::t_fmt!(
+                            "cursor.session_not_found_new_session",
+                            ID = sid
+                        )));
                         session
                             .send_request(
                                 "session/new",
@@ -246,6 +254,13 @@ impl CursorAcpSession {
         .await;
         let _ = self.child.kill().await;
         info!("Cursor ACP session stopped");
+        Ok(())
+    }
+
+    pub async fn force_stop(mut self) -> Result<()> {
+        // Do not attempt any JSON-RPC shutdown — just kill immediately.
+        let _ = self.child.kill().await;
+        info!("Cursor ACP session force-stopped");
         Ok(())
     }
 

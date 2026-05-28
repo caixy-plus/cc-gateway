@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use tracing::{error, info, warn};
 
 use crate::config::model::effective_session_retention_per_channel;
-use crate::session::channel_model::{ChannelSession, AgentSession, SessionSource};
+use crate::session::channel_model::{AgentSession, ChannelSession, SessionSource};
 use chrono::{DateTime, Utc};
 
 fn clamp_session_retention_per_channel(max_per_channel: usize) -> usize {
@@ -195,16 +195,11 @@ pub fn is_daemon_running() -> bool {
 
 /// Last activity time for retention: prefer session `updated_at`, then `created_at`.
 fn session_last_updated_at(session: &AgentSession) -> DateTime<Utc> {
-    session
-        .updated_at
-        .unwrap_or(session.created_at)
+    session.updated_at.unwrap_or(session.created_at)
 }
 
 fn remove_agent_session_record(session: &AgentSession) {
-    let file_id = session
-        .provider_session_id
-        .as_ref()
-        .unwrap_or(&session.id);
+    let file_id = session.provider_session_id.as_ref().unwrap_or(&session.id);
     if let Some(home) = dirs::home_dir() {
         let history_file = home
             .join(".cc-gateway")
@@ -218,18 +213,13 @@ fn remove_agent_session_record(session: &AgentSession) {
 /// Pick up to `max` sessions per channel: pin the latest-updated per work_dir, then fill by
 /// `updated_at` (newest first). When work_dir count exceeds `max`, only the newest `max` pinned
 /// sessions survive.
-pub(crate) fn select_sessions_to_keep(
-    sessions: &[AgentSession],
-    max: usize,
-) -> HashSet<String> {
+pub(crate) fn select_sessions_to_keep(sessions: &[AgentSession], max: usize) -> HashSet<String> {
     if sessions.len() <= max {
         return sessions.iter().map(|s| s.id.clone()).collect();
     }
 
     let mut by_time: Vec<&AgentSession> = sessions.iter().collect();
-    by_time.sort_by(|a, b| {
-        session_last_updated_at(b).cmp(&session_last_updated_at(a))
-    });
+    by_time.sort_by_key(|s| std::cmp::Reverse(session_last_updated_at(s)));
 
     let mut pinned_by_work_dir: HashMap<&str, &AgentSession> = HashMap::new();
     for session in &by_time {
@@ -245,9 +235,7 @@ pub(crate) fn select_sessions_to_keep(
 
     if keep.len() > max {
         let mut pinned: Vec<&AgentSession> = pinned_by_work_dir.values().copied().collect();
-        pinned.sort_by(|a, b| {
-            session_last_updated_at(b).cmp(&session_last_updated_at(a))
-        });
+        pinned.sort_by_key(|s| std::cmp::Reverse(session_last_updated_at(s)));
         keep = pinned
             .into_iter()
             .take(max)
@@ -278,7 +266,7 @@ fn ensure_canonical_tui_channel(channels: &[ChannelSession]) -> String {
     let channel = ChannelSession {
         id: uuid::Uuid::new_v4().to_string(),
         title: "tui tui".to_string(),
-        source: SessionSource::TUI,
+        source: SessionSource::Tui,
         platform: "tui".to_string(),
         channel_id: CANONICAL_TUI_CHANNEL_ID.to_string(),
         work_dir: shellexpand::tilde("~").to_string(),
@@ -305,8 +293,7 @@ pub fn consolidate_stale_tui_channels_when(tui_running: bool) -> usize {
             continue;
         }
 
-        let reassigned =
-            crate::db::reassign_agent_sessions_channel(&channel.id, &canonical_id);
+        let reassigned = crate::db::reassign_agent_sessions_channel(&channel.id, &canonical_id);
         if reassigned > 0 {
             info!(
                 "Reassigned {} TUI Claude sessions from channel {} to canonical {}",

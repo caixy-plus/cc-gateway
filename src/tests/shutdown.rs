@@ -3,14 +3,14 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::sync::Mutex;
 
-use crate::runtime::controller::AgentController;
 use crate::command::router::CommandRouter;
 use crate::config::model::AgentProfiles;
 use crate::platform::feishu::FeishuChannelRuntime;
 use crate::platform::telegram::TelegramChannelRuntime;
+use crate::runtime::controller::AgentController;
 use crate::session::channel_manager::ActiveAgentRuntime;
 use crate::session::channel_model::{
-    ChannelSession, AgentSession, AgentSessionState, SessionSource,
+    AgentSession, AgentSessionState, ChannelSession, SessionSource,
 };
 
 fn channel(source: SessionSource, platform: &str, channel_id: &str) -> ChannelSession {

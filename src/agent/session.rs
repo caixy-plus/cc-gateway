@@ -3,10 +3,10 @@ use tokio::sync::mpsc;
 
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
+use crate::config::model::{AgentConfig, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{InputMessage, OutputEvent};
 use crate::runtime::session::StreamJsonSession;
-use crate::config::model::{AgentConfig, AgentProvider};
 
 pub enum AgentRuntime {
     Claude(StreamJsonSession),
@@ -95,6 +95,17 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Claude(session) => session.stop().await,
             AgentRuntime::Cursor(session) => session.stop().await,
+        }
+    }
+
+    /// Force-stop the underlying provider process immediately.
+    ///
+    /// This is used for gateway control commands (e.g. `/quit`) which must be
+    /// responsive even if the provider is stuck or busy.
+    pub async fn force_stop(self) -> Result<()> {
+        match self {
+            AgentRuntime::Claude(session) => session.force_stop().await,
+            AgentRuntime::Cursor(session) => session.force_stop().await,
         }
     }
 

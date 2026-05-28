@@ -5,6 +5,7 @@ mod command_router;
 mod config_model;
 mod core_flow;
 mod daemon_cleaner;
+mod daemon_webui;
 mod feishu_cards;
 mod feishu_flow;
 mod feishu_utils;

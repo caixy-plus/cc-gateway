@@ -1,4 +1,6 @@
-use crate::platform::inbound_media::{format_agent_message, generate_storage_filename, SavedInboundMedia};
+use crate::platform::inbound_media::{
+    format_agent_message, generate_storage_filename, SavedInboundMedia,
+};
 use std::path::PathBuf;
 
 #[test]

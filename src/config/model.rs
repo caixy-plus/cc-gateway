@@ -26,9 +26,10 @@ pub struct LogConfig {
     pub max_size_mb: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentProvider {
+    #[default]
     Claude,
     Cursor,
 }
@@ -105,11 +106,10 @@ pub const MIN_SESSION_RETENTION_PER_CHANNEL: u64 = 10;
 pub const MAX_SESSION_RETENTION_PER_CHANNEL: u64 = 100;
 
 pub fn effective_session_retention_per_channel(configured: u64) -> usize {
-    configured
-        .clamp(
-            MIN_SESSION_RETENTION_PER_CHANNEL,
-            MAX_SESSION_RETENTION_PER_CHANNEL,
-        ) as usize
+    configured.clamp(
+        MIN_SESSION_RETENTION_PER_CHANNEL,
+        MAX_SESSION_RETENTION_PER_CHANNEL,
+    ) as usize
 }
 
 impl Default for LogConfig {
@@ -120,12 +120,6 @@ impl Default for LogConfig {
             max_lines: 100_000,
             max_size_mb: 50,
         }
-    }
-}
-
-impl Default for AgentProvider {
-    fn default() -> Self {
-        AgentProvider::Claude
     }
 }
 

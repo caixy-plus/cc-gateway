@@ -78,3 +78,7 @@ fi
 
 echo "4. 重启 cc-gateway..."
 cc-gateway restart
+
+echo ""
+echo "5. 打开 WebUI（如未启动会自动 start）"
+cc-gateway webui || true

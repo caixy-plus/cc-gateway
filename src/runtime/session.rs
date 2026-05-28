@@ -9,10 +9,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::config::model::AgentConfig;
 use crate::runtime::file_delivery::MCP_TARGET_ENV;
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{InputMessage, OutputEvent};
-use crate::config::model::AgentConfig;
 
 #[derive(Debug, Deserialize)]
 struct AgentSessionFile {
@@ -240,8 +240,7 @@ impl StreamJsonSession {
             if session_path.exists() {
                 match tokio::fs::read_to_string(&session_path).await {
                     Ok(content) => {
-                        if let Ok(session_file) =
-                            serde_json::from_str::<AgentSessionFile>(&content)
+                        if let Ok(session_file) = serde_json::from_str::<AgentSessionFile>(&content)
                         {
                             info!(
                                 "Extracted Claude session id: {} from pid {}",
@@ -291,6 +290,12 @@ impl StreamJsonSession {
 
         info!("Claude session stopped");
         Ok(())
+    }
+
+    pub async fn force_stop(self) -> Result<()> {
+        // Same as stop() today: immediately kill the process.
+        // Kept separate so higher layers can explicitly choose "force".
+        self.stop().await
     }
 
     /// Check whether the child process is still running.

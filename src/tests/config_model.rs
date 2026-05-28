@@ -1,6 +1,6 @@
 use crate::config::loader::upgrade_config_json;
 use crate::config::model::{
-    effective_session_retention_per_channel, AgentConfig, AgentProvider, AgentProfiles,
+    effective_session_retention_per_channel, AgentConfig, AgentProfiles, AgentProvider,
     FeishuConfig, GatewayConfig, LogConfig, MAX_SESSION_RETENTION_PER_CHANNEL,
     MIN_SESSION_RETENTION_PER_CHANNEL,
 };

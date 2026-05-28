@@ -14,10 +14,10 @@ use tokio::sync::Mutex;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tracing::info;
 
-use crate::runtime::controller::AgentController;
-use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::command::CommandAction;
 use crate::config::model::AgentProfiles;
+use crate::runtime::controller::AgentController;
+use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::web::state::{broadcast_event, EVENT_BUS};
 
@@ -29,11 +29,22 @@ pub struct AppState {
     pub daemon_config_path: Option<PathBuf>,
 }
 
+// ---------------------------------------------------------------------------
+// Output buffering policy (WebUI / SSE)
+// ---------------------------------------------------------------------------
+
+const WEBUI_FLUSH_INTERVAL_MS: u64 = 100;
+const WEBUI_MAX_BUFFER_CHARS: usize = 2000;
+
 async fn ensure_webui_channel(default_dir: &str) -> anyhow::Result<String> {
     let runtime = GLOBAL_CHANNEL_SESSIONS
         .get_or_create_webui_channel("WebUI", default_dir)
         .await?;
     Ok(runtime.channel_session.id.clone())
+}
+
+fn json_error(key: &str, msg: impl Into<String>) -> serde_json::Value {
+    json!({ "error_key": key, "error": msg.into() })
 }
 
 pub async fn handle_events() -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
@@ -127,7 +138,10 @@ pub async fn handle_create_session(
     let channel_id = match ensure_webui_channel(&state.default_dir).await {
         Ok(id) => id,
         Err(e) => {
-            let body = json!({ "error": format!("Failed to ensure WebUI channel: {}", e) });
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to ensure WebUI channel: {}", e),
+            );
             return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
@@ -164,7 +178,10 @@ pub async fn handle_create_session(
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json!({ "error": format!("Failed to create session: {}", e) });
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to create session: {}", e),
+            );
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
@@ -177,23 +194,23 @@ pub async fn handle_start_session(
     let channel_id = match ensure_webui_channel(&state.default_dir).await {
         Ok(id) => id,
         Err(e) => {
-            let body = json!({ "error": format!("Failed to ensure WebUI channel: {}", e) });
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to ensure WebUI channel: {}", e),
+            );
             return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
 
-    // If this session is already the active one, nothing to do
-    if let Some(active) = GLOBAL_CHANNEL_SESSIONS.get_active_agent_session(&channel_id) {
-        if active.id == session_id {
+    // WebUI supports multiple sessions running concurrently under one channel.
+    // If this session is already running, nothing to do.
+    if let Some(active) = GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id) {
+        let ctrl = active.controller.lock().await;
+        if ctrl.is_session_active().await {
             let body = json!({ "status": "already_active" });
             return (StatusCode::OK, body.to_string());
         }
     }
-
-    // Stop any existing session + poller before starting a new one
-    let _ = GLOBAL_CHANNEL_SESSIONS
-        .stop_channel_session(&channel_id)
-        .await;
 
     match GLOBAL_CHANNEL_SESSIONS
         .resume_agent_session_runtime(
@@ -207,12 +224,24 @@ pub async fn handle_start_session(
         Ok(active) => {
             let session = active.agent_session.clone();
             let controller = active.controller.clone();
-            GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, Some(active));
+            GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, active);
 
             // Start long-running poller for this session
-            let abort_handle =
-                spawn_webui_poller_task(channel_id.clone(), session.id.clone(), controller.clone());
-            GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(&channel_id, Some(abort_handle));
+            if !GLOBAL_CHANNEL_SESSIONS
+                .has_webui_poll_handle(&channel_id, &session.id)
+                .await
+            {
+                let abort_handle = spawn_webui_poller_task(
+                    channel_id.clone(),
+                    session.id.clone(),
+                    controller.clone(),
+                );
+                GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(
+                    &channel_id,
+                    &session.id,
+                    abort_handle,
+                );
+            }
 
             let channel = GLOBAL_CHANNEL_SESSIONS.get_channel(&channel_id);
             let body = json!({
@@ -233,7 +262,10 @@ pub async fn handle_start_session(
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json!({ "error": format!("Failed to start session: {}", e) });
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to start session: {}", e),
+            );
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
@@ -252,72 +284,62 @@ pub async fn handle_send_message(
     let channel_id = match ensure_webui_channel(&state.default_dir).await {
         Ok(id) => id,
         Err(e) => {
-            let body = json!({ "error": format!("Failed to ensure WebUI channel: {}", e) });
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to ensure WebUI channel: {}", e),
+            );
             return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
     let message = req.message.trim().to_string();
     if message.is_empty() {
-        let body = json!({ "error": crate::t!("webui.empty_message") });
+        let body = json_error("webui.empty_message", crate::t!("webui.empty_message"));
         return (StatusCode::BAD_REQUEST, body.to_string());
     }
 
-    // Check if the requested session is the currently active one
-    let active_session = GLOBAL_CHANNEL_SESSIONS.get_active_agent_session(&channel_id);
-    let needs_switch = match &active_session {
-        Some(s) if s.id == session_id => false,
-        _ => true,
-    };
-
-    if needs_switch {
-        // Stop existing session + poller before switching
-        let _ = GLOBAL_CHANNEL_SESSIONS
-            .stop_channel_session(&channel_id)
-            .await;
-
-        // Try to resume the requested session
-        match GLOBAL_CHANNEL_SESSIONS
-            .resume_agent_session_runtime(
-                &session_id,
-                &state.default_dir,
-                state.agent_settings.clone(),
-                state.show_thinking,
-            )
-            .await
-        {
-            Ok(active) => {
-                let session = active.agent_session.clone();
-                let controller = active.controller.clone();
-                GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, Some(active));
-
-                // Start long-running poller for the resumed session
-                let abort_handle = spawn_webui_poller_task(
-                    channel_id.clone(),
-                    session.id.clone(),
-                    controller.clone(),
-                );
-                GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(&channel_id, Some(abort_handle));
-            }
-            Err(e) => {
-                let body = json!({ "error": format!("Session not active and could not be resumed: {}", e) });
-                return (StatusCode::NOT_FOUND, body.to_string());
-            }
-        }
-    }
-
-    let runtime = match GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
-        Some(r) => r,
-        None => {
-            let body = json!({ "error": crate::t!("webui.runtime_not_found") });
-            return (StatusCode::NOT_FOUND, body.to_string());
-        }
-    };
-
-    let mut active = match runtime.active_agent {
+    // Ensure the session runtime is active (WebUI supports multiple active sessions).
+    let mut active = match GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id)
+    {
         Some(a) => a,
         None => {
-            let body = json!({ "error": crate::t!("webui.no_active_session") });
-            return (StatusCode::NOT_FOUND, body.to_string());
+            match GLOBAL_CHANNEL_SESSIONS
+                .resume_agent_session_runtime(
+                    &session_id,
+                    &state.default_dir,
+                    state.agent_settings.clone(),
+                    state.show_thinking,
+                )
+                .await
+            {
+                Ok(active) => {
+                    let session = active.agent_session.clone();
+                    let controller = active.controller.clone();
+                    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, active.clone());
+                    if !GLOBAL_CHANNEL_SESSIONS
+                        .has_webui_poll_handle(&channel_id, &session.id)
+                        .await
+                    {
+                        let abort_handle = spawn_webui_poller_task(
+                            channel_id.clone(),
+                            session.id.clone(),
+                            controller.clone(),
+                        );
+                        GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(
+                            &channel_id,
+                            &session.id,
+                            abort_handle,
+                        );
+                    }
+                    active
+                }
+                Err(e) => {
+                    let body = json_error(
+                        "webui.session_not_found",
+                        format!("Session not active and could not be resumed: {}", e),
+                    );
+                    return (StatusCode::NOT_FOUND, body.to_string());
+                }
+            }
         }
     };
 
@@ -326,9 +348,8 @@ pub async fn handle_send_message(
         let ctrl = active.controller.lock().await;
         if !ctrl.is_session_active().await {
             drop(ctrl);
-            // Stop the dead session + poller first
             let _ = GLOBAL_CHANNEL_SESSIONS
-                .stop_channel_session(&channel_id)
+                .stop_webui_session(&channel_id, &session_id)
                 .await;
 
             match GLOBAL_CHANNEL_SESSIONS
@@ -343,20 +364,31 @@ pub async fn handle_send_message(
                 Ok(new_active) => {
                     let session = new_active.agent_session.clone();
                     let controller = new_active.controller.clone();
-                    GLOBAL_CHANNEL_SESSIONS
-                        .set_webui_active_agent(&channel_id, Some(new_active.clone()));
+                    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, new_active.clone());
                     active = new_active;
 
                     // Start long-running poller for the restarted session
-                    let abort_handle = spawn_webui_poller_task(
-                        channel_id.clone(),
-                        session.id.clone(),
-                        controller.clone(),
-                    );
-                    GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(&channel_id, Some(abort_handle));
+                    if !GLOBAL_CHANNEL_SESSIONS
+                        .has_webui_poll_handle(&channel_id, &session.id)
+                        .await
+                    {
+                        let abort_handle = spawn_webui_poller_task(
+                            channel_id.clone(),
+                            session.id.clone(),
+                            controller.clone(),
+                        );
+                        GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(
+                            &channel_id,
+                            &session.id,
+                            abort_handle,
+                        );
+                    }
                 }
                 Err(e) => {
-                    let body = json!({ "error": format!("Session died and could not be restarted: {}", e) });
+                    let body = json_error(
+                        "webui.failed_stop_session",
+                        format!("Session died and could not be restarted: {}", e),
+                    );
                     return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
                 }
             }
@@ -407,8 +439,10 @@ pub async fn handle_send_message(
                     (StatusCode::OK, body.to_string())
                 }
                 Err(e) => {
-                    let body =
-                        json!({ "error": crate::t_fmt!("webui.failed_stop_session", ERR = e) });
+                    let body = json_error(
+                        "webui.failed_stop_session",
+                        crate::t_fmt!("webui.failed_stop_session", ERR = e),
+                    );
                     (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
                 }
             }
@@ -450,14 +484,14 @@ async fn ensure_webui_poller_task(
     controller: std::sync::Arc<Mutex<AgentController>>,
 ) {
     if GLOBAL_CHANNEL_SESSIONS
-        .has_webui_poll_handle(channel_id)
+        .has_webui_poll_handle(channel_id, session_id)
         .await
     {
         return;
     }
     let abort_handle =
         spawn_webui_poller_task(channel_id.to_string(), session_id.to_string(), controller);
-    GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(channel_id, Some(abort_handle));
+    GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(channel_id, session_id, abort_handle);
 }
 
 pub async fn handle_stop_session(Path(session_id): Path<String>) -> (StatusCode, String) {
@@ -467,21 +501,16 @@ pub async fn handle_stop_session(Path(session_id): Path<String>) -> (StatusCode,
     {
         Some(id) => id,
         None => {
-            let body = json!({ "error": crate::t!("webui.session_not_found") });
+            let body = json_error(
+                "webui.session_not_found",
+                crate::t!("webui.session_not_found"),
+            );
             return (StatusCode::NOT_FOUND, body.to_string());
         }
     };
 
-    // Gracefully stop controller first
-    if let Some(runtime) = GLOBAL_CHANNEL_SESSIONS.get_webui_runtime(&channel_id) {
-        if let Some(ref active) = runtime.active_agent {
-            let ctrl = active.controller.lock().await;
-            let _ = ctrl.stop_session().await;
-        }
-    }
-
     match GLOBAL_CHANNEL_SESSIONS
-        .stop_channel_session(&channel_id)
+        .stop_webui_session(&channel_id, &session_id)
         .await
     {
         Ok(()) => {
@@ -489,7 +518,10 @@ pub async fn handle_stop_session(Path(session_id): Path<String>) -> (StatusCode,
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json!({ "error": format!("Failed to stop session: {}", e) });
+            let body = json_error(
+                "webui.failed_stop_session",
+                format!("Failed to stop session: {}", e),
+            );
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
@@ -501,7 +533,7 @@ pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, 
     let history_dir = match dirs::home_dir() {
         Some(h) => h.join(".cc-gateway").join("history"),
         None => {
-            let body = json!({ "error": crate::t!("webui.home_dir_error") });
+            let body = json_error("webui.home_dir_error", crate::t!("webui.home_dir_error"));
             return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
@@ -533,7 +565,10 @@ pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, 
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json!({ "error": format!("Failed to read history: {}", e) });
+            let body = json_error(
+                "webui.session_not_found",
+                format!("Failed to read history: {}", e),
+            );
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
@@ -545,7 +580,10 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
         .map(|s| s.active)
         .unwrap_or(false)
     {
-        let body = json!({ "error": crate::t!("webui.cannot_delete_active") });
+        let body = json_error(
+            "webui.cannot_delete_active",
+            crate::t!("webui.cannot_delete_active"),
+        );
         return (StatusCode::CONFLICT, body.to_string());
     }
 
@@ -556,7 +594,10 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
         .unwrap_or_else(|| session_id.clone());
 
     if !GLOBAL_CHANNEL_SESSIONS.remove_agent_session(&session_id) {
-        let body = json!({ "error": crate::t!("webui.cannot_delete_active") });
+        let body = json_error(
+            "webui.cannot_delete_active",
+            crate::t!("webui.cannot_delete_active"),
+        );
         return (StatusCode::CONFLICT, body.to_string());
     }
 
@@ -606,13 +647,22 @@ impl EventPollSink for WebUIEventSink {
         &mut self,
         request_id: &str,
         tool_name: &str,
-        _input: Option<&serde_json::Value>,
+        input: Option<&serde_json::Value>,
     ) -> anyhow::Result<()> {
-        let card = crate::t_fmt!(
+        let mut card = crate::t_fmt!(
             "webui.permission_request",
             NAME = tool_name,
             ID = request_id
         );
+        if let Some(input) = input {
+            let pretty = serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
+            card.push_str("\n\n");
+            card.push_str(crate::t!("webui.permission_request_input"));
+            card.push('\n');
+            card.push_str("```json\n");
+            card.push_str(&pretty);
+            card.push_str("\n```");
+        }
         broadcast_event(&self.session_id, "webui", &self.session_id, "system", &card);
         Ok(())
     }
@@ -695,13 +745,19 @@ fn spawn_webui_poller_task(
                     );
                     break;
                 }
-                AgentEventPoller::from_controller(&*ctrl)
+                AgentEventPoller::from_controller(&ctrl)
             };
 
-            let mut sink = WebUIEventSink {
+            let sink = WebUIEventSink {
                 session_id: session_id.clone(),
             };
-            if let Err(e) = poller.run(&mut sink).await {
+            // WebUI: local/SSE, allow higher flush frequency.
+            let mut sink = crate::runtime::event_poller::BufferedSink::new(
+                sink,
+                std::time::Duration::from_millis(WEBUI_FLUSH_INTERVAL_MS),
+                WEBUI_MAX_BUFFER_CHARS,
+            );
+            if let Err(e) = poller.run_buffered(&mut sink).await {
                 tracing::warn!("[WebUI] Poller error for session {}: {}", session_id, e);
             }
 

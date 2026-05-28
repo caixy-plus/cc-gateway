@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::runtime::mcp_server::McpContext;
 use crate::command::router::CommandAction;
-use crate::config::model::{AgentProvider, AgentProfiles};
+use crate::config::model::{AgentProfiles, AgentProvider};
+use crate::runtime::mcp_server::McpContext;
 use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
 use crate::session::channel_model::AgentSession;
 use crate::{t, t_fmt};
@@ -212,10 +212,9 @@ impl ChatCommandExecutor {
             CommandAction::SelectChannelAgent { provider: explicit } => {
                 if let Some(selected) = explicit {
                     let name = crate::command::agents::provider_display_name(&selected);
-                    match GLOBAL_CHANNEL_SESSIONS.set_channel_default_provider(
-                        &context.channel_id,
-                        selected,
-                    ) {
+                    match GLOBAL_CHANNEL_SESSIONS
+                        .set_channel_default_provider(&context.channel_id, selected)
+                    {
                         Ok(()) => Ok(ChatCommandOutcome::Reply(t_fmt!(
                             "builtin.channel_agent_set",
                             NAME = name
@@ -226,10 +225,8 @@ impl ChatCommandExecutor {
                         ))),
                     }
                 } else {
-                    let current = GLOBAL_CHANNEL_SESSIONS.effective_channel_provider(
-                        &context.channel_id,
-                        &self.agent_settings,
-                    );
+                    let current = GLOBAL_CHANNEL_SESSIONS
+                        .effective_channel_provider(&context.channel_id, &self.agent_settings);
                     let options: Vec<(String, String)> =
                         crate::command::agents::available_providers()
                             .into_iter()
@@ -265,16 +262,18 @@ impl ChatCommandExecutor {
                     });
                 match GLOBAL_CHANNEL_SESSIONS
                     .start_agent_session_for_platform(
-                        &context.channel_id,
-                        &context.title,
-                        &self.default_dir,
-                        self.agent_settings.clone(),
-                        self.show_thinking,
-                        args,
-                        None,
-                        Some(effective_dir.clone()),
-                        context.mcp_context.clone(),
-                        provider,
+                        crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                            channel_id: context.channel_id.clone(),
+                            title: context.title.clone(),
+                            default_dir: self.default_dir.clone(),
+                            agent_settings: self.agent_settings.clone(),
+                            show_thinking: self.show_thinking,
+                            args,
+                            resume_session_id: None,
+                            work_dir_override: Some(effective_dir.clone()),
+                            mcp_context: context.mcp_context.clone(),
+                            provider_override: provider,
+                        },
                     )
                     .await
                 {
@@ -289,10 +288,7 @@ impl ChatCommandExecutor {
                         })
                     }
                     Err(e) => Ok(ChatCommandOutcome::Error(
-                        crate::command::agents::failed_start_agent_message(
-                            &resolved_provider,
-                            e,
-                        ),
+                        crate::command::agents::failed_start_agent_message(&resolved_provider, e),
                     )),
                 }
             }
@@ -321,16 +317,18 @@ impl ChatCommandExecutor {
                             );
                             match GLOBAL_CHANNEL_SESSIONS
                                 .start_agent_session_for_platform(
-                                    &context.channel_id,
-                                    &context.title,
-                                    &self.default_dir,
-                                    self.agent_settings.clone(),
-                                    self.show_thinking,
-                                    vec![],
-                                    None,
-                                    Some(work_dir),
-                                    context.mcp_context.clone(),
-                                    Some(auto_provider.clone()),
+                                    crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                                        channel_id: context.channel_id.clone(),
+                                        title: context.title.clone(),
+                                        default_dir: self.default_dir.clone(),
+                                        agent_settings: self.agent_settings.clone(),
+                                        show_thinking: self.show_thinking,
+                                        args: vec![],
+                                        resume_session_id: None,
+                                        work_dir_override: Some(work_dir),
+                                        mcp_context: context.mcp_context.clone(),
+                                        provider_override: Some(auto_provider.clone()),
+                                    },
                                 )
                                 .await
                             {
@@ -385,5 +383,4 @@ impl ChatCommandExecutor {
             work_dir,
         })
     }
-
 }

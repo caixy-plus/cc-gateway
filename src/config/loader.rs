@@ -93,9 +93,16 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
                 "claude": {},
                 "cursor": {}
             });
-            let profile_key = if provider == "cursor" { "cursor" } else { "claude" };
+            let profile_key = if provider == "cursor" {
+                "cursor"
+            } else {
+                "claude"
+            };
             if let Some(profiles_obj) = profiles.as_object_mut() {
-                if let Some(profile) = profiles_obj.get_mut(profile_key).and_then(|v| v.as_object_mut()) {
+                if let Some(profile) = profiles_obj
+                    .get_mut(profile_key)
+                    .and_then(|v| v.as_object_mut())
+                {
                     for key in ["cli_path", "default_args", "mode", "permission"] {
                         if let Some(v) = agent.get(key) {
                             profile.insert(key.to_string(), v.clone());
@@ -144,7 +151,10 @@ mod tests {
         });
         let upgraded = upgrade_config_json(raw);
         let config: GatewayConfig = serde_json::from_value(upgraded).unwrap();
-        assert_eq!(config.agent.effective_config().provider, AgentProvider::Cursor);
+        assert_eq!(
+            config.agent.effective_config().provider,
+            AgentProvider::Cursor
+        );
         assert_eq!(config.agent.effective_config().cli_path, "cursor-agent");
     }
 }

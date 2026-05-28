@@ -9,7 +9,7 @@ use crate::daemon::cleaner::{
     run_cleanup_cycle, select_sessions_to_keep, trim_log_file,
 };
 use crate::session::channel_model::{
-    ChannelSession, AgentSession, AgentSessionState, SessionSource,
+    AgentSession, AgentSessionState, ChannelSession, SessionSource,
 };
 use crate::tests::helpers::TestEnv;
 
@@ -217,13 +217,7 @@ fn clean_excess_sessions_prunes_by_updated_at_not_created_at() {
     insert_telegram_channel("tg-updated");
 
     let base = Utc::now();
-    insert_agent_session(
-        "tg-updated",
-        "keep-me",
-        "/tmp",
-        base,
-        base,
-    );
+    insert_agent_session("tg-updated", "keep-me", "/tmp", base, base);
     insert_agent_session(
         "tg-updated",
         "drop-me",
@@ -331,7 +325,13 @@ fn clean_excess_sessions_keeps_newest_per_work_dir_when_dirs_exceed_cap() {
     let base = Utc::now();
     for i in 0..35 {
         let at = base - chrono::Duration::seconds(i);
-        insert_agent_session("tg-dirs", &format!("s-{i:02}"), &format!("/project/{i:02}"), at, at);
+        insert_agent_session(
+            "tg-dirs",
+            &format!("s-{i:02}"),
+            &format!("/project/{i:02}"),
+            at,
+            at,
+        );
     }
 
     clean_excess_sessions(30);
@@ -378,7 +378,7 @@ fn consolidate_stale_tui_channels_preserves_agent_sessions() {
     let canonical = ChannelSession {
         id: "tui-canonical".to_string(),
         title: "TUI".to_string(),
-        source: SessionSource::TUI,
+        source: SessionSource::Tui,
         platform: "tui".to_string(),
         channel_id: "tui".to_string(),
         work_dir: "/tmp".to_string(),
@@ -388,7 +388,7 @@ fn consolidate_stale_tui_channels_preserves_agent_sessions() {
     let stale = ChannelSession {
         id: "tui-stale".to_string(),
         title: "TUI old".to_string(),
-        source: SessionSource::TUI,
+        source: SessionSource::Tui,
         platform: "tui".to_string(),
         channel_id: "tui-history".to_string(),
         work_dir: "/tmp".to_string(),
@@ -402,11 +402,9 @@ fn consolidate_stale_tui_channels_preserves_agent_sessions() {
 
     let removed = consolidate_stale_tui_channels_when(false);
     assert_eq!(removed, 1);
-    assert!(
-        !crate::db::load_all_channel_sessions()
-            .iter()
-            .any(|c| c.id == "tui-stale")
-    );
+    assert!(!crate::db::load_all_channel_sessions()
+        .iter()
+        .any(|c| c.id == "tui-stale"));
 
     let sessions = crate::db::load_agent_sessions_by_channel_id("tui-canonical");
     assert_eq!(sessions.len(), 1);
@@ -419,7 +417,7 @@ fn consolidate_stale_tui_channels_preserves_agent_sessions() {
 
 #[tokio::test]
 async fn run_cleanup_cycle_trims_log_and_prunes_sessions() {
-    let _guard = cleaner_test_guard();
+    let guard = cleaner_test_guard();
     let _env = TestEnv::new();
     crate::db::init_schema().unwrap();
     insert_telegram_channel("cycle-channel");
@@ -427,7 +425,13 @@ async fn run_cleanup_cycle_trims_log_and_prunes_sessions() {
     let base = Utc::now();
     for i in 0..32 {
         let created = base - chrono::Duration::seconds(i);
-        insert_agent_session("cycle-channel", &format!("cycle-{i:02}"), "/tmp", created, created);
+        insert_agent_session(
+            "cycle-channel",
+            &format!("cycle-{i:02}"),
+            "/tmp",
+            created,
+            created,
+        );
     }
 
     let mut log = tempfile::NamedTempFile::new().unwrap();
@@ -436,6 +440,7 @@ async fn run_cleanup_cycle_trims_log_and_prunes_sessions() {
     }
     let log_path = log.path().to_str().unwrap().to_string();
 
+    drop(guard);
     let result = tokio::task::spawn_blocking(move || run_cleanup_cycle(&log_path, 5, 100, 0, 30))
         .await
         .unwrap()

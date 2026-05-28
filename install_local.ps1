@@ -142,8 +142,24 @@ if (Test-PortInUse $defaultPort) {
 }
 
 Write-Msg "5. Starting cc-gateway..." "5. 启动 cc-gateway..."
-& "$InstallDir\$Binary.exe" start
+try {
+    # Never block local install on daemon startup. Add a timeout guard.
+    $p = Start-Process -FilePath "$InstallDir\$Binary.exe" -ArgumentList @("start") -PassThru -WindowStyle Hidden
+    try {
+        Wait-Process -Id $p.Id -Timeout 15 -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+} catch {
+    Write-Msg "Failed to start daemon: $_" "启动守护进程失败: $_"
+}
 
 Write-Msg "" ""
 Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
 Write-Msg "Run '$InstallDir\$Binary.exe --help' to get started" "运行 '$InstallDir\$Binary.exe --help' 开始使用"
+
+Write-Msg "" ""
+Write-Msg "Open WebUI (starts daemon if needed)..." "打开 WebUI（如未启动会自动 start）..."
+try {
+    & "$InstallDir\$Binary.exe" webui | Out-Null
+} catch {
+    # Ignore browser open failures during local install
+}

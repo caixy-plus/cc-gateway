@@ -1,7 +1,7 @@
-use axum::{extract::State, http::StatusCode, response::Json};
-use serde_json::json;
 use crate::config::loader::ConfigLoader;
 use crate::web::handlers::session::AppState;
+use axum::{extract::State, http::StatusCode, response::Json};
+use serde_json::json;
 
 pub(crate) fn mask_secret(s: &str) -> String {
     if s.len() <= 8 {
@@ -35,10 +35,7 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     };
 
-    let existing = match ConfigLoader::load_from(&path) {
-        Ok(c) => c,
-        Err(_) => crate::config::model::GatewayConfig::default(),
-    };
+    let existing = ConfigLoader::load_from(&path).unwrap_or_default();
 
     let mut config = existing;
 

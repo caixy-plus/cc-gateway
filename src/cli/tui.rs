@@ -22,12 +22,19 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::command::builtin::TUI_EVENT_READER_PAUSED;
 
-use crate::runtime::controller::{AgentController, QuestionItem};
-use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::cli::interactive::format_banner;
 use crate::command::{CommandAction, CommandRouter};
+use crate::runtime::controller::{AgentController, QuestionItem};
+use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::t_fmt;
+
+// ---------------------------------------------------------------------------
+// Output buffering policy (TUI)
+// ---------------------------------------------------------------------------
+
+const TUI_FLUSH_INTERVAL_MS: u64 = 80;
+const TUI_MAX_BUFFER_CHARS: usize = 2000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -148,13 +155,19 @@ fn spawn_poller_task(
                 if !ctrl.is_session_active().await {
                     break;
                 }
-                AgentEventPoller::from_controller(&*ctrl)
+                AgentEventPoller::from_controller(&ctrl)
             };
 
-            let mut sink = TuiEventSink {
+            let sink = TuiEventSink {
                 tx: poll_tx.clone(),
             };
-            if let Err(e) = poller.run(&mut sink).await {
+            // TUI: local terminal, allow higher flush frequency.
+            let mut sink = crate::runtime::event_poller::BufferedSink::new(
+                sink,
+                std::time::Duration::from_millis(TUI_FLUSH_INTERVAL_MS),
+                TUI_MAX_BUFFER_CHARS,
+            );
+            if let Err(e) = poller.run_buffered(&mut sink).await {
                 tracing::warn!("[TUI] Poller error: {}", e);
             }
 
@@ -545,138 +558,6 @@ fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
             KeyAction::Continue
         }
         _ => KeyAction::Continue,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::command::CommandRouter;
-    use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
-    use crate::session::channel_model::{AgentSession as StoredAgentSession, AgentSessionState};
-    use crate::tests::helpers::TestEnv;
-    use chrono::Utc;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-    use ratatui::{backend::TestBackend, Terminal};
-
-    #[test]
-    fn repeat_key_events_are_handled_like_presses() {
-        let mut app = App::new("test-channel".to_string());
-        app.messages
-            .push(ChatMessage::new(MsgRole::System, "line one\nline two"));
-
-        let key = KeyEvent::new_with_kind(KeyCode::Up, KeyModifiers::NONE, KeyEventKind::Repeat);
-        let action = handle_key(&key, &mut app);
-
-        assert!(matches!(action, KeyAction::Continue));
-        assert_eq!(app.scroll_offset, 1);
-    }
-
-    #[test]
-    fn render_input_with_multibyte_cursor_does_not_panic() {
-        let mut app = App::new("test-channel".to_string());
-        app.input = "你好".to_string();
-        app.input_cursor = 0;
-
-        let backend = TestBackend::new(20, 5);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| render(f, &app)).unwrap();
-    }
-
-    #[tokio::test]
-    async fn agent_history_resume_reuses_existing_tui_session_record() {
-        let env = TestEnv::new();
-        crate::db::init_schema().unwrap();
-        let work_dir = env.home().join("resume-project");
-        std::fs::create_dir_all(&work_dir).unwrap();
-        let channel = GLOBAL_CHANNEL_SESSIONS
-            .get_or_create_platform_channel("tui", "tui-history", work_dir.to_str().unwrap())
-            .await;
-        let now = Utc::now();
-        let stored = StoredAgentSession {
-            id: "stored-session".to_string(),
-            channel_session_id: channel.id.clone(),
-            provider: "claude".to_string(),
-            title: "TUI Session".to_string(),
-            work_dir: work_dir.to_string_lossy().to_string(),
-            active: false,
-            state: AgentSessionState::Stopped,
-            provider_session_id: Some("resume-session-id".to_string()),
-            created_at: now,
-            stopped_at: Some(now),
-            updated_at: Some(now),
-        };
-        crate::db::insert_agent_session(&stored);
-        GLOBAL_CHANNEL_SESSIONS.load_from_db();
-
-        let controller = Arc::new(Mutex::new(AgentController::new(
-            env.fake_agent_profiles(),
-            false,
-        )));
-        let router = CommandRouter::new(controller.clone(), work_dir.to_str().unwrap());
-        let mut app = App::new(channel.id.clone());
-
-        process_submit("/agent-history 1", &mut app, &router, &controller)
-            .await
-            .unwrap();
-
-        let sessions = GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&channel.id, None);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "stored-session");
-        assert!(sessions[0].active);
-        assert_eq!(
-            sessions[0].provider_session_id.as_deref(),
-            Some("resume-session-id")
-        );
-        assert!(app.session_active);
-
-        let ctrl = controller.lock().await;
-        ctrl.stop_session().await.unwrap();
-    }
-
-    #[test]
-    fn render_shows_ellipsis_while_waiting_for_first_claude_output() {
-        let mut app = App::new("test-channel".to_string());
-        app.add_message(MsgRole::User, "hello");
-        app.claude_busy = true;
-        app.needs_claude_response = true;
-
-        let backend = TestBackend::new(40, 5);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| render(f, &app)).unwrap();
-        let rendered =
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .fold(String::new(), |mut acc, cell| {
-                    acc.push_str(cell.symbol());
-                    acc
-                });
-
-        assert!(rendered.contains("..."));
-        assert_eq!(app.messages.len(), 1);
-    }
-
-    #[test]
-    fn first_claude_chunk_replaces_transient_waiting_display() {
-        let mut app = App::new("test-channel".to_string());
-        app.add_message(MsgRole::User, "hello");
-        app.needs_claude_response = true;
-
-        let done = handle_poll_event(
-            &TuiPollEvent::Flush("real answer".to_string(), false),
-            &mut app,
-        );
-
-        assert!(!done);
-        assert!(!app.needs_claude_response);
-        assert_eq!(app.messages.len(), 2);
-        assert_eq!(app.messages[1].role, MsgRole::Claude);
-        assert_eq!(app.messages[1].lines, vec!["real answer"]);
     }
 }
 
@@ -1098,4 +979,136 @@ pub async fn run_tui(
     execute!(io::stdout(), LeaveAlternateScreen)?;
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRouter;
+    use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+    use crate::session::channel_model::{AgentSession as StoredAgentSession, AgentSessionState};
+    use crate::tests::helpers::TestEnv;
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn repeat_key_events_are_handled_like_presses() {
+        let mut app = App::new("test-channel".to_string());
+        app.messages
+            .push(ChatMessage::new(MsgRole::System, "line one\nline two"));
+
+        let key = KeyEvent::new_with_kind(KeyCode::Up, KeyModifiers::NONE, KeyEventKind::Repeat);
+        let action = handle_key(&key, &mut app);
+
+        assert!(matches!(action, KeyAction::Continue));
+        assert_eq!(app.scroll_offset, 1);
+    }
+
+    #[test]
+    fn render_input_with_multibyte_cursor_does_not_panic() {
+        let mut app = App::new("test-channel".to_string());
+        app.input = "你好".to_string();
+        app.input_cursor = 0;
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn agent_history_resume_reuses_existing_tui_session_record() {
+        let env = TestEnv::new();
+        crate::db::init_schema().unwrap();
+        let work_dir = env.home().join("resume-project");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let channel = GLOBAL_CHANNEL_SESSIONS
+            .get_or_create_platform_channel("tui", "tui-history", work_dir.to_str().unwrap())
+            .await;
+        let now = Utc::now();
+        let stored = StoredAgentSession {
+            id: "stored-session".to_string(),
+            channel_session_id: channel.id.clone(),
+            provider: "claude".to_string(),
+            title: "TUI Session".to_string(),
+            work_dir: work_dir.to_string_lossy().to_string(),
+            active: false,
+            state: AgentSessionState::Stopped,
+            provider_session_id: Some("resume-session-id".to_string()),
+            created_at: now,
+            stopped_at: Some(now),
+            updated_at: Some(now),
+        };
+        crate::db::insert_agent_session(&stored);
+        GLOBAL_CHANNEL_SESSIONS.load_from_db();
+
+        let controller = Arc::new(Mutex::new(AgentController::new(
+            env.fake_agent_profiles(),
+            false,
+        )));
+        let router = CommandRouter::new(controller.clone(), work_dir.to_str().unwrap());
+        let mut app = App::new(channel.id.clone());
+
+        process_submit("/agent-history 1", &mut app, &router, &controller)
+            .await
+            .unwrap();
+
+        let sessions = GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&channel.id, None);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "stored-session");
+        assert!(sessions[0].active);
+        assert_eq!(
+            sessions[0].provider_session_id.as_deref(),
+            Some("resume-session-id")
+        );
+        assert!(app.session_active);
+
+        let ctrl = controller.lock().await;
+        ctrl.stop_session().await.unwrap();
+    }
+
+    #[test]
+    fn render_shows_ellipsis_while_waiting_for_first_claude_output() {
+        let mut app = App::new("test-channel".to_string());
+        app.add_message(MsgRole::User, "hello");
+        app.claude_busy = true;
+        app.needs_claude_response = true;
+
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let rendered =
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .fold(String::new(), |mut acc, cell| {
+                    acc.push_str(cell.symbol());
+                    acc
+                });
+
+        assert!(rendered.contains("..."));
+        assert_eq!(app.messages.len(), 1);
+    }
+
+    #[test]
+    fn first_claude_chunk_replaces_transient_waiting_display() {
+        let mut app = App::new("test-channel".to_string());
+        app.add_message(MsgRole::User, "hello");
+        app.needs_claude_response = true;
+
+        let done = handle_poll_event(
+            &TuiPollEvent::Flush("real answer".to_string(), false),
+            &mut app,
+        );
+
+        assert!(!done);
+        assert!(!app.needs_claude_response);
+        assert_eq!(app.messages.len(), 2);
+        assert_eq!(app.messages[1].role, MsgRole::Claude);
+        assert_eq!(app.messages[1].lines, vec!["real answer"]);
+    }
 }

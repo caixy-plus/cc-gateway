@@ -1,7 +1,7 @@
-use crate::runtime::file_delivery::McpDeliveryTarget;
 use crate::command::builtin::list_directory_paths;
 use crate::platform::feishu::cards::build_dir_picker_card;
 use crate::platform::feishu::FeishuChannelRuntime;
+use crate::runtime::file_delivery::McpDeliveryTarget;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 use super::helpers::{feishu_platform, feishu_text_event, TestEnv};

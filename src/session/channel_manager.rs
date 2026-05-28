@@ -9,12 +9,12 @@ use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
 use tracing::info;
 
-use crate::runtime::controller::AgentController;
-use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::command::router::CommandRouter;
 use crate::config::model::{AgentProfiles, AgentProvider};
+use crate::runtime::controller::AgentController;
+use crate::runtime::event_poller::{AgentEventPoller, BufferedSink, EventPollSink};
 use crate::session::channel_model::{
-    ChannelSession, AgentSession, AgentSessionState, SessionSource,
+    AgentSession, AgentSessionState, ChannelSession, SessionSource,
 };
 
 // ---------------------------------------------------------------------------
@@ -35,8 +35,12 @@ pub struct ActiveAgentRuntime {
 #[derive(Clone)]
 pub struct WebUIChannelRuntime {
     pub channel_session: ChannelSession,
-    pub active_agent: Option<ActiveAgentRuntime>,
-    pub poll_handle: Option<Arc<Mutex<Option<AbortHandle>>>>,
+    /// Active agent runtimes keyed by agent `session_id`.
+    ///
+    /// WebUI supports multiple sessions running concurrently under one channel.
+    pub active_agents: Arc<DashMap<String, ActiveAgentRuntime>>,
+    /// Per-session poller abort handles keyed by agent `session_id`.
+    pub poll_handles: Arc<DashMap<String, Arc<Mutex<Option<AbortHandle>>>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +54,32 @@ pub struct ChannelManager {
 }
 
 pub static GLOBAL_CHANNEL_SESSIONS: Lazy<ChannelManager> = Lazy::new(ChannelManager::new);
+
+pub struct CreateAndStartAgentSessionArgs {
+    pub channel_id: String,
+    pub title: String,
+    pub default_dir: String,
+    pub agent_settings: AgentProfiles,
+    pub show_thinking: bool,
+    pub args: Vec<String>,
+    pub resume_session_id: Option<String>,
+    pub work_dir_override: Option<String>,
+    pub mcp_context: Option<crate::runtime::mcp_server::McpContext>,
+    pub provider_override: Option<crate::config::model::AgentProvider>,
+}
+
+pub struct StartAgentSessionForPlatformArgs {
+    pub channel_id: String,
+    pub title: String,
+    pub default_dir: String,
+    pub agent_settings: AgentProfiles,
+    pub show_thinking: bool,
+    pub args: Vec<String>,
+    pub resume_session_id: Option<String>,
+    pub work_dir_override: Option<String>,
+    pub mcp_context: Option<crate::runtime::mcp_server::McpContext>,
+    pub provider_override: Option<crate::config::model::AgentProvider>,
+}
 
 impl ChannelManager {
     fn new() -> Self {
@@ -165,7 +195,7 @@ impl ChannelManager {
         let source = match platform {
             "feishu" => SessionSource::Feishu,
             "telegram" => SessionSource::Telegram,
-            "tui" => SessionSource::TUI,
+            "tui" => SessionSource::Tui,
             _ => SessionSource::WebUI,
         };
         let id = uuid::Uuid::new_v4().to_string();
@@ -199,8 +229,8 @@ impl ChannelManager {
                 }
                 let rt = WebUIChannelRuntime {
                     channel_session: c.clone(),
-                    active_agent: None,
-                    poll_handle: None,
+                    active_agents: Arc::new(DashMap::new()),
+                    poll_handles: Arc::new(DashMap::new()),
                 };
                 self.webui_runtimes.insert(c.id.clone(), rt.clone());
                 return Ok(rt);
@@ -222,8 +252,8 @@ impl ChannelManager {
         crate::db::insert_channel_session(&channel);
         let rt = WebUIChannelRuntime {
             channel_session: channel,
-            active_agent: None,
-            poll_handle: None,
+            active_agents: Arc::new(DashMap::new()),
+            poll_handles: Arc::new(DashMap::new()),
         };
         self.webui_runtimes.insert(id.clone(), rt.clone());
         Ok(rt)
@@ -411,33 +441,33 @@ impl ChannelManager {
 
     pub async fn create_and_start_agent_session(
         &self,
-        channel_id: &str,
-        title: &str,
-        default_dir: &str,
-        agent_settings: AgentProfiles,
-        show_thinking: bool,
-        args: Vec<String>,
-        resume_session_id: Option<String>,
-        work_dir_override: Option<String>,
-        mcp_context: Option<crate::runtime::mcp_server::McpContext>,
-        provider_override: Option<crate::config::model::AgentProvider>,
+        args: CreateAndStartAgentSessionArgs,
     ) -> Result<(AgentSession, Arc<Mutex<AgentController>>)> {
-        self.stop_active_session_records_for_channel(channel_id, None);
-        let work_dir = work_dir_override
-            .or_else(|| self.get_channel(channel_id).map(|c| c.work_dir))
-            .unwrap_or_else(|| shellexpand::tilde(default_dir).to_string());
+        // WebUI allows multiple sessions active concurrently under one channel.
+        // Other platforms keep the invariant of at most one active session per channel.
+        let is_webui_channel = self
+            .get_channel(&args.channel_id)
+            .map(|c| c.platform == "webui")
+            .unwrap_or(false);
+        if !is_webui_channel {
+            self.stop_active_session_records_for_channel(&args.channel_id, None);
+        }
+        let work_dir = args
+            .work_dir_override
+            .or_else(|| self.get_channel(&args.channel_id).map(|c| c.work_dir))
+            .unwrap_or_else(|| shellexpand::tilde(&args.default_dir).to_string());
 
         let controller = Arc::new(Mutex::new(AgentController::new(
-            agent_settings.clone(),
-            show_thinking,
+            args.agent_settings.clone(),
+            args.show_thinking,
         )));
 
-        if let Some(ref sid) = resume_session_id {
+        if let Some(ref sid) = args.resume_session_id {
             let ctrl = controller.lock().await;
             ctrl.set_pending_resume_session_id(Some(sid.clone())).await;
         }
 
-        if let Some(ref mcp_ctx) = mcp_context {
+        if let Some(ref mcp_ctx) = args.mcp_context {
             let ctrl = controller.lock().await;
             ctrl.set_mcp_context(mcp_ctx.clone()).await;
         }
@@ -445,7 +475,7 @@ impl ChannelManager {
         {
             let ctrl = controller.lock().await;
             ctrl.init_work_dir(work_dir.clone()).await;
-            ctrl.start_session_with_provider(work_dir.clone(), args, provider_override)
+            ctrl.start_session_with_provider(work_dir.clone(), args.args, args.provider_override)
                 .await?;
         }
 
@@ -458,15 +488,15 @@ impl ChannelManager {
             ctrl.provider_name().await
         };
 
-        self.update_channel_work_dir(channel_id, &work_dir);
+        self.update_channel_work_dir(&args.channel_id, &work_dir);
 
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = Utc::now();
         let session = AgentSession {
             id: id.clone(),
-            channel_session_id: channel_id.to_string(),
+            channel_session_id: args.channel_id,
             provider,
-            title: title.to_string(),
+            title: args.title,
             work_dir,
             active: true,
             state: AgentSessionState::Active,
@@ -486,32 +516,24 @@ impl ChannelManager {
     /// Used by all platform integrations to reduce duplication.
     pub async fn start_agent_session_for_platform(
         &self,
-        channel_id: &str,
-        title: &str,
-        default_dir: &str,
-        agent_settings: AgentProfiles,
-        show_thinking: bool,
-        args: Vec<String>,
-        resume_session_id: Option<String>,
-        work_dir_override: Option<String>,
-        mcp_context: Option<crate::runtime::mcp_server::McpContext>,
-        provider_override: Option<crate::config::model::AgentProvider>,
+        args: StartAgentSessionForPlatformArgs,
     ) -> Result<ActiveAgentRuntime> {
+        let default_dir = args.default_dir.clone();
         let (agent_session, controller) = self
-            .create_and_start_agent_session(
-                channel_id,
-                title,
-                default_dir,
-                agent_settings,
-                show_thinking,
-                args,
-                resume_session_id,
-                work_dir_override,
-                mcp_context,
-                provider_override,
-            )
+            .create_and_start_agent_session(CreateAndStartAgentSessionArgs {
+                channel_id: args.channel_id,
+                title: args.title,
+                default_dir: args.default_dir,
+                agent_settings: args.agent_settings,
+                show_thinking: args.show_thinking,
+                args: args.args,
+                resume_session_id: args.resume_session_id,
+                work_dir_override: args.work_dir_override,
+                mcp_context: args.mcp_context,
+                provider_override: args.provider_override,
+            })
             .await?;
-        let router = Arc::new(CommandRouter::new(controller.clone(), default_dir));
+        let router = Arc::new(CommandRouter::new(controller.clone(), &default_dir));
         Ok(ActiveAgentRuntime {
             agent_session,
             controller,
@@ -585,8 +607,12 @@ impl ChannelManager {
                 ctrl.set_mcp_context(mcp_ctx.clone()).await;
             }
             ctrl.init_work_dir(work_dir.clone()).await;
-            ctrl.start_session_with_provider(work_dir.clone(), vec![], Some(stored_provider.clone()))
-                .await?;
+            ctrl.start_session_with_provider(
+                work_dir.clone(),
+                vec![],
+                Some(stored_provider.clone()),
+            )
+            .await?;
         }
 
         let (new_provider_session_id, resumed_provider) = {
@@ -598,10 +624,16 @@ impl ChannelManager {
         };
 
         let mut session = existing;
-        self.stop_active_session_records_for_channel(
-            &session.channel_session_id,
-            Some(&session.id),
-        );
+        let is_webui_channel = self
+            .get_channel(&session.channel_session_id)
+            .map(|c| c.platform == "webui")
+            .unwrap_or(false);
+        if !is_webui_channel {
+            self.stop_active_session_records_for_channel(
+                &session.channel_session_id,
+                Some(&session.id),
+            );
+        }
         session.active = true;
         session.state = AgentSessionState::Active;
         session.work_dir = work_dir.clone();
@@ -657,10 +689,16 @@ impl ChannelManager {
         };
 
         let mut session = existing;
-        self.stop_active_session_records_for_channel(
-            &session.channel_session_id,
-            Some(&session.id),
-        );
+        let is_webui_channel = self
+            .get_channel(&session.channel_session_id)
+            .map(|c| c.platform == "webui")
+            .unwrap_or(false);
+        if !is_webui_channel {
+            self.stop_active_session_records_for_channel(
+                &session.channel_session_id,
+                Some(&session.id),
+            );
+        }
         session.active = true;
         session.state = AgentSessionState::Active;
         session.work_dir = work_dir.clone();
@@ -677,11 +715,11 @@ impl ChannelManager {
         Ok(session)
     }
 
-    pub async fn send_and_poll_active_runtime(
+    pub async fn send_and_poll_active_runtime_buffered<T: EventPollSink + Send>(
         &self,
         active: &ActiveAgentRuntime,
         text: &str,
-        sink: &mut (dyn EventPollSink + Send),
+        sink: &mut BufferedSink<T>,
     ) -> Result<()> {
         {
             let ctrl = active.controller.lock().await;
@@ -693,7 +731,7 @@ impl ChannelManager {
             let ctrl = active.controller.lock().await;
             AgentEventPoller::from_controller(&ctrl)
         };
-        poller.run(sink).await
+        poller.run_buffered(sink).await
     }
 
     fn stop_active_session_records_for_channel(&self, channel_id: &str, except_id: Option<&str>) {
@@ -734,30 +772,23 @@ impl ChannelManager {
     }
 
     pub async fn stop_channel_session(&self, channel_id: &str) -> Result<()> {
-        // Stop the active session for this channel
-        if self.get_active_agent_session(channel_id).is_some() {
-            // Persist provider + provider_session_id from the live controller before stop.
-            if let Some(rt) = self.webui_runtimes.get(channel_id) {
-                if let Some(ref active_runtime) = rt.active_agent {
-                    self.refresh_active_controller_session(
-                        channel_id,
-                        &active_runtime.controller,
-                    )
-                    .await;
-                    let ctrl = active_runtime.controller.lock().await;
-                    let _ = ctrl.stop_session().await;
-                }
-            }
-
-            // Abort any WebUI poller
-            if let Some(rt) = self.webui_runtimes.get(channel_id) {
-                if let Some(ref handle_arc) = rt.poll_handle {
-                    if let Some(handle) = handle_arc.lock().await.take() {
-                        handle.abort();
+        // WebUI: stop all active sessions for this channel.
+        if let Some(channel) = self.get_channel(channel_id) {
+            if channel.platform == "webui" {
+                if let Some(rt) = self.webui_runtimes.get(channel_id) {
+                    let active_ids: Vec<String> =
+                        rt.active_agents.iter().map(|e| e.key().clone()).collect();
+                    drop(rt);
+                    for sid in active_ids {
+                        let _ = self.stop_webui_session(channel_id, &sid).await;
                     }
                 }
+                return Ok(());
             }
+        }
 
+        // Other platforms: stop the single active session for this channel.
+        if self.get_active_agent_session(channel_id).is_some() {
             let Some(mut session) = self.get_active_agent_session(channel_id) else {
                 return Ok(());
             };
@@ -768,12 +799,6 @@ impl ChannelManager {
             self.agent_sessions
                 .insert(session.id.clone(), session.clone());
             crate::db::insert_agent_session(&session);
-
-            // Clear WebUI active session
-            if let Some(mut rt) = self.webui_runtimes.get_mut(channel_id) {
-                rt.active_agent = None;
-                rt.poll_handle = None;
-            }
         }
         Ok(())
     }
@@ -787,7 +812,7 @@ impl ChannelManager {
             self.refresh_active_controller_session(channel_id, &active.controller)
                 .await;
             let ctrl = active.controller.lock().await;
-            let _ = ctrl.stop_session().await;
+            let _ = ctrl.force_stop_session().await;
         }
         self.stop_channel_session(channel_id).await
     }
@@ -814,43 +839,92 @@ impl ChannelManager {
         self.webui_runtimes.get(channel_id).map(|e| e.clone())
     }
 
-    pub fn set_webui_active_agent(&self, channel_id: &str, active: Option<ActiveAgentRuntime>) {
-        if let Some(mut rt) = self.webui_runtimes.get_mut(channel_id) {
-            rt.active_agent = active;
+    pub fn get_webui_active_agent(
+        &self,
+        channel_id: &str,
+        session_id: &str,
+    ) -> Option<ActiveAgentRuntime> {
+        let rt = self.webui_runtimes.get(channel_id)?;
+        rt.active_agents.get(session_id).map(|e| e.clone())
+    }
+
+    pub fn set_webui_active_agent(&self, channel_id: &str, active: ActiveAgentRuntime) {
+        if let Some(rt) = self.webui_runtimes.get_mut(channel_id) {
+            rt.active_agents
+                .insert(active.agent_session.id.clone(), active);
         }
     }
 
-    pub fn set_webui_poll_handle(&self, channel_id: &str, handle: Option<AbortHandle>) {
-        let handle_arc = self
-            .webui_runtimes
-            .get(channel_id)
-            .and_then(|rt| rt.poll_handle.clone());
+    pub fn remove_webui_active_agent(&self, channel_id: &str, session_id: &str) {
+        if let Some(rt) = self.webui_runtimes.get_mut(channel_id) {
+            rt.active_agents.remove(session_id);
+        }
+    }
 
-        if let Some(handle_arc) = handle_arc {
-            // Cancel previous handle.
-            if let Ok(mut guard) = handle_arc.try_lock() {
-                if let Some(old) = guard.take() {
-                    old.abort();
-                }
-                *guard = handle;
+    pub fn set_webui_poll_handle(&self, channel_id: &str, session_id: &str, handle: AbortHandle) {
+        let poll_handles = match self.webui_runtimes.get(channel_id) {
+            Some(rt) => rt.poll_handles.clone(),
+            None => return,
+        };
+        let entry = poll_handles
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone();
+        let lock_result = entry.try_lock();
+        if let Ok(mut guard) = lock_result {
+            if let Some(old) = guard.take() {
+                old.abort();
             }
-            return;
-        }
-
-        if let Some(mut entry) = self.webui_runtimes.get_mut(channel_id) {
-            entry.poll_handle = Some(Arc::new(Mutex::new(handle)));
+            *guard = Some(handle);
         }
     }
 
-    pub async fn has_webui_poll_handle(&self, channel_id: &str) -> bool {
-        let handle_arc = self
-            .webui_runtimes
-            .get(channel_id)
-            .and_then(|rt| rt.poll_handle.clone());
+    pub async fn has_webui_poll_handle(&self, channel_id: &str, session_id: &str) -> bool {
+        let rt = match self.webui_runtimes.get(channel_id) {
+            Some(rt) => rt,
+            None => return false,
+        };
+        let handle_arc = rt.poll_handles.get(session_id).map(|e| e.clone());
+        drop(rt);
         match handle_arc {
             Some(handle) => handle.lock().await.is_some(),
             None => false,
         }
+    }
+
+    pub async fn stop_webui_session(&self, channel_id: &str, session_id: &str) -> Result<()> {
+        let active = self.get_webui_active_agent(channel_id, session_id);
+        if let Some(active) = active {
+            self.refresh_active_controller_session(channel_id, &active.controller)
+                .await;
+            let ctrl = active.controller.lock().await;
+            let _ = ctrl.force_stop_session().await;
+        }
+
+        // Abort poller for this session if present.
+        if let Some(rt) = self.webui_runtimes.get(channel_id) {
+            if let Some(handle_arc) = rt.poll_handles.get(session_id).map(|e| e.clone()) {
+                if let Some(handle) = handle_arc.lock().await.take() {
+                    handle.abort();
+                }
+            }
+        }
+
+        if let Some(mut session) = self.get_agent_session(session_id) {
+            session.active = false;
+            session.state = AgentSessionState::Stopped;
+            session.stopped_at = Some(Utc::now());
+            session.updated_at = Some(Utc::now());
+            self.agent_sessions
+                .insert(session.id.clone(), session.clone());
+            crate::db::insert_agent_session(&session);
+        }
+
+        self.remove_webui_active_agent(channel_id, session_id);
+        if let Some(rt) = self.webui_runtimes.get_mut(channel_id) {
+            rt.poll_handles.remove(session_id);
+        }
+        Ok(())
     }
 }
 
@@ -876,7 +950,9 @@ fn file_contains_user_role(path: &std::path::Path) -> bool {
         Err(_) => return false,
     };
     // Cheap scan (one JSON per line). Avoid serde to keep this hot-path lightweight.
-    content.lines().any(|line| line.contains("\"role\":\"user\""))
+    content
+        .lines()
+        .any(|line| line.contains("\"role\":\"user\""))
 }
 
 #[cfg(test)]

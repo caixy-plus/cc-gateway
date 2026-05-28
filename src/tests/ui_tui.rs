@@ -95,10 +95,7 @@ fn interactive_select_backend_cancels_when_input_ends() {
 
 #[test]
 fn interactive_select_backend_deletes_with_x_key() {
-    let items = vec![
-        ("keep".to_string(), false),
-        ("remove".to_string(), false),
-    ];
+    let items = vec![("keep".to_string(), false), ("remove".to_string(), false)];
     let mut backend = TestBackend {
         keys: vec![crossterm::event::KeyCode::Char('x')],
         frames: Vec::new(),

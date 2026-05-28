@@ -18,6 +18,10 @@ impl TurnTextBuffer {
         }
     }
 
+    pub fn char_len(&self) -> usize {
+        self.inner.chars().count()
+    }
+
     pub fn take_nonempty(&mut self) -> Option<String> {
         if self.inner.trim().is_empty() {
             self.inner.clear();
@@ -33,6 +37,61 @@ pub fn should_flush_turn_buffer(text: &str, is_done: bool) -> bool {
     is_done || text.starts_with("Error:")
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BufferPolicy {
+    pub flush_interval: std::time::Duration,
+    pub max_chars: usize,
+}
+
+/// Generic buffering wrapper so platforms/UIs don't re-implement flush policy.
+pub struct BufferedSink<T: EventPollSink + Send> {
+    inner: T,
+    text_buffer: TurnTextBuffer,
+    policy: BufferPolicy,
+    last_flush_at: Option<std::time::Instant>,
+}
+
+impl<T: EventPollSink + Send> BufferedSink<T> {
+    pub fn new(inner: T, flush_interval: std::time::Duration, max_chars: usize) -> Self {
+        Self {
+            inner,
+            text_buffer: Default::default(),
+            policy: BufferPolicy {
+                flush_interval,
+                max_chars,
+            },
+            last_flush_at: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+
+    async fn flush_buffer(&mut self, is_done: bool) -> Result<()> {
+        if let Some(message) = self.text_buffer.take_nonempty() {
+            self.last_flush_at = Some(std::time::Instant::now());
+            self.inner.flush(&message, is_done).await?;
+        }
+        Ok(())
+    }
+
+    fn has_pending(&self) -> bool {
+        self.text_buffer.char_len() > 0
+    }
+
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        if !self.has_pending() {
+            return None;
+        }
+        let last = self
+            .last_flush_at
+            .unwrap_or_else(|| std::time::Instant::now() - self.policy.flush_interval);
+        Some(last + self.policy.flush_interval)
+    }
+}
+
 /// Sink trait for consuming Claude events during a poll cycle.
 /// Each platform/TUI provides its own implementation.
 #[async_trait::async_trait]
@@ -40,6 +99,12 @@ pub trait EventPollSink: Send {
     /// Called when Claude emits a text/thinking/tool output chunk.
     /// `is_done` is true when the response stream for this turn is complete.
     async fn flush(&mut self, text: &str, is_done: bool) -> Result<()>;
+
+    /// Called when Claude emits a thinking chunk. Platforms can override to send
+    /// it immediately (without buffering) to reduce perceived latency.
+    async fn on_thinking(&mut self, text: &str) -> Result<()> {
+        self.flush(text, false).await
+    }
 
     /// Called when Claude requests permission for a tool.
     async fn on_permission_request(
@@ -73,6 +138,69 @@ pub trait EventPollSink: Send {
     ) -> Result<()>;
 }
 
+#[async_trait::async_trait]
+impl<T> EventPollSink for BufferedSink<T>
+where
+    T: EventPollSink + Send,
+{
+    async fn flush(&mut self, text: &str, is_done: bool) -> Result<()> {
+        self.text_buffer.push(text);
+        if should_flush_turn_buffer(text, is_done)
+            || self.text_buffer.char_len() >= self.policy.max_chars
+        {
+            self.flush_buffer(is_done).await?;
+        }
+        Ok(())
+    }
+
+    async fn on_thinking(&mut self, text: &str) -> Result<()> {
+        // Preserve ordering: flush any pending assistant text first.
+        self.flush_buffer(false).await?;
+        self.inner.on_thinking(text).await
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        request_id: &str,
+        tool_name: &str,
+        input: Option<&Value>,
+    ) -> Result<()> {
+        self.inner
+            .on_permission_request(request_id, tool_name, input)
+            .await
+    }
+
+    async fn on_confirm_request(
+        &mut self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Result<()> {
+        self.inner
+            .on_confirm_request(request_id, prompt, options)
+            .await
+    }
+
+    async fn on_select_request(
+        &mut self,
+        request_id: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Result<()> {
+        self.inner
+            .on_select_request(request_id, prompt, options)
+            .await
+    }
+
+    async fn on_question_request(
+        &mut self,
+        request_id: &str,
+        questions: &[crate::runtime::controller::QuestionItem],
+    ) -> Result<()> {
+        self.inner.on_question_request(request_id, questions).await
+    }
+}
+
 /// Polls AgentController events and dispatches them to an EventPollSink.
 pub struct AgentEventPoller {
     event_rx: std::sync::Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
@@ -88,14 +216,36 @@ impl AgentEventPoller {
         }
     }
 
-    /// Run the poll loop: drain events from the controller and dispatch to `sink`.
-    /// Returns when the session ends (Done event) or the event channel closes.
-    pub async fn run(self, sink: &mut (dyn EventPollSink + Send)) -> Result<()> {
+    /// Run the poll loop with time-based buffering.
+    ///
+    /// Guarantees that once any text is buffered, it will be delivered at least
+    /// every `policy.flush_interval`, and never exceeds `policy.max_chars` before
+    /// being flushed.
+    pub async fn run_buffered<T: EventPollSink + Send>(
+        self,
+        sink: &mut BufferedSink<T>,
+    ) -> Result<()> {
         let mut hidden_thinking_placeholder_sent = false;
         loop {
-            let event = {
-                let mut rx = self.event_rx.lock().await;
-                rx.recv().await
+            let deadline = sink.next_deadline();
+            let event = match deadline {
+                Some(when) => {
+                    let mut rx = self.event_rx.lock().await;
+                    match tokio::time::timeout_at(tokio::time::Instant::from_std(when), rx.recv())
+                        .await
+                    {
+                        Ok(ev) => ev,
+                        Err(_) => {
+                            // Timer tick: flush pending buffer.
+                            sink.flush_buffer(false).await?;
+                            continue;
+                        }
+                    }
+                }
+                None => {
+                    let mut rx = self.event_rx.lock().await;
+                    rx.recv().await
+                }
             };
 
             match event {
@@ -105,12 +255,12 @@ impl AgentEventPoller {
                 Some(ControllerEvent::Thinking(text)) => {
                     if text.trim().is_empty() {
                         if !hidden_thinking_placeholder_sent {
-                            sink.flush(crate::t!("claude.thinking_placeholder"), false)
+                            sink.on_thinking(crate::t!("claude.thinking_placeholder"))
                                 .await?;
                             hidden_thinking_placeholder_sent = true;
                         }
                     } else {
-                        sink.flush(&text, false).await?;
+                        sink.on_thinking(&text).await?;
                     }
                 }
                 Some(ControllerEvent::ToolUse(name, input)) => {
@@ -131,6 +281,9 @@ impl AgentEventPoller {
                     tool_name,
                     input,
                 }) => {
+                    // Before interactive prompts, flush any pending output so the user
+                    // sees context promptly.
+                    sink.flush_buffer(false).await?;
                     sink.on_permission_request(&request_id, &tool_name, input.as_ref())
                         .await?;
                 }
@@ -139,6 +292,7 @@ impl AgentEventPoller {
                     prompt,
                     options,
                 }) => {
+                    sink.flush_buffer(false).await?;
                     sink.on_confirm_request(&request_id, &prompt, &options)
                         .await?;
                 }
@@ -147,6 +301,7 @@ impl AgentEventPoller {
                     prompt,
                     options,
                 }) => {
+                    sink.flush_buffer(false).await?;
                     sink.on_select_request(&request_id, &prompt, &options)
                         .await?;
                 }
@@ -154,14 +309,16 @@ impl AgentEventPoller {
                     request_id,
                     questions,
                 }) => {
+                    sink.flush_buffer(false).await?;
                     sink.on_question_request(&request_id, &questions).await?;
                 }
                 Some(ControllerEvent::Error(text)) => {
                     sink.flush(&format!("Error: {}", text), false).await?;
                 }
                 Some(ControllerEvent::Done) | None => {
+                    sink.flush_buffer(true).await?;
                     sink.flush("", true).await?;
-                    // Drain any late-arriving events (e.g., text sent after Done due to stdout ordering)
+                    // Drain any late-arriving events (best-effort).
                     loop {
                         let late_event = {
                             let mut rx = self.event_rx.lock().await;
@@ -174,12 +331,12 @@ impl AgentEventPoller {
                             Some(ControllerEvent::Thinking(text)) => {
                                 if text.trim().is_empty() {
                                     if !hidden_thinking_placeholder_sent {
-                                        sink.flush(crate::t!("claude.thinking_placeholder"), false)
+                                        sink.on_thinking(crate::t!("claude.thinking_placeholder"))
                                             .await?;
                                         hidden_thinking_placeholder_sent = true;
                                     }
                                 } else {
-                                    sink.flush(&text, false).await?;
+                                    sink.on_thinking(&text).await?;
                                 }
                             }
                             Some(ControllerEvent::ToolUse(name, input)) => {
@@ -201,12 +358,14 @@ impl AgentEventPoller {
                             _ => break,
                         }
                     }
+                    // Ensure any buffered late events are flushed before exit.
+                    sink.flush_buffer(true).await?;
                     break;
                 }
             }
         }
 
-        debug!("AgentEventPoller: poll loop ended");
+        debug!("AgentEventPoller: buffered poll loop ended");
         Ok(())
     }
 }

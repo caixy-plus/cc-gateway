@@ -78,6 +78,7 @@ cargo build --release
 | `cc-gateway stop` | Stop the gateway daemon |
 | `cc-gateway restart` | Restart the gateway daemon |
 | `cc-gateway log [-f] [-n 100]` | View daemon logs |
+| `cc-gateway webui` | Open WebUI in the default browser (starts daemon if not running) |
 | `cc-gateway config` | Edit configuration file |
 | `cc-gateway config --init` | Print default config |
 

@@ -122,9 +122,13 @@ Write-Msg "Running initial setup..." "正在运行初始设置..."
 Write-Msg "" ""
 Write-Msg "Restarting cc-gateway daemon..." "正在重启 cc-gateway 守护进程..."
 try {
-    # Run restart in background to avoid blocking the installer.
-    # Use the same console so users can see output.
-    Start-Process -FilePath "$InstallDir\$Binary.exe" -ArgumentList @("restart") -NoNewWindow | Out-Null
+    # Run restart in a detached process and never block the installer.
+    # Some Windows environments may hang when starting background processes
+    # with shared console. We add a timeout guard to keep install responsive.
+    $p = Start-Process -FilePath "$InstallDir\$Binary.exe" -ArgumentList @("restart") -PassThru -WindowStyle Hidden
+    try {
+        Wait-Process -Id $p.Id -Timeout 15 -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
 } catch {
     Write-Msg "Failed to restart daemon: $_" "重启守护进程失败: $_"
 }
@@ -132,6 +136,8 @@ try {
 Write-Msg "" ""
 Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
 Write-Msg "Run '$Binary --help' to get started" "运行 '$Binary --help' 开始使用"
+Write-Msg "Open WebUI: '$Binary webui' (starts daemon if needed)" "打开 WebUI：'$Binary webui'（如未启动会自动 start）"
+Write-Msg "If daemon start looks stuck, run: '$Binary status' and '$Binary log -n 200'" "若守护进程启动疑似卡住，请运行：'$Binary status' 和 '$Binary log -n 200'"
 Write-Msg "" ""
 Write-Msg "For Feishu bot setup instructions, see:" "飞书机器人配置说明请参阅:"
 Write-Msg "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup" "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"

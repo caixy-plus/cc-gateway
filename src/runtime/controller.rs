@@ -8,9 +8,9 @@ use tracing::info;
 use crate::agent::event::AgentEvent;
 pub use crate::agent::event::QuestionItem;
 use crate::agent::session::AgentRuntime;
+use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{build_permission_allow, build_permission_deny, InputMessage};
-use crate::config::model::{AgentProvider, AgentProfiles};
 use crate::{t, t_fmt};
 
 /// Validate that a path is allowed.
@@ -379,6 +379,28 @@ impl AgentController {
         }
         // NOTE: we intentionally keep provider_session_id here so that a
         // subsequent /agent can resume the same provider session.
+        Ok(())
+    }
+
+    /// Force-stop the active session immediately (used by `/quit`).
+    pub async fn force_stop_session(&self) -> Result<()> {
+        let mut s = self.session.write().await;
+        if let Some(session) = s.take() {
+            session.force_stop().await?;
+            info!("Agent session force-stopped");
+        }
+        {
+            let mut state = self.session_state.write().await;
+            info!(
+                "SessionState: {:?} -> Inactive (force_stop_session)",
+                *state
+            );
+            *state = SessionState::Inactive;
+        }
+        {
+            let mut buf = self.message_buffer.lock().await;
+            buf.clear();
+        }
         Ok(())
     }
 

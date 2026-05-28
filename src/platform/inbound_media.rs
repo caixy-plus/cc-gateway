@@ -1,6 +1,6 @@
 //! Save inbound chat attachments under `~/.cc-gateway/media/` and format paths for the agent.
 
-use std::path::{PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
@@ -37,9 +37,7 @@ pub fn content_type_to_extension(content_type: &str) -> &'static str {
 }
 
 fn resolve_extension(content_type: Option<&str>) -> &'static str {
-    content_type
-        .map(content_type_to_extension)
-        .unwrap_or("bin")
+    content_type.map(content_type_to_extension).unwrap_or("bin")
 }
 
 /// Gateway-assigned on-disk name: `{uuid}.{ext}`.
