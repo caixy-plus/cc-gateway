@@ -951,6 +951,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Failed to stop session: {ERR}",
             Language::ZhCN => "停止会话失败: {ERR}",
         },
+        "webui.failed_restart_session" => match lang {
+            Language::En => "Failed to restart session: {ERR}",
+            Language::ZhCN => "重启会话失败: {ERR}",
+        },
 
         _ => key,
     }

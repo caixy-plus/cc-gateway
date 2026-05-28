@@ -51,7 +51,10 @@ pub fn trim_log_file(path: &str, max_lines: usize, max_size_mb: usize) -> Result
         return Ok(false);
     }
 
-    let output = lines.into_iter().collect::<Vec<_>>().join("\n");
+    let mut output = lines.into_iter().collect::<Vec<_>>().join("\n");
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
     let tmp_path = path.with_extension("tmp");
     std::fs::write(&tmp_path, &output)?;
     std::fs::rename(&tmp_path, &path)?;

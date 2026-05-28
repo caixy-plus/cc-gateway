@@ -406,8 +406,9 @@ impl FeishuPlatform {
                         crate::t!("builtin.shutdown_notice"),
                     )
                     .await;
-
-                let Some(ref active) = runtime.active_agent else {
+                let Some(active) = runtime.active_agent.as_ref() else {
+                    // Race safety: active_agent may be cleared between shutdown_notice_target()
+                    // and here (though shutdown_notice_target() normally implies Some).
                     continue;
                 };
                 let ctrl = active.controller.lock().await;

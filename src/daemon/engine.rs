@@ -96,9 +96,15 @@ impl DaemonEngine {
             crate::web::server::create_app_with_config_path(&self.config, self.config_path.clone());
         let shutdown_for_server = shutdown_notify.clone();
         let server_handle = tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
-                error!("HTTP server error: {}", e);
-                shutdown_for_server.notify_one();
+            match axum::serve(listener, app).await {
+                Ok(()) => {
+                    error!("HTTP server exited unexpectedly");
+                    shutdown_for_server.notify_one();
+                }
+                Err(e) => {
+                    error!("HTTP server error: {}", e);
+                    shutdown_for_server.notify_one();
+                }
             }
         });
         info!(

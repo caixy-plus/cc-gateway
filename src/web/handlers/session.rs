@@ -386,7 +386,7 @@ pub async fn handle_send_message(
                 }
                 Err(e) => {
                     let body = json_error(
-                        "webui.failed_stop_session",
+                        "webui.failed_restart_session",
                         format!("Session died and could not be restarted: {}", e),
                     );
                     return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
@@ -424,7 +424,7 @@ pub async fn handle_send_message(
                 let _ = ctrl.stop_session().await;
             }
             match GLOBAL_CHANNEL_SESSIONS
-                .stop_channel_session(&channel_id)
+                .stop_webui_session(&channel_id, &session_id)
                 .await
             {
                 Ok(()) => {

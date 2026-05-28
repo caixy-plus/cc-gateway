@@ -788,10 +788,10 @@ impl ChannelManager {
         }
 
         // Other platforms: stop the single active session for this channel.
-        if self.get_active_agent_session(channel_id).is_some() {
-            let Some(mut session) = self.get_active_agent_session(channel_id) else {
-                return Ok(());
-            };
+        let Some(mut session) = self.get_active_agent_session(channel_id) else {
+            return Ok(());
+        };
+        {
             session.active = false;
             session.state = AgentSessionState::Stopped;
             session.stopped_at = Some(Utc::now());

@@ -26,9 +26,24 @@ fn open_conn() -> Result<Connection> {
 pub fn init_schema() -> Result<()> {
     let conn = open_conn()?;
 
+    // Legacy table: older versions used `claude_sessions`.
+    // Never DROP it automatically: users may rely on the historical data.
+    let legacy_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='claude_sessions' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if legacy_exists {
+        warn!(
+            "Legacy table 'claude_sessions' exists; keeping it to avoid data loss. \
+             It is not used by current versions."
+        );
+    }
+
     conn.execute_batch(
-        "DROP TABLE IF EXISTS claude_sessions;
-         CREATE TABLE IF NOT EXISTS channel_sessions (
+        "CREATE TABLE IF NOT EXISTS channel_sessions (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             source TEXT NOT NULL,
