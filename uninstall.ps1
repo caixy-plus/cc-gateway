@@ -3,9 +3,10 @@
 # Removes the binary, install directory, the User PATH entry, and (unless
 # -KeepData / $env:CCG_KEEP_DATA=1) the data directory.
 #
-# Usage:
-#   irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/uninstall.ps1 | iex
-#   $env:CCG_KEEP_DATA='1'; irm .../uninstall.ps1 | iex
+# Usage (download first to avoid antivirus false positives):
+#   Invoke-WebRequest https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/uninstall.ps1 -OutFile cc-gateway-uninstall.ps1
+#   .\cc-gateway-uninstall.ps1
+#   $env:CCG_KEEP_DATA='1'; .\cc-gateway-uninstall.ps1
 param([switch]$KeepData)
 
 $ErrorActionPreference = 'SilentlyContinue'

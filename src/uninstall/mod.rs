@@ -6,9 +6,6 @@ use crate::{t, t_fmt};
 
 const UNINSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/uninstall.sh";
-#[cfg(windows)]
-const UNINSTALL_PS1_URL: &str =
-    "https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/uninstall.ps1";
 
 /// `cc-gateway uninstall`: the binary only handles the confirmation prompt and
 /// then hands off ALL cleanup to `uninstall.sh` / `uninstall.ps1`. The
@@ -83,17 +80,25 @@ fn run_platform(keep_data: bool) -> Result<()> {
 
 #[cfg(windows)]
 fn run_platform(keep_data: bool) -> Result<()> {
-    // A running .exe cannot delete itself on Windows, so spawn a detached
-    // PowerShell that waits for this process to exit, then fetches and runs the
-    // cleanup script (which deletes the binary, install dir, PATH entry, data).
+    // A running .exe cannot delete itself on Windows, so we write the uninstall
+    // script to a temp file and spawn a detached PowerShell that waits for this
+    // process to exit, then runs the cleanup.
+    //
+    // The script content is embedded at compile time (not downloaded at runtime)
+    // to avoid the "download + iex" pattern that triggers AV false positives.
     let self_pid = std::process::id();
-    let keep = if keep_data { "1" } else { "0" };
-    let url = powershell_quote(UNINSTALL_PS1_URL);
+
+    let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| ".".to_string());
+    let temp_file = format!(r"{}\cc-gateway-uninstall.ps1", temp_dir.trim_end_matches('\\'));
+    std::fs::write(&temp_file, include_str!("../../uninstall.ps1"))
+        .context("failed to write uninstall script to temp")?;
+
+    let keep = if keep_data { "$true" } else { "$false" };
     let script = format!(
-        r#"$ErrorActionPreference='SilentlyContinue'; $pidToWait={pid}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $env:CCG_KEEP_DATA='{keep}'; iex ((New-Object Net.WebClient).DownloadString({url}))"#,
+        r#"$pidToWait={pid}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; & '{temp}' -KeepData:{keep}; Remove-Item '{temp}'"#,
         pid = self_pid,
+        temp = temp_file.replace('\'', "''"),
         keep = keep,
-        url = url
     );
 
     std::process::Command::new("powershell")
@@ -119,7 +124,3 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-#[cfg(windows)]
-fn powershell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
