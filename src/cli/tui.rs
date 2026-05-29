@@ -271,6 +271,9 @@ impl App {
             commands: vec![
                 "/help".into(),
                 "/quit".into(),
+                "/esc".into(),
+                "/clear".into(),
+                "/status".into(),
                 "/cd".into(),
                 "/cd_default".into(),
                 "/agent".into(),

@@ -87,6 +87,18 @@ pub fn create_app_with_config_path(
             get(handlers::system::handle_update_check).post(handlers::system::handle_update),
         )
         .route("/api/restart", post(handlers::system::handle_restart))
+        .route(
+            "/api/pairing/pending",
+            get(handlers::pairing::handle_list_pending),
+        )
+        .route(
+            "/api/pairing/approve",
+            post(handlers::pairing::handle_approve),
+        )
+        .route(
+            "/api/pairing/reject",
+            post(handlers::pairing::handle_reject),
+        )
         // WebUI static files
         .route("/", get(handlers::ui::serve_index))
         .route("/{*path}", get(handlers::ui::serve_static))

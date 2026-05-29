@@ -10,6 +10,9 @@ pub enum InputMessage {
     #[serde(rename = "control_response")]
     #[allow(dead_code)]
     ControlResponse { response: ControlResponseBody },
+    /// ESC / interrupt: tells the provider to stop generating and listen.
+    #[serde(rename = "interrupt")]
+    Interrupt,
 }
 
 #[derive(Debug, Clone, Serialize)]

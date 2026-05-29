@@ -67,6 +67,10 @@ struct TelegramEventSink<'a> {
     platform: &'a TelegramPlatform,
     chat_id: i64,
     chat_id_str: String,
+    /// Controller for the active agent session. Used to auto-deny
+    /// interactive requests (permission/confirm/select/question) since
+    /// Telegram has no interactive UI for them.
+    controller: Arc<Mutex<AgentController>>,
 }
 
 #[async_trait::async_trait]
@@ -93,48 +97,83 @@ impl<'a> EventPollSink for TelegramEventSink<'a> {
         tool_name: &str,
         _input: Option<&serde_json::Value>,
     ) -> Result<()> {
-        let card = crate::t_fmt!(
-            "telegram.permission_request",
-            NAME = tool_name,
-            ID = request_id
+        let msg = crate::t_fmt!(
+            "telegram.permission_denied",
+            NAME = tool_name
         );
-        self.platform.send_message(self.chat_id, &card).await?;
+        self.platform.send_message(self.chat_id, &msg).await?;
         crate::web::state::broadcast_event(
             &self.chat_id_str,
             "telegram",
             &self.chat_id_str,
             "system",
-            &card,
+            &msg,
         );
+        // Auto-deny: Telegram has no interactive UI for permission requests.
+        let deny = crate::runtime::protocol::build_permission_deny(
+            request_id,
+            "Telegram does not support interactive permission requests",
+        );
+        let ctrl = self.controller.lock().await;
+        let _ = ctrl.send_input(deny).await;
         Ok(())
     }
 
     async fn on_confirm_request(
         &mut self,
-        _request_id: &str,
+        request_id: &str,
         prompt: &str,
         _options: &[String],
     ) -> Result<()> {
         self.platform.send_message(self.chat_id, prompt).await?;
+        // Auto-deny: Telegram has no interactive UI for confirmations.
+        let deny = crate::runtime::protocol::build_permission_deny(
+            request_id,
+            "Telegram does not support interactive confirmations",
+        );
+        let ctrl = self.controller.lock().await;
+        let _ = ctrl.send_input(deny).await;
         Ok(())
     }
 
     async fn on_select_request(
         &mut self,
-        _request_id: &str,
+        request_id: &str,
         prompt: &str,
         _options: &[String],
     ) -> Result<()> {
         self.platform.send_message(self.chat_id, prompt).await?;
+        // Auto-deny: Telegram has no interactive UI for selections.
+        let deny = crate::runtime::protocol::build_permission_deny(
+            request_id,
+            "Telegram does not support interactive selections",
+        );
+        let ctrl = self.controller.lock().await;
+        let _ = ctrl.send_input(deny).await;
         Ok(())
     }
 
     async fn on_question_request(
         &mut self,
-        _request_id: &str,
-        _questions: &[crate::runtime::controller::QuestionItem],
+        request_id: &str,
+        questions: &[crate::runtime::controller::QuestionItem],
     ) -> Result<()> {
-        // Telegram does not support interactive questions yet; just acknowledge.
+        // Show the questions to the user, then auto-deny.
+        let mut text = String::new();
+        for q in questions {
+            text.push_str(&format!("Q: {}\n", q.question));
+            if !q.options.is_empty() {
+                let opts: Vec<&str> = q.options.iter().map(|o| o.label.as_str()).collect();
+                text.push_str(&format!("Options: {}\n", opts.join(", ")));
+            }
+        }
+        self.platform.send_message(self.chat_id, &text).await?;
+        let deny = crate::runtime::protocol::build_permission_deny(
+            request_id,
+            "Telegram does not support interactive questions",
+        );
+        let ctrl = self.controller.lock().await;
+        let _ = ctrl.send_input(deny).await;
         Ok(())
     }
 }
@@ -171,6 +210,9 @@ impl TelegramPlatform {
             ("agent_history", crate::t!("telegram.command_agent_history")),
             ("show_thinking", crate::t!("telegram.command_show_thinking")),
             ("hide_thinking", crate::t!("telegram.command_hide_thinking")),
+            ("esc", crate::t!("telegram.command_esc")),
+            ("clear", crate::t!("telegram.command_clear")),
+            ("status", crate::t!("telegram.command_status")),
             ("quit", crate::t!("telegram.command_quit")),
         ]
     }
@@ -530,6 +572,22 @@ impl TelegramPlatform {
         }
 
         let chat_id_str = chat_id.to_string();
+
+        // Pairing authentication check
+        let approved =
+            crate::session::pairing::GLOBAL_PAIRING_MANAGER.is_approved("telegram", &chat_id_str);
+        if !approved {
+            if self.config.require_pairing {
+                let code =
+                    crate::session::pairing::GLOBAL_PAIRING_MANAGER
+                        .get_or_create_pending("telegram", &chat_id_str);
+                let msg = crate::t_fmt!("pairing.wait_message", CODE = code);
+                self.send_message(chat_id, &msg).await?;
+            }
+            // When require_pairing is false: silently ignore unapproved chats.
+            return Ok(());
+        }
+
         let runtime = self.get_channel(&chat_id_str).await;
 
         // Build a router for this channel
@@ -625,6 +683,7 @@ impl TelegramPlatform {
                     platform: self,
                     chat_id,
                     chat_id_str: chat_id_str.clone(),
+                    controller: active.controller.clone(),
                 };
                 // Telegram: time-first flush (200ms), buffer max 2000 chars.
                 let mut sink = crate::runtime::event_poller::BufferedSink::new(

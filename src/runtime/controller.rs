@@ -168,6 +168,8 @@ pub struct AgentController {
     pending_resume_provider: Arc<RwLock<Option<AgentProvider>>>,
     pending_resume_record_id: Arc<RwLock<Option<String>>>,
     mcp_context: Arc<RwLock<Option<McpContext>>>,
+    /// Whether the agent is currently generating output (true) or idle/ready (false).
+    is_busy: Arc<AtomicBool>,
 }
 
 impl AgentController {
@@ -193,6 +195,7 @@ impl AgentController {
             pending_resume_provider: Arc::new(RwLock::new(None)),
             pending_resume_record_id: Arc::new(RwLock::new(None)),
             mcp_context: Arc::new(RwLock::new(None)),
+            is_busy: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -301,8 +304,13 @@ impl AgentController {
         let show_thinking = self.show_thinking.clone();
         let permission_policy = config.permission.clone();
         let provider_session_id_arc = self.provider_session_id.clone();
+        let is_busy = self.is_busy.clone();
         tokio::spawn(async move {
             while let Some(event) = agent_rx.recv().await {
+                // Track idle/busy: agent becomes idle after a turn finishes.
+                if matches!(event, AgentEvent::Done | AgentEvent::Error(_)) {
+                    is_busy.store(false, Ordering::Relaxed);
+                }
                 Self::process_agent_event(
                     &event_tx,
                     &pending_perm,
@@ -315,6 +323,7 @@ impl AgentController {
                 .await;
             }
             let _ = event_tx.send(ControllerEvent::Done);
+            is_busy.store(false, Ordering::Relaxed);
 
             // Auto-cleanup: stdout closed means the child process exited
             {
@@ -363,6 +372,7 @@ impl AgentController {
     }
 
     pub async fn stop_session(&self) -> Result<()> {
+        self.is_busy.store(false, Ordering::Relaxed);
         let mut s = self.session.write().await;
         if let Some(session) = s.take() {
             session.stop().await?;
@@ -384,6 +394,7 @@ impl AgentController {
 
     /// Force-stop the active session immediately (used by `/quit`).
     pub async fn force_stop_session(&self) -> Result<()> {
+        self.is_busy.store(false, Ordering::Relaxed);
         let mut s = self.session.write().await;
         if let Some(session) = s.take() {
             session.force_stop().await?;
@@ -404,6 +415,33 @@ impl AgentController {
         Ok(())
     }
 
+    /// Clear current session context.
+    ///
+    /// Sends an interrupt (best-effort) to stop any in-progress generation,
+    /// then forwards a clear-context command to the agent. The agent handles
+    /// the actual context reset internally — the session and process stay alive,
+    /// session ID unchanged.
+    pub async fn clear_session(&self) -> Result<()> {
+        // Best-effort interrupt: if the agent is generating, stop it so it
+        // can read and process the clear command.
+        let _ = self.send_interrupt().await;
+
+        let state = self.session_state.read().await.clone();
+        match state {
+            SessionState::Inactive | SessionState::Starting => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Active => {
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.send_clear().await
+                } else {
+                    anyhow::bail!("{}", t!("controller.no_active_session"))
+                }
+            }
+        }
+    }
+
     pub async fn send_message(&self, text: &str) -> Result<()> {
         let state = self.session_state.read().await.clone();
         match state {
@@ -419,6 +457,26 @@ impl AgentController {
                 let mut s = self.session.write().await;
                 if let Some(ref mut session) = *s {
                     session.send_message(text).await?;
+                    self.is_busy.store(true, Ordering::Relaxed);
+                    Ok(())
+                } else {
+                    anyhow::bail!("{}", t!("controller.no_active_session"))
+                }
+            }
+        }
+    }
+
+    /// Send ESC / interrupt to the active session.
+    pub async fn send_interrupt(&self) -> Result<()> {
+        let state = self.session_state.read().await.clone();
+        match state {
+            SessionState::Inactive | SessionState::Starting => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Active => {
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.send_interrupt().await?;
                     Ok(())
                 } else {
                     anyhow::bail!("{}", t!("controller.no_active_session"))
@@ -462,6 +520,21 @@ impl AgentController {
     pub async fn get_work_dir(&self) -> String {
         let wd = self.work_dir.read().await;
         wd.clone()
+    }
+
+    /// Whether the agent is currently generating output (true) or ready for input (false).
+    pub fn is_busy(&self) -> bool {
+        self.is_busy.load(Ordering::Relaxed)
+    }
+
+    /// Summary of current session state, used by `/status`.
+    /// Only called when a session is active; returns ready or busy.
+    pub async fn status_summary(&self) -> String {
+        if self.is_busy() {
+            t!("builtin.status_busy").to_string()
+        } else {
+            t!("builtin.status_ready").to_string()
+        }
     }
 
     /// Clone the internal event receiver Arc so consumers can poll events

@@ -183,6 +183,22 @@ async fn active_agent_session_forwards_slash_commands_except_gateway_controls() 
         CommandAction::StopSession
     ));
     assert!(matches!(
+        router.route("/esc").await,
+        CommandAction::Interrupt { prompt: None }
+    ));
+    assert!(matches!(
+        router.route("/esc /clear").await,
+        CommandAction::Interrupt { prompt } if prompt.as_deref() == Some("/clear")
+    ));
+    assert!(matches!(
+        router.route("/clear").await,
+        CommandAction::ClearSession
+    ));
+    assert!(matches!(
+        router.route("/status").await,
+        CommandAction::Status
+    ));
+    assert!(matches!(
         router.route("/show-thinking").await,
         CommandAction::ShowThinking
     ));

@@ -67,6 +67,12 @@ pub fn init_schema() -> Result<()> {
             updated_at TEXT,
             FOREIGN KEY (channel_session_id) REFERENCES channel_sessions(id)
         );
+        CREATE TABLE IF NOT EXISTS pending_pairings (
+            pairing_code TEXT PRIMARY KEY,
+            platform TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         PRAGMA journal_mode=WAL;",
     )?;
 
@@ -382,4 +388,83 @@ fn str_to_source(s: &str) -> SessionSource {
             SessionSource::WebUI
         }
     }
+}
+
+// ------------------------------------------------------------------
+// PendingPairing CRUD (works with raw fields; the pairing module owns the struct)
+// ------------------------------------------------------------------
+
+pub fn insert_pending_pairing(
+    pairing_code: &str,
+    platform: &str,
+    chat_id: &str,
+    created_at: &str,
+) {
+    if let Err(e) = try_insert_pending_pairing(pairing_code, platform, chat_id, created_at) {
+        warn!("Failed to persist pending pairing {}: {}", pairing_code, e);
+    }
+}
+
+fn try_insert_pending_pairing(
+    pairing_code: &str,
+    platform: &str,
+    chat_id: &str,
+    created_at: &str,
+) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO pending_pairings (pairing_code, platform, chat_id, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![pairing_code, platform, chat_id, created_at],
+    )?;
+    Ok(())
+}
+
+pub fn delete_pending_pairing(pairing_code: &str) {
+    if let Err(e) = try_delete_pending_pairing(pairing_code) {
+        warn!("Failed to delete pending pairing {}: {}", pairing_code, e);
+    }
+}
+
+fn try_delete_pending_pairing(pairing_code: &str) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "DELETE FROM pending_pairings WHERE pairing_code = ?1",
+        params![pairing_code],
+    )?;
+    Ok(())
+}
+
+pub fn load_all_pending_pairings() -> Vec<(String, String, String, String)> {
+    match try_load_all_pending_pairings() {
+        Ok(list) => list,
+        Err(e) => {
+            error!("Failed to load pending pairings from DB: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+fn try_load_all_pending_pairings() -> Result<Vec<(String, String, String, String)>> {
+    let conn = open_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT pairing_code, platform, chat_id, created_at FROM pending_pairings",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    let mut list = Vec::new();
+    for row in rows {
+        match row {
+            Ok(p) => list.push(p),
+            Err(e) => warn!("Failed to parse pending pairing row: {}", e),
+        }
+    }
+    Ok(list)
 }

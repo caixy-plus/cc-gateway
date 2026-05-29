@@ -69,6 +69,27 @@ impl AgentRuntime {
         }
     }
 
+    /// Send ESC / interrupt to the active provider.
+    pub async fn send_interrupt(&mut self) -> Result<()> {
+        match self {
+            AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
+            AgentRuntime::Cursor(session) => session.send_cancel().await,
+        }
+    }
+
+    /// Send clear-context command to the active provider.
+    /// The provider handles context reset internally; session ID stays the same.
+    pub async fn send_clear(&mut self) -> Result<()> {
+        match self {
+            AgentRuntime::Claude(session) => {
+                session
+                    .send(crate::runtime::protocol::build_user_message("/clear"))
+                    .await
+            }
+            AgentRuntime::Cursor(session) => session.send_user_message("/clear").await,
+        }
+    }
+
     pub async fn send_input(&mut self, msg: InputMessage) -> Result<()> {
         match self {
             AgentRuntime::Claude(session) => session.send(msg).await,
@@ -87,6 +108,7 @@ impl AgentRuntime {
                         .unwrap_or_else(|| message.content.to_string());
                     session.send_user_message(&text).await
                 }
+                InputMessage::Interrupt => session.send_cancel().await,
             },
         }
     }

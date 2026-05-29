@@ -51,6 +51,7 @@ impl DaemonEngine {
             error!("Failed to initialize session database: {}", e);
         }
         crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS.load_from_db();
+        crate::session::pairing::GLOBAL_PAIRING_MANAGER.load_from_db();
 
         // Start all enabled platforms concurrently
         let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();

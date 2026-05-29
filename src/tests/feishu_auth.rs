@@ -17,6 +17,7 @@ fn make_token_manager() -> TokenManager {
         encrypt_key: "".to_string(),
         mode: "websocket".to_string(),
         webhook_bind: "0.0.0.0:3000".to_string(),
+        require_pairing: false,
     };
     TokenManager::new(config)
 }

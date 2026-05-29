@@ -143,6 +143,7 @@ pub(crate) fn feishu_platform(default_dir: &str) -> FeishuPlatform {
             encrypt_key: String::new(),
             mode: "websocket".to_string(),
             webhook_bind: "127.0.0.1:0".to_string(),
+            require_pairing: false,
         },
         default_dir,
         AgentProfiles::default(),

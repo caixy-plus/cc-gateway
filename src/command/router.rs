@@ -43,6 +43,13 @@ pub enum CommandAction {
     ShowAgentHistory { arg: String },
     /// Set this channel's default agent (`/agents` picker or `/agents claude|cursor`)
     SelectChannelAgent { provider: Option<AgentProvider> },
+    /// ESC / interrupt: force-send queued messages and stop current generation.
+    /// Optional prompt is forwarded to the agent immediately after the interrupt.
+    Interrupt { prompt: Option<String> },
+    /// Clear current agent session context (restart fresh in same directory)
+    ClearSession,
+    /// Show current agent status (ready / generating output)
+    Status,
     /// Forward regular text to the active Claude session
     ForwardToAgent(String),
     /// Unknown slash command when no session is active
@@ -109,6 +116,15 @@ impl CommandRouter {
             // controls that affect the gateway process itself.
             match cmd {
                 "/quit" => CommandAction::StopSession,
+                "/esc" => CommandAction::Interrupt {
+                    prompt: if arg.is_empty() {
+                        None
+                    } else {
+                        Some(arg.to_string())
+                    },
+                },
+                "/clear" => CommandAction::ClearSession,
+                "/status" => CommandAction::Status,
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
                 _ => CommandAction::ForwardToAgent(trimmed.to_string()),
@@ -217,6 +233,39 @@ impl CommandRouter {
                     Ok(()) => Some(crate::command::agents::session_stopped_message(&provider)),
                     Err(e) => Some(t_fmt!("builtin.failed_stop_session", ERR = e)),
                 }
+            }
+            CommandAction::Interrupt { prompt } => {
+                let ctrl = self.controller.lock().await;
+                if !ctrl.is_busy() && prompt.is_none() {
+                    return Some(t!("builtin.esc_already_idle").to_string());
+                }
+                match ctrl.send_interrupt().await {
+                    Ok(()) => {
+                        if let Some(ref text) = prompt {
+                            match ctrl.send_message(text).await {
+                                Ok(()) => Some(t_fmt!(
+                                    "builtin.esc_with_prompt_sent",
+                                    MSG = text
+                                )),
+                                Err(e) => Some(t_fmt!("builtin.failed_esc", ERR = e)),
+                            }
+                        } else {
+                            Some(t!("builtin.esc_sent").to_string())
+                        }
+                    }
+                    Err(e) => Some(t_fmt!("builtin.failed_esc", ERR = e)),
+                }
+            }
+            CommandAction::ClearSession => {
+                let ctrl = self.controller.lock().await;
+                match ctrl.clear_session().await {
+                    Ok(()) => Some(t!("builtin.context_cleared").to_string()),
+                    Err(e) => Some(t_fmt!("builtin.failed_clear", ERR = e)),
+                }
+            }
+            CommandAction::Status => {
+                let ctrl = self.controller.lock().await;
+                Some(ctrl.status_summary().await)
             }
             CommandAction::ChangeDir(path) => {
                 let ctrl = self.controller.lock().await;
@@ -355,14 +404,15 @@ impl CommandRouter {
                 let selected = if let Some(p) = explicit {
                     p
                 } else {
+                    let profiles_for_select = profiles.clone();
                     let picked = tokio::task::spawn_blocking(move || {
-                        agents::interactive_select_provider(&current)
+                        agents::interactive_select_provider(&profiles_for_select, &current)
                     })
                     .await
                     .unwrap_or(crate::command::builtin::SelectAction::Cancelled);
                     match picked {
                         crate::command::builtin::SelectAction::Selected(idx) => {
-                            match agents::provider_at_index(idx) {
+                            match agents::provider_at_index(&profiles, idx) {
                                 Some(p) => p,
                                 None => return Some(t!("builtin.invalid_agent_index").to_string()),
                             }
@@ -425,7 +475,7 @@ impl CommandRouter {
                 Some(self.builtin.agent_history(&arg).await)
             }
             CommandAction::UnknownCommand(cmd) => {
-                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agents, /agent-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking", cmd))
+                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status", cmd))
             }
             CommandAction::ForwardToAgent(text) => {
                 let ctrl = self.controller.lock().await;

@@ -228,7 +228,7 @@ impl ChatCommandExecutor {
                     let current = GLOBAL_CHANNEL_SESSIONS
                         .effective_channel_provider(&context.channel_id, &self.agent_settings);
                     let options: Vec<(String, String)> =
-                        crate::command::agents::available_providers()
+                        crate::command::agents::available_providers(&self.agent_settings)
                             .into_iter()
                             .map(|p| {
                                 (
@@ -296,6 +296,74 @@ impl ChatCommandExecutor {
                 let sessions = GLOBAL_CHANNEL_SESSIONS
                     .list_agent_sessions_by_channel(&context.channel_id, Some(10));
                 Ok(ChatCommandOutcome::History { sessions })
+            }
+            CommandAction::Interrupt { prompt } => {
+                match context.active_agent.as_ref() {
+                    Some(active) => {
+                        let ctrl = active.controller.lock().await;
+                        if !ctrl.is_busy() && prompt.is_none() {
+                            return Ok(ChatCommandOutcome::Reply(
+                                t!("builtin.esc_already_idle").to_string(),
+                            ));
+                        }
+                        match ctrl.send_interrupt().await {
+                            Ok(()) => {
+                                if let Some(ref text) = prompt {
+                                    match ctrl.send_message(text).await {
+                                        Ok(()) => Ok(ChatCommandOutcome::Reply(t_fmt!(
+                                            "builtin.esc_with_prompt_sent",
+                                            MSG = text
+                                        ))),
+                                        Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                                            "builtin.failed_esc",
+                                            ERR = e
+                                        ))),
+                                    }
+                                } else {
+                                    Ok(ChatCommandOutcome::Reply(
+                                        t!("builtin.esc_sent").to_string(),
+                                    ))
+                                }
+                            }
+                            Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                                "builtin.failed_esc",
+                                ERR = e
+                            ))),
+                        }
+                    }
+                    None => Ok(ChatCommandOutcome::Error(
+                        t!("controller.no_active_session").to_string(),
+                    )),
+                }
+            }
+            CommandAction::Status => {
+                let summary = match context.active_agent.as_ref() {
+                    Some(active) => {
+                        let ctrl = active.controller.lock().await;
+                        ctrl.status_summary().await
+                    }
+                    None => t!("builtin.status_inactive").to_string(),
+                };
+                Ok(ChatCommandOutcome::Reply(summary))
+            }
+            CommandAction::ClearSession => {
+                match context.active_agent.as_ref() {
+                    Some(active) => {
+                        let ctrl = active.controller.lock().await;
+                        match ctrl.clear_session().await {
+                            Ok(()) => Ok(ChatCommandOutcome::Reply(
+                                t!("builtin.context_cleared").to_string(),
+                            )),
+                            Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                                "builtin.failed_clear",
+                                ERR = e
+                            ))),
+                        }
+                    }
+                    None => Ok(ChatCommandOutcome::Error(
+                        t!("controller.no_active_session").to_string(),
+                    )),
+                }
             }
             CommandAction::ForwardToAgent(text) => {
                 let active = match context.active_agent.clone() {

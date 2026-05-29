@@ -223,6 +223,19 @@ impl CursorAcpSession {
         Ok(())
     }
 
+    /// Send ESC / cancel to Cursor ACP without killing the process.
+    pub async fn send_cancel(&self) -> Result<()> {
+        Self::write_json(
+            &self.stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "session/cancel",
+                "params": { "sessionId": self.session_id.clone() }
+            }),
+        )
+        .await
+    }
+
     pub async fn send_permission_response(&self, request_id: &str, allow: bool) -> Result<()> {
         let id = self
             .pending_permissions

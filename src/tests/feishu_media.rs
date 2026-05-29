@@ -20,6 +20,7 @@ fn make_test_platform() -> FeishuPlatform {
         encrypt_key: "".to_string(),
         mode: "websocket".to_string(),
         webhook_bind: "0.0.0.0:3000".to_string(),
+        require_pairing: false,
     };
     let gateway_config = GatewayConfig::default();
     FeishuPlatform::new(

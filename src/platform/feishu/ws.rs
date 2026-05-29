@@ -374,6 +374,22 @@ impl FeishuPlatform {
         let receive_id = msg.receive_id.clone();
         let message_id = msg.message_id.clone();
 
+        // Pairing authentication check
+        use crate::session::pairing::GLOBAL_PAIRING_MANAGER;
+        let approved = GLOBAL_PAIRING_MANAGER.is_approved("feishu", &chat_id);
+        if !approved {
+            if self.config.require_pairing {
+                let code = GLOBAL_PAIRING_MANAGER.get_or_create_pending("feishu", &chat_id);
+                let msg_text = crate::t_fmt!("pairing.wait_message", CODE = code);
+                let _ = self
+                    .send_text_message(&receive_id_type, &receive_id, &msg_text)
+                    .await;
+            }
+            // When require_pairing is false: silently ignore unapproved chats.
+            self.on_processing_complete(&message_id, true).await;
+            return;
+        }
+
         let content = match self.resolve_inbound_content(&msg).await {
             Ok(content) => content,
             Err(e) => {

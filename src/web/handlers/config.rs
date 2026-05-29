@@ -88,6 +88,7 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             config.feishu.encrypt_key = c.encrypt_key;
             config.feishu.mode = c.mode;
             config.feishu.webhook_bind = c.webhook_bind;
+            config.feishu.require_pairing = c.require_pairing;
         }
     }
     if let Some(v) = body.get("telegram") {
@@ -99,6 +100,7 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             config.telegram.enabled = c.enabled;
             config.telegram.allow_from = c.allow_from;
             config.telegram.webhook_url = c.webhook_url;
+            config.telegram.require_pairing = c.require_pairing;
         }
     }
 

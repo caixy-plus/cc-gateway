@@ -6,7 +6,6 @@ pub mod state;
 use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -35,11 +34,14 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
         return Ok(());
     }
 
-    // Singleton guard 2: check PID file flock to see if a daemon is already running.
+    // Singleton guard 2: check .daemon.lock to see if a daemon is already running.
+    // .daemon.lock is exclusively locked by the daemon process; if we can't
+    // acquire it, a daemon is already active.
+    let lock_file = config_dir.join(".daemon.lock");
     if let Ok(file) = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&pid_file)
+        .open(&lock_file)
     {
         if file.try_lock_exclusive().is_err() {
             if let Ok(pid_str) = fs::read_to_string(&pid_file) {
@@ -164,24 +166,26 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
-    // Singleton guard 2: exclusive flock on PID file.
-    let mut pid_lock = fs::OpenOptions::new()
+    // Singleton guard 2: exclusive flock on .daemon.lock.
+    // Using a separate lock file keeps daemon.pid readable by stop()/status()
+    // on Windows where LockFileEx is mandatory (prevents reads).
+    let lock_file_path = config_dir.join(".daemon.lock");
+    let pid_lock = fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
-        .truncate(false)
-        .open(&pid_file)
-        .context("Failed to open PID lock file")?;
+        .truncate(true)
+        .open(&lock_file_path)
+        .context("Failed to open daemon lock file")?;
 
     pid_lock
         .try_lock_exclusive()
         .context("Another cc-gateway daemon is already running")?;
 
-    // Write our PID into the locked file.
+    // Write PID file separately (not locked, readable by stop()/status()).
     let pid = std::process::id();
-    pid_lock.set_len(0)?;
-    writeln!(&pid_lock, "{}", pid)?;
-    pid_lock.flush()?;
+    fs::write(&pid_file, format!("{}\n", pid))
+        .context("Failed to write PID file")?;
 
     // Trim log file before initializing logging to avoid race with the writer.
     {
@@ -229,8 +233,9 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
     let engine = engine::DaemonEngine::new_with_config_path(config, config_path);
     engine.run(tokio_listener).await?;
 
-    // Cleanup: lock is released when pid_lock drops.
+    // Cleanup: locks are released when pid_lock drops.
     let _ = fs::remove_file(&pid_file);
+    let _ = fs::remove_file(&lock_file_path);
     info!("cc-gateway daemon stopped (PID: {})", pid);
     Ok(())
 }
@@ -250,19 +255,24 @@ pub async fn stop() -> Result<()> {
 
     #[cfg(windows)]
     {
-        // On Windows the PID file may be locked; fall back to tasklist.
+        // On Windows fall back to tasklist if PID file wasn't readable.
+        // Filter out the current process PID (cc-gateway stop is also cc-gateway.exe).
         if pid.is_none() {
+            let current_pid = std::process::id();
             pid = std::process::Command::new("tasklist")
                 .args(["/FI", "IMAGENAME eq cc-gateway.exe", "/NH", "/FO", "CSV"])
                 .output()
                 .ok()
                 .and_then(|output| {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    stdout.lines().next().and_then(|line| {
-                        line.split(',')
-                            .nth(1)
-                            .and_then(|s| s.trim_matches('"').parse::<u32>().ok())
-                    })
+                    stdout
+                        .lines()
+                        .filter_map(|line| {
+                            let pid_str = line.split(',').nth(1)?;
+                            let pid = pid_str.trim_matches('"').parse::<u32>().ok()?;
+                            if pid != current_pid { Some(pid) } else { None }
+                        })
+                        .next()
                 });
         }
     }
@@ -327,10 +337,18 @@ pub async fn stop() -> Result<()> {
     {
         use std::process::Command;
         println!("{}", t_fmt!("daemon.stop_signal", PID = pid));
-        Command::new("taskkill")
+        let result = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .output()
-            .context("Failed to kill daemon process")?;
+            .context("Failed to run taskkill")?;
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            anyhow::bail!(
+                "Failed to kill daemon process (PID: {}). taskkill error: {}",
+                pid,
+                stderr.trim()
+            );
+        }
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if !is_process_alive(pid) {
@@ -359,17 +377,21 @@ pub async fn status() -> Result<()> {
     #[cfg(windows)]
     {
         if pid.is_none() {
+            let current_pid = std::process::id();
             pid = std::process::Command::new("tasklist")
                 .args(["/FI", "IMAGENAME eq cc-gateway.exe", "/NH", "/FO", "CSV"])
                 .output()
                 .ok()
                 .and_then(|output| {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    stdout.lines().next().and_then(|line| {
-                        line.split(',')
-                            .nth(1)
-                            .and_then(|s| s.trim_matches('"').parse::<u32>().ok())
-                    })
+                    stdout
+                        .lines()
+                        .filter_map(|line| {
+                            let pid_str = line.split(',').nth(1)?;
+                            let pid = pid_str.trim_matches('"').parse::<u32>().ok()?;
+                            if pid != current_pid { Some(pid) } else { None }
+                        })
+                        .next()
                 });
         }
     }
@@ -436,17 +458,21 @@ async fn is_daemon_running_for_webui_check() -> Result<bool> {
     #[cfg(windows)]
     {
         if pid.is_none() {
+            let current_pid = std::process::id();
             pid = std::process::Command::new("tasklist")
                 .args(["/FI", "IMAGENAME eq cc-gateway.exe", "/NH", "/FO", "CSV"])
                 .output()
                 .ok()
                 .and_then(|output| {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    stdout.lines().next().and_then(|line| {
-                        line.split(',')
-                            .nth(1)
-                            .and_then(|s| s.trim_matches('"').parse::<u32>().ok())
-                    })
+                    stdout
+                        .lines()
+                        .filter_map(|line| {
+                            let pid_str = line.split(',').nth(1)?;
+                            let pid = pid_str.trim_matches('"').parse::<u32>().ok()?;
+                            if pid != current_pid { Some(pid) } else { None }
+                        })
+                        .next()
                 });
         }
     }

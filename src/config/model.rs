@@ -75,6 +75,8 @@ pub struct FeishuConfig {
     pub encrypt_key: String,
     pub mode: String,
     pub webhook_bind: String,
+    /// Require WebUI admin approval before allowing new chats to interact.
+    pub require_pairing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +86,8 @@ pub struct TelegramConfig {
     pub bot_token: String,
     pub allow_from: String,
     pub webhook_url: String,
+    /// Require WebUI admin approval before allowing new chats to interact.
+    pub require_pairing: bool,
 }
 
 impl Default for GatewayConfig {
@@ -256,6 +260,7 @@ impl Default for TelegramConfig {
             bot_token: "${TELEGRAM_BOT_TOKEN}".to_string(),
             allow_from: "*".to_string(),
             webhook_url: "".to_string(),
+            require_pairing: true,
         }
     }
 }
@@ -270,6 +275,7 @@ impl Default for FeishuConfig {
             encrypt_key: "".to_string(),
             mode: "websocket".to_string(),
             webhook_bind: "0.0.0.0:3000".to_string(),
+            require_pairing: true,
         }
     }
 }

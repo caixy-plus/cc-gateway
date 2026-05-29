@@ -309,8 +309,8 @@ pub fn t(key: &str) -> &str {
 
         // command/builtin.rs
         "builtin.help" => match lang {
-            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
-            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /esc                 Interrupt agent (flush queued messages)\n  /clear               Clear session context\n  /status              Show agent status (ready / busy)\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
+            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /esc                 打断智能体（强制发送排队消息）\n  /clear               清理会话上下文\n  /status              显示智能体状态（就绪 / 输出中）\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
         },
         "builtin.help_title" => match lang {
             Language::En => "cc-gateway commands:",
@@ -363,6 +363,18 @@ pub fn t(key: &str) -> &str {
         "builtin.help_agents" => match lang {
             Language::En => "  /agents              Set this channel's default agent (interactive picker)",
             Language::ZhCN => "  /agents              设置本频道默认智能体（交互选择）",
+        },
+        "builtin.help_esc" => match lang {
+            Language::En => "  /esc                 Interrupt agent (flush queued messages)",
+            Language::ZhCN => "  /esc                 打断智能体（强制发送排队消息）",
+        },
+        "builtin.help_clear" => match lang {
+            Language::En => "  /clear               Clear context",
+            Language::ZhCN => "  /clear               清理上下文",
+        },
+        "builtin.help_status" => match lang {
+            Language::En => "  /status              Show agent status (ready / busy)",
+            Language::ZhCN => "  /status              显示智能体状态（就绪 / 输出中）",
         },
         "builtin.select_agent_prompt" => match lang {
             Language::En => "Select default agent for this channel (↑↓ Enter, Esc cancel):",
@@ -427,6 +439,46 @@ pub fn t(key: &str) -> &str {
         "builtin.failed_stop_session" => match lang {
             Language::En => "Failed to stop session: {ERR}",
             Language::ZhCN => "停止会话失败: {ERR}",
+        },
+        "builtin.esc_sent" => match lang {
+            Language::En => "ESC sent — interrupting agent.",
+            Language::ZhCN => "ESC 已发送 — 正在打断智能体。",
+        },
+        "builtin.esc_already_idle" => match lang {
+            Language::En => "Agent is already idle — no need to interrupt.",
+            Language::ZhCN => "智能体已经处于就绪状态，无需打断。",
+        },
+        "builtin.esc_with_prompt_sent" => match lang {
+            Language::En => "ESC sent — interrupted and forwarded: {MSG}",
+            Language::ZhCN => "ESC 已发送 — 已打断并转发: {MSG}",
+        },
+        "builtin.failed_esc" => match lang {
+            Language::En => "Failed to send ESC: {ERR}",
+            Language::ZhCN => "发送 ESC 失败: {ERR}",
+        },
+        "builtin.context_cleared" => match lang {
+            Language::En => "Context cleared.",
+            Language::ZhCN => "上下文已清理。",
+        },
+        "builtin.failed_clear" => match lang {
+            Language::En => "Failed to clear context: {ERR}",
+            Language::ZhCN => "清理上下文失败: {ERR}",
+        },
+        "builtin.status_inactive" => match lang {
+            Language::En => "No active agent session.",
+            Language::ZhCN => "无活跃智能体会话。",
+        },
+        "builtin.status_starting" => match lang {
+            Language::En => "Agent is starting up...",
+            Language::ZhCN => "智能体正在启动中...",
+        },
+        "builtin.status_ready" => match lang {
+            Language::En => "Agent is ready (idle).",
+            Language::ZhCN => "智能体就绪（空闲）。",
+        },
+        "builtin.status_busy" => match lang {
+            Language::En => "Agent is generating output...",
+            Language::ZhCN => "智能体正在输出中...",
         },
         "builtin.cd_usage" => match lang {
             Language::En => "Usage: /cd <path>",
@@ -642,8 +694,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking",
+            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
         },
 
         "feishu.file_from_user" => match lang {
@@ -743,6 +795,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
         },
+        "telegram.permission_denied" => match lang {
+            Language::En => "Permission denied: `{NAME}` (Telegram does not support interactive permission requests)",
+            Language::ZhCN => "权限已拒绝: `{NAME}`（Telegram 不支持交互式权限请求）",
+        },
         "cursor.resume_may_ignore_flags" => match lang {
             Language::En => "Note: Cursor session resume may not honor CLI flags like --yolo/--print. If the resumed session behaves unexpectedly, create a new session.",
             Language::ZhCN => "提示：Cursor 会话恢复可能不会完全生效 CLI 启动参数（如 --yolo/--print）。如果恢复后行为异常，请新建会话。",
@@ -764,8 +820,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "其他文本将直接发送给活动智能体。",
         },
         "telegram.help_text" => match lang {
-            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nAny other text will be forwarded to the active agent.",
-            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Interrupt agent\n/clear Clear context\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   打断智能体\n/clear 清理上下文\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",
@@ -830,6 +886,18 @@ pub fn t(key: &str) -> &str {
         "telegram.command_quit" => match lang {
             Language::En => "Stop active session",
             Language::ZhCN => "停止当前会话",
+        },
+        "telegram.command_esc" => match lang {
+            Language::En => "Interrupt agent",
+            Language::ZhCN => "打断智能体",
+        },
+        "telegram.command_clear" => match lang {
+            Language::En => "Clear context",
+            Language::ZhCN => "清理上下文",
+        },
+        "telegram.command_status" => match lang {
+            Language::En => "Show status",
+            Language::ZhCN => "显示状态",
         },
         "telegram.choose_directory" => match lang {
             Language::En => "Choose a directory in {DIR}:",
@@ -954,6 +1022,16 @@ pub fn t(key: &str) -> &str {
         "webui.failed_restart_session" => match lang {
             Language::En => "Failed to restart session: {ERR}",
             Language::ZhCN => "重启会话失败: {ERR}",
+        },
+
+        // pairing
+        "pairing.wait_message" => match lang {
+            Language::En => "Waiting for admin approval. Your pairing code is: {CODE}",
+            Language::ZhCN => "等待管理员放行，你的配对码是：{CODE}",
+        },
+        "pairing.already_pending" => match lang {
+            Language::En => "Your pairing request is still pending. Pairing code: {CODE}",
+            Language::ZhCN => "你的配对请求仍在等待放行，配对码：{CODE}",
         },
 
         _ => key,

@@ -88,6 +88,7 @@ impl FileDelivery for FeishuFileTarget {
             enabled: true,
             mode: "websocket".to_string(),
             webhook_bind: String::new(),
+            require_pairing: false,
         };
         let platform = crate::platform::feishu::FeishuPlatform::new(
             config,

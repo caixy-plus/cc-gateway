@@ -14,6 +14,7 @@ fn telegram_platform(allow_from: &str, default_dir: &str) -> TelegramPlatform {
             bot_token: "telegram-token".to_string(),
             allow_from: allow_from.to_string(),
             webhook_url: String::new(),
+            require_pairing: false,
         },
         default_dir,
         AgentProfiles::default(),
@@ -82,6 +83,9 @@ fn telegram_bot_commands_payload_uses_valid_menu_commands() {
         "agent_history",
         "show_thinking",
         "hide_thinking",
+        "esc",
+        "clear",
+        "status",
         "quit",
     ];
     for name in expected {

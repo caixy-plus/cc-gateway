@@ -168,6 +168,9 @@ pub async fn handle_help() -> (StatusCode, String) {
     let commands = json!([
         { "cmd": "/help", "desc": "Show available commands" },
         { "cmd": "/quit", "desc": "Quit current agent session" },
+        { "cmd": "/esc", "desc": "Interrupt agent (flush queued messages)" },
+        { "cmd": "/clear", "desc": "Clear context" },
+        { "cmd": "/status", "desc": "Show agent status (ready / busy)" },
         { "cmd": "/cd <path>", "desc": "Change working directory" },
         { "cmd": "/cd_default", "desc": "Reset to default directory" },
         { "cmd": "/agent [args...]", "desc": "Start a new agent session" },
