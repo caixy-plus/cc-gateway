@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -101,7 +102,12 @@ impl DaemonEngine {
             crate::web::server::create_app_with_config_path(&self.config, self.config_path.clone());
         let shutdown_for_server = shutdown_notify.clone();
         let server_handle = tokio::spawn(async move {
-            match axum::serve(listener, app).await {
+            match axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            {
                 Ok(()) => {
                     error!("HTTP server exited unexpectedly");
                     shutdown_for_server.notify_one();
@@ -113,8 +119,8 @@ impl DaemonEngine {
             }
         });
         info!(
-            "HTTP server listening on http://127.0.0.1:{}",
-            self.config.port
+            "HTTP server listening on http://{}:{}",
+            self.config.bind_address, self.config.port
         );
 
         if platforms.is_empty() {

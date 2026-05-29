@@ -78,6 +78,17 @@ pub fn session_resumed_message(provider: &AgentProvider, dir: &str) -> String {
     )
 }
 
+/// Message shown when a session is restarted (e.g. user clicks "Restart Session").
+/// For Pi, which cannot resume sessions, appends a hint that the session is brand-new.
+pub fn session_restarted_message(provider: &AgentProvider, dir: &str) -> String {
+    let base = session_resumed_message(provider, dir);
+    if matches!(provider, AgentProvider::Pi) {
+        format!("{}\n{}", base, crate::t!("builtin.session_restarted_pi_hint"))
+    } else {
+        base
+    }
+}
+
 pub fn session_stopped_message(provider: &AgentProvider) -> String {
     t_fmt!(
         "builtin.session_stopped",

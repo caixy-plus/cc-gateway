@@ -1,4 +1,5 @@
 use axum::{
+    middleware,
     routing::{delete, get, post},
     Router,
 };
@@ -7,6 +8,8 @@ use tower_http::cors::CorsLayer;
 use crate::config::model::GatewayConfig;
 use crate::web::handlers;
 use crate::web::handlers::session::AppState;
+
+use crate::web::middleware as auth_middleware;
 
 #[allow(dead_code)]
 pub fn create_app(config: &GatewayConfig) -> Router {
@@ -22,6 +25,8 @@ pub fn create_app_with_config_path(
         show_thinking: config.show_thinking,
         default_dir: config.default_dir.clone(),
         daemon_config_path: config_path,
+        allowed_ips: config.allowed_ips.clone(),
+        webui_token: config.webui_token.clone(),
     };
 
     Router::new()
@@ -122,6 +127,14 @@ pub fn create_app_with_config_path(
         // WebUI static files
         .route("/", get(handlers::ui::serve_index))
         .route("/{*path}", get(handlers::ui::serve_static))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware::ip_allowlist,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware::webui_token_auth,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

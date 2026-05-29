@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::config::loader::ConfigLoader;
+use crate::config::model::GatewayConfig;
 use crate::{t, t_fmt};
 
 const DAEMON_PID_FILE: &str = "daemon.pid";
@@ -98,15 +99,17 @@ pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
             // On Windows the PID file is locked and cannot be read by another
             // process.  Fall back to checking whether the singleton port is
             // already bound (run() binds it before writing the PID file).
-            let port = if let Some(ref path) = config_path {
+            let (port, bind_addr) = if let Some(ref path) = config_path {
                 ConfigLoader::load_from(path)
-                    .map(|c| c.port)
-                    .unwrap_or(17534)
+                    .map(|c| (c.port, c.bind_address))
+                    .unwrap_or_else(|_| (17534, "127.0.0.1".to_string()))
             } else {
-                ConfigLoader::load().map(|c| c.port).unwrap_or(17534)
+                ConfigLoader::load()
+                    .map(|c| (c.port, c.bind_address))
+                    .unwrap_or_else(|_| (17534, "127.0.0.1".to_string()))
             };
-            let bind_addr = format!("127.0.0.1:{}", port);
-            if std::net::TcpListener::bind(&bind_addr).is_err() {
+            let bind_addr_str = format!("{}:{}", bind_addr, port);
+            if std::net::TcpListener::bind(&bind_addr_str).is_err() {
                 confirmed = true;
                 break;
             }
@@ -149,8 +152,8 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
         ConfigLoader::load()?
     };
 
-    // --- Singleton guard 1: bind to a fixed local port (will be used as HTTP server) ---
-    let bind_addr = format!("127.0.0.1:{}", config.port);
+    // --- Singleton guard 1: bind to configured address & port (will be used as HTTP server) ---
+    let bind_addr = format!("{}:{}", config.bind_address, config.port);
     let std_listener = std::net::TcpListener::bind(&bind_addr).with_context(|| {
         format!(
             "Another cc-gateway daemon is already running (port {} in use)",
@@ -438,7 +441,11 @@ where
         start_fn(config_path).await?;
     }
 
-    let url = format!("http://127.0.0.1:{}", config.port);
+    let url = if let Some(ref token) = config.webui_token {
+        format!("http://127.0.0.1:{}?token={}", config.port, token)
+    } else {
+        format!("http://127.0.0.1:{}", config.port)
+    };
     println!("{}", t_fmt!("daemon.webui_opening", URL = url));
     open_fn(&url)?;
     Ok(())
@@ -478,6 +485,46 @@ async fn is_daemon_running_for_webui_check() -> Result<bool> {
     }
 
     Ok(pid.map(is_process_alive).unwrap_or(false))
+}
+
+/// Show or refresh the WebUI access token.
+pub async fn webui_token(refresh: bool) -> Result<()> {
+    let config_path = ConfigLoader::config_path()?;
+    let mut config = if config_path.is_file() {
+        ConfigLoader::load_from(&config_path).unwrap_or_default()
+    } else {
+        ConfigLoader::ensure_config_dir()?;
+        GatewayConfig::default()
+    };
+
+    let generated = if refresh || config.webui_token.is_none() {
+        let new_token = crate::web::middleware::generate_webui_token();
+        config.webui_token = Some(new_token.clone());
+        ConfigLoader::save(&config)
+            .context("Failed to save config with new token")?;
+        true
+    } else {
+        false
+    };
+
+    let token = config.webui_token.as_ref().unwrap();
+    let url = if config.bind_address == "0.0.0.0" || config.bind_address == "::" {
+        format!("http://127.0.0.1:{}?token={}", config.port, token)
+    } else {
+        format!("http://{}:{}?token={}", config.bind_address, config.port, token)
+    };
+
+    println!("{}", t_fmt!("daemon.webui_token_header", TOKEN = token.as_str()));
+    if generated {
+        if refresh {
+            println!("{}", t!("daemon.webui_token_refreshed"));
+        } else {
+            println!("{}", t!("daemon.webui_token_generated"));
+        }
+    }
+    println!("{}", t_fmt!("daemon.webui_token_url", URL = url));
+    println!("{}", t!("daemon.webui_token_hint"));
+    Ok(())
 }
 
 pub async fn restart(config_path: Option<PathBuf>) -> Result<()> {

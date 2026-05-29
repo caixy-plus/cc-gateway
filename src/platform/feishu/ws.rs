@@ -37,12 +37,13 @@ type WsWrite = std::sync::Arc<
 impl FeishuPlatform {
     pub async fn run_websocket(&self, ws_url: &str, client_config: WsClientConfig) -> Result<()> {
         info!("Connecting to Feishu WebSocket: {}", ws_url);
+        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Connecting);
 
         let (ws_stream, _) = connect_async(ws_url)
             .await
             .context("Failed to connect to Feishu WebSocket")?;
         info!("Feishu WebSocket connected successfully");
-        crate::platform::status::set_connected("feishu", true);
+        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Connected);
 
         let (write, mut read) = ws_stream.split();
         let write = std::sync::Arc::new(tokio::sync::Mutex::new(write));
@@ -133,7 +134,7 @@ impl FeishuPlatform {
         .await;
 
         heartbeat_handle.abort();
-        crate::platform::status::set_connected("feishu", false);
+        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Disconnected);
         read_result
     }
 
@@ -963,7 +964,7 @@ impl FeishuPlatform {
                                 .send_text_message(
                                     &receive_id_type,
                                     &receive_id,
-                                    &crate::command::agents::session_resumed_message(
+                                    &crate::command::agents::session_restarted_message(
                                         &provider,
                                         &active.agent_session.work_dir,
                                     ),

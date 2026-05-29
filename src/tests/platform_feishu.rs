@@ -7,9 +7,6 @@ fn test_platform() -> FeishuPlatform {
         enabled: true,
         app_id: "${FEISHU_APP_ID}".to_string(),
         app_secret: "${FEISHU_APP_SECRET}".to_string(),
-        encrypt_key: "".to_string(),
-        mode: "websocket".to_string(),
-        webhook_bind: "0.0.0.0:3000".to_string(),
         require_pairing: false,
     };
     let gateway_config = GatewayConfig::default();
@@ -79,92 +76,4 @@ async fn test_list_chats_and_send_message() {
         assert!(result.is_ok(), "Failed to send message: {:?}", result.err());
         println!("Sent message to chat: {} ({})", chat.name, chat.chat_id);
     }
-}
-
-#[test]
-fn test_verify_challenge() {
-    let platform = test_platform();
-    let body = json!({
-        "challenge": "abc123",
-        "token": "verification-token",
-        "type": "url_verification"
-    });
-    let resp = platform.verify_challenge(&body).unwrap();
-    assert_eq!(resp.get("challenge").unwrap().as_str().unwrap(), "abc123");
-}
-
-#[test]
-fn test_verify_challenge_missing_field() {
-    let platform = test_platform();
-    let body = json!({
-        "token": "verification-token",
-        "type": "url_verification"
-    });
-    assert!(platform.verify_challenge(&body).is_err());
-}
-
-#[tokio::test]
-async fn test_handle_webhook_event_text_message() {
-    let platform = test_platform();
-    let body = json!({
-        "schema": "2.0",
-        "header": {
-            "event_id": "event-123",
-            "event_type": "im.message.receive_v1",
-            "create_time": "1234567890"
-        },
-        "event": {
-            "message": {
-                "message_id": "om_123",
-                "message_type": "text",
-                "content": "{\"text\":\"hello world\"}",
-                "chat_id": "oc_123",
-                "chat_type": "group"
-            },
-            "sender": {
-                "sender_id": {
-                    "open_id": "ou_123"
-                },
-                "sender_type": "user"
-            }
-        }
-    });
-
-    let result = platform.handle_webhook_event(&body).await;
-    assert!(result.is_ok());
-    let msg = result.unwrap();
-    assert!(msg.is_some());
-    let msg = msg.unwrap();
-    assert_eq!(msg.message_id, "om_123");
-    assert_eq!(msg.message_type, "text");
-    assert_eq!(msg.sender_open_id, "ou_123");
-    assert_eq!(msg.chat_id, Some("oc_123".to_string()));
-}
-
-#[tokio::test]
-async fn test_handle_webhook_event_challenge_refused() {
-    let platform = test_platform();
-    let body = json!({
-        "challenge": "abc123",
-        "token": "verification-token",
-        "type": "url_verification"
-    });
-    let result = platform.handle_webhook_event(&body).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_handle_webhook_event_unhandled_type() {
-    let platform = test_platform();
-    let body = json!({
-        "schema": "2.0",
-        "header": {
-            "event_id": "event-456",
-            "event_type": "drive.file.created_v1"
-        },
-        "event": {}
-    });
-    let result = platform.handle_webhook_event(&body).await;
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_none());
 }

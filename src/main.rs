@@ -72,6 +72,12 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Show or refresh the WebUI access token
+    WebuiToken {
+        /// Generate a new token (invalidates the old one)
+        #[arg(short, long)]
+        refresh: bool,
+    },
     /// Check for updates and optionally install the latest release
     Update {
         /// Only check, do not download or install
@@ -147,6 +153,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Webui { config }) => {
             daemon::webui(config).await?;
+        }
+        Some(Commands::WebuiToken { refresh }) => {
+            daemon::webui_token(refresh).await?;
         }
         Some(Commands::Update {
             check,

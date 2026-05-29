@@ -5,7 +5,7 @@ pub(crate) mod handle;
 pub(crate) mod inbound;
 pub(crate) mod interaction;
 pub(crate) mod media;
-pub(crate) mod webhook;
+
 pub(crate) mod ws;
 
 use std::sync::atomic::AtomicBool;
@@ -24,7 +24,7 @@ use crate::session::channel_manager::ActiveAgentRuntime;
 
 // Re-export commonly used items from child modules
 pub(crate) use handle::{
-    build_ack_frame, build_http_response, build_ping_frame, extract_post_content,
+    build_ack_frame, build_ping_frame, extract_post_content,
 };
 
 // ---------------------------------------------------------------------------
@@ -456,10 +456,7 @@ use async_trait::async_trait;
 #[async_trait]
 impl Platform for FeishuPlatform {
     async fn run(&self) -> anyhow::Result<()> {
-        match self.config.mode.as_str() {
-            "webhook" => self.run_webhook().await,
-            _ => self.run().await,
-        }
+        self.run().await
     }
 
     async fn shutdown(&self) {

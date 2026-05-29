@@ -27,6 +27,9 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
     let mut config = crate::config::loader::ConfigLoader::load().unwrap_or_default();
     config.feishu.app_secret = mask_secret(&config.feishu.app_secret);
     config.telegram.bot_token = mask_secret(&config.telegram.bot_token);
+    if let Some(ref token) = config.webui_token {
+        config.webui_token = Some(mask_secret(token));
+    }
     Json(serde_json::json!({
         "config": config,
         "effective": {
@@ -72,6 +75,37 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
         config.port = v as u16;
     }
+    if let Some(v) = body.get("bind_address").and_then(|v| v.as_str()) {
+        if !v.is_empty() {
+            config.bind_address = v.to_string();
+        }
+    }
+    if let Some(v) = body.get("allowed_ips") {
+        if let Some(arr) = v.as_array() {
+            config.allowed_ips = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+        }
+    }
+    // webui_token: null/absent = clear; string = set.
+    // Preserve existing token if the frontend sent back the masked value.
+    if body.get("webui_token").is_some() {
+        let incoming = body
+            .get("webui_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if incoming.is_empty() {
+            config.webui_token = None;
+        } else if let Some(ref existing) = config.webui_token {
+            if !is_masked_value(&incoming, existing) {
+                config.webui_token = Some(incoming);
+            }
+        } else {
+            config.webui_token = Some(incoming);
+        }
+    }
     if let Some(v) = body.get("agent") {
         if let Ok(c) = serde_json::from_value(v.clone()) {
             config.agent = c;
@@ -85,9 +119,6 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             }
             config.feishu.enabled = c.enabled;
             config.feishu.app_id = c.app_id;
-            config.feishu.encrypt_key = c.encrypt_key;
-            config.feishu.mode = c.mode;
-            config.feishu.webhook_bind = c.webhook_bind;
             config.feishu.require_pairing = c.require_pairing;
         }
     }
@@ -98,7 +129,6 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
                 config.telegram.bot_token = c.bot_token;
             }
             config.telegram.enabled = c.enabled;
-            config.telegram.webhook_url = c.webhook_url;
             config.telegram.require_pairing = c.require_pairing;
         }
     }
@@ -129,8 +159,7 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
         platforms.push(serde_json::json!({
             "name": "feishu",
             "enabled": true,
-            "connected": crate::platform::status::is_connected("feishu"),
-            "mode": config.feishu.mode,
+            "state": crate::platform::status::get_state("feishu").as_str(),
             "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("feishu"),
         }));
     }
@@ -138,7 +167,7 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
         platforms.push(serde_json::json!({
             "name": "telegram",
             "enabled": true,
-            "connected": crate::platform::status::is_connected("telegram"),
+            "state": crate::platform::status::get_state("telegram").as_str(),
             "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("telegram"),
         }));
     }

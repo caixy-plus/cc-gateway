@@ -40,6 +40,9 @@ pub fn run_init_config() -> Result<()> {
     configure_agent_step(&mut config, &mut warnings)?;
     configure_bot_step(&mut config, &mut warnings)?;
 
+    // Auto-generate WebUI access token for security
+    config.webui_token = Some(crate::web::middleware::generate_webui_token());
+
     // Final review: surface anything incomplete but never block — the user can
     // always finish in the WebUI.
     println!("\n{}", t!("wizard.review_title"));
@@ -60,6 +63,12 @@ pub fn run_init_config() -> Result<()> {
         t_fmt!("wizard.config_saved_to", PATH = config_path.display())
     );
     println!("\n{}", t!("wizard.webui_from_now"));
+    if let Some(ref token) = config.webui_token {
+        println!(
+            "  {}",
+            t_fmt!("wizard.webui_token_generated", TOKEN = token.as_str())
+        );
+    }
 
     Ok(())
 }
@@ -125,9 +134,6 @@ fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) ->
             config.feishu.enabled = true;
             config.feishu.app_id = prompt_field("app_id", "")?;
             config.feishu.app_secret = prompt_field("app_secret", "")?;
-            config.feishu.encrypt_key = prompt_field("encrypt_key", "")?;
-            config.feishu.mode = prompt_field("mode", "websocket")?;
-            config.feishu.webhook_bind = prompt_field("webhook_bind", "0.0.0.0:3000")?;
             if config.feishu.app_id.is_empty() || config.feishu.app_secret.is_empty() {
                 warnings.push(t!("wizard.warn_feishu_incomplete").to_string());
             }
@@ -136,7 +142,6 @@ fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) ->
         "2" | "telegram" => {
             config.telegram.enabled = true;
             config.telegram.bot_token = prompt_field("bot_token", "")?;
-            config.telegram.webhook_url = prompt_field("webhook_url", "")?;
             if config.telegram.bot_token.is_empty() {
                 warnings.push(t!("wizard.warn_telegram_incomplete").to_string());
             }

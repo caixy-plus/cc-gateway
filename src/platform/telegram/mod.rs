@@ -230,7 +230,10 @@ impl TelegramPlatform {
             default_dir: default_dir.to_string(),
             agent_settings: agent_settings.into(),
             show_thinking,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(45))
+                .build()
+                .expect("failed to build Telegram HTTP client"),
             channels: Arc::new(DashMap::new()),
             offset: Arc::new(AtomicI64::new(0)),
             callbacks: Arc::new(DashMap::new()),
@@ -278,9 +281,15 @@ impl TelegramPlatform {
             .await?;
 
         if !resp.status().is_success() {
+            let status = resp.status();
             let body = resp.text().await?;
-            anyhow::bail!("Telegram setMyCommands failed: {}", body);
+            error!(
+                "[Telegram] setMyCommands failed: HTTP {} body={}",
+                status, body
+            );
+            anyhow::bail!("Telegram setMyCommands failed (HTTP {}): {}", status, body);
         }
+        info!("[Telegram] Bot commands registered successfully");
         Ok(())
     }
 
@@ -291,6 +300,7 @@ impl TelegramPlatform {
             self.offset.load(Ordering::SeqCst)
         );
         let resp = self.http_client.get(&url).send().await?;
+        let status = resp.status();
         let body: Value = resp.json().await?;
 
         if !body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -298,7 +308,15 @@ impl TelegramPlatform {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            anyhow::bail!("Telegram API error: {}", desc);
+            let error_code = body
+                .get("error_code")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            error!(
+                "[Telegram] getUpdates failed: HTTP {} error_code={} description={}",
+                status, error_code, desc
+            );
+            anyhow::bail!("Telegram API error ({}): {}", error_code, desc);
         }
 
         let updates: Vec<Update> =
@@ -824,7 +842,7 @@ impl TelegramPlatform {
                 let _ = self.answer_callback_query(&callback_query.id, None).await;
                 self.send_message(
                     chat_id,
-                    &crate::command::agents::session_resumed_message(&provider, &work_dir),
+                    &crate::command::agents::session_restarted_message(&provider, &work_dir),
                 )
                 .await?;
             }
@@ -1037,20 +1055,36 @@ fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
 #[async_trait::async_trait]
 impl Platform for TelegramPlatform {
     async fn run(&self) -> Result<()> {
-        info!("Starting Telegram platform...");
+        let masked_token = if self.config.bot_token.len() > 8 {
+            format!(
+                "{}...{}",
+                &self.config.bot_token[..4],
+                &self.config.bot_token[self.config.bot_token.len() - 4..]
+            )
+        } else {
+            self.config.bot_token.clone()
+        };
+        info!("[Telegram] Starting platform (token: {})", masked_token);
+        crate::platform::status::set_state("telegram", crate::platform::status::ConnectionState::Connecting);
+        self.spawn_deliver_listener();
+
+        // set_bot_commands is best-effort; failure doesn't block the bot.
         if let Err(e) = self.set_bot_commands().await {
             warn!("[Telegram] Failed to set bot commands: {}", e);
         }
-        self.spawn_deliver_listener();
+
+        let mut connected_logged = false;
         loop {
             match self.get_updates().await {
                 Ok(updates) => {
-                    crate::platform::status::set_connected("telegram", true);
+                    crate::platform::status::set_state("telegram", crate::platform::status::ConnectionState::Connected);
+                    if !connected_logged {
+                        info!("[Telegram] Connected, polling for updates");
+                        connected_logged = true;
+                    }
                     for update in updates {
                         let next_offset = update.update_id + 1;
                         self.offset.store(next_offset, Ordering::SeqCst);
-                        // Handle updates concurrently so a long-running agent turn
-                        // does not block urgent control commands like /quit.
                         let platform = self.clone();
                         tokio::spawn(async move {
                             if let Err(e) = platform.handle_update(update).await {
@@ -1060,6 +1094,8 @@ impl Platform for TelegramPlatform {
                     }
                 }
                 Err(e) => {
+                    crate::platform::status::set_state("telegram", crate::platform::status::ConnectionState::Disconnected);
+                    connected_logged = false;
                     error!("[Telegram] getUpdates error: {}", e);
                     sleep(Duration::from_secs(5)).await;
                 }

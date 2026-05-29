@@ -15,6 +15,19 @@ pub struct GatewayConfig {
     /// Max agent sessions kept per channel by the background cleaner.
     pub session_retention_per_channel: u64,
     pub port: u16,
+    /// Address to bind the HTTP server to. "127.0.0.1" for localhost only,
+    /// "0.0.0.0" to allow LAN access.
+    pub bind_address: String,
+    /// CIDR allowlist for IP-based access control. When non-empty, only
+    /// requests from matching IP ranges are accepted.
+    /// Example: ["127.0.0.1", "192.168.1.0/24", "10.0.0.0/8"]
+    #[serde(default)]
+    pub allowed_ips: Vec<String>,
+    /// Token for WebUI access control. When set, the WebUI requires
+    /// `?token=xxx` query param or `Authorization: Bearer xxx` header.
+    /// `None` means token auth is disabled (backwards compatible).
+    #[serde(default)]
+    pub webui_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +86,6 @@ pub struct FeishuConfig {
     pub enabled: bool,
     pub app_id: String,
     pub app_secret: String,
-    pub encrypt_key: String,
-    pub mode: String,
-    pub webhook_bind: String,
     /// Require WebUI admin approval before allowing new chats to interact.
     pub require_pairing: bool,
 }
@@ -85,7 +95,6 @@ pub struct FeishuConfig {
 pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: String,
-    pub webhook_url: String,
     /// Require WebUI admin approval before allowing new chats to interact.
     pub require_pairing: bool,
 }
@@ -102,6 +111,9 @@ impl Default for GatewayConfig {
             media_retention_days: 30,
             session_retention_per_channel: 30,
             port: 17534,
+            bind_address: "127.0.0.1".to_string(),
+            allowed_ips: Vec::new(),
+            webui_token: None,
         }
     }
 }
@@ -278,7 +290,6 @@ impl Default for TelegramConfig {
         Self {
             enabled: false,
             bot_token: "${TELEGRAM_BOT_TOKEN}".to_string(),
-            webhook_url: "".to_string(),
             require_pairing: true,
         }
     }
@@ -290,9 +301,6 @@ impl Default for FeishuConfig {
             enabled: true,
             app_id: "${FEISHU_APP_ID}".to_string(),
             app_secret: "${FEISHU_APP_SECRET}".to_string(),
-            encrypt_key: "".to_string(),
-            mode: "websocket".to_string(),
-            webhook_bind: "0.0.0.0:3000".to_string(),
             require_pairing: true,
         }
     }

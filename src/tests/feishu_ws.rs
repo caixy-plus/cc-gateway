@@ -502,9 +502,6 @@ fn make_test_platform() -> FeishuPlatform {
         enabled: true,
         app_id: "test_app_id".to_string(),
         app_secret: "test_secret".to_string(),
-        encrypt_key: "".to_string(),
-        mode: "websocket".to_string(),
-        webhook_bind: "0.0.0.0:3000".to_string(),
         require_pairing: false,
     };
     let gateway_config = GatewayConfig::default();

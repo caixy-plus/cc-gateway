@@ -12,7 +12,6 @@ fn telegram_platform(default_dir: &str) -> TelegramPlatform {
         TelegramConfig {
             enabled: true,
             bot_token: "telegram-token".to_string(),
-            webhook_url: String::new(),
             require_pairing: false,
         },
         default_dir,

@@ -27,6 +27,10 @@ pub struct AppState {
     pub show_thinking: bool,
     pub default_dir: String,
     pub daemon_config_path: Option<PathBuf>,
+    /// CIDR allowlist for IP-based access control.
+    pub allowed_ips: Vec<String>,
+    /// Token for WebUI access control. None = disabled.
+    pub webui_token: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

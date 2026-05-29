@@ -53,7 +53,6 @@ fn test_feishu_config_default() {
     let cfg = FeishuConfig::default();
     assert!(cfg.enabled);
     assert_eq!(cfg.app_id, "${FEISHU_APP_ID}");
-    assert_eq!(cfg.mode, "websocket");
 }
 
 #[test]

@@ -440,6 +440,11 @@ impl PiRpcSession {
             }
         }
 
+        // When stdout closes (EOF), ensure a Done event is sent so the
+        // event_poller flushes any buffered text. Without this, the last
+        // chunk — especially short sentences — can be silently dropped
+        // if agent_end was never received or arrived before the last delta.
+        let _ = tx.send(AgentEvent::Done);
         info!("Pi stdout reader ended");
         is_busy.store(false, Ordering::Relaxed);
     }

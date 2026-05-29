@@ -83,6 +83,8 @@ async fn webui_session_create_start_send_and_stop_updates_events_and_db() -> Res
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let runtime = GLOBAL_CHANNEL_SESSIONS
@@ -155,6 +157,8 @@ async fn webui_send_message_ensures_poller_for_existing_active_runtime() -> Resu
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let runtime = GLOBAL_CHANNEL_SESSIONS
@@ -214,6 +218,8 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let runtime = GLOBAL_CHANNEL_SESSIONS
@@ -274,6 +280,8 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let (status, body) = handle_create_session(
@@ -328,6 +336,8 @@ async fn webui_created_session_keeps_selected_work_dir_when_listed_and_started()
         show_thinking: false,
         default_dir: default_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let (status, body) = handle_create_session(
@@ -402,6 +412,8 @@ async fn webui_create_session_treats_tilde_as_config_default_dir() -> Result<()>
         show_thinking: false,
         default_dir: default_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let (status, body) = handle_create_session(
@@ -487,6 +499,8 @@ async fn webui_permission_allow_and_deny_endpoint() -> Result<()> {
         show_thinking: false,
         default_dir: work_dir.to_string_lossy().to_string(),
         daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
     };
 
     let runtime = GLOBAL_CHANNEL_SESSIONS

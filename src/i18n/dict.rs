@@ -86,6 +86,26 @@ pub fn t(key: &str) -> &str {
             Language::En => "Opening WebUI at {URL}...",
             Language::ZhCN => "正在打开 WebUI: {URL}...",
         },
+        "daemon.webui_token_header" => match lang {
+            Language::En => "WebUI token: {TOKEN}",
+            Language::ZhCN => "WebUI 令牌: {TOKEN}",
+        },
+        "daemon.webui_token_generated" => match lang {
+            Language::En => "A new token has been generated and saved.",
+            Language::ZhCN => "已生成新令牌并保存。",
+        },
+        "daemon.webui_token_refreshed" => match lang {
+            Language::En => "Token refreshed (old token is now invalid).",
+            Language::ZhCN => "令牌已刷新（旧令牌已失效）。",
+        },
+        "daemon.webui_token_url" => match lang {
+            Language::En => "Open: {URL}",
+            Language::ZhCN => "访问: {URL}",
+        },
+        "daemon.webui_token_hint" => match lang {
+            Language::En => "The daemon must be running. Use cc-gateway webui-token --refresh to regenerate.",
+            Language::ZhCN => "需要先启动守护进程。使用 cc-gateway webui-token --refresh 可刷新令牌。",
+        },
 
         // config/wizard.rs
         "wizard.title" => match lang {
@@ -325,6 +345,10 @@ pub fn t(key: &str) -> &str {
         "wizard.webui_from_now" => match lang {
             Language::En => "Setup done. From now on, manage everything in the WebUI (run: cc-gateway webui).",
             Language::ZhCN => "初始化完成。之后所有配置都在 WebUI 中管理 (运行: cc-gateway webui)。",
+        },
+        "wizard.webui_token_generated" => match lang {
+            Language::En => "WebUI access token: {TOKEN}",
+            Language::ZhCN => "WebUI 访问令牌: {TOKEN}",
         },
 
         // uninstall (cc-gateway uninstall)
@@ -623,6 +647,10 @@ pub fn t(key: &str) -> &str {
         "builtin.session_resumed" => match lang {
             Language::En => "{NAME} session resumed in: {DIR}\n\n\x1b[2m\u{1F4A1} Type anything and press Enter to chat.\x1b[0m",
             Language::ZhCN => "{NAME} 会话已恢复于: {DIR}\n\n\x1b[2m\u{1F4A1} 输入任意内容并按 Enter 开始对话。\x1b[0m",
+        },
+        "builtin.session_restarted_pi_hint" => match lang {
+            Language::En => "Note: Pi does not support session resume. A new session has been started.",
+            Language::ZhCN => "注意：Pi 不支持会话恢复，已为你启动全新会话。",
         },
         "builtin.failed_start_agent" => match lang {
             Language::En => "Failed to start {NAME}: {ERR}",
