@@ -221,7 +221,6 @@ pub fn build_user_message(text: &str) -> InputMessage {
     }
 }
 
-#[allow(dead_code)]
 pub fn build_permission_allow(request_id: &str) -> InputMessage {
     InputMessage::ControlResponse {
         response: ControlResponseBody {
@@ -236,7 +235,6 @@ pub fn build_permission_allow(request_id: &str) -> InputMessage {
     }
 }
 
-#[allow(dead_code)]
 pub fn build_permission_deny(request_id: &str, message: &str) -> InputMessage {
     InputMessage::ControlResponse {
         response: ControlResponseBody {

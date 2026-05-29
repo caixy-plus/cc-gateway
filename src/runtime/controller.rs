@@ -159,7 +159,7 @@ pub struct AgentController {
     event_tx: mpsc::UnboundedSender<ControllerEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>,
     work_dir: Arc<RwLock<String>>,
-    pending_permission: Arc<RwLock<Option<(String, String)>>>,
+    pending_permission: Arc<RwLock<Option<(String, String, String)>>>,
     session_state: Arc<RwLock<SessionState>>,
     message_buffer: Arc<Mutex<Vec<String>>>,
     provider_session_id: Arc<RwLock<Option<String>>>,
@@ -547,6 +547,19 @@ impl AgentController {
         self.show_thinking.store(value, Ordering::Relaxed);
     }
 
+    /// Returns (request_id, request_type) of the most recent pending control request, or None.
+    pub async fn get_pending_request(&self) -> Option<(String, String)> {
+        let p = self.pending_permission.read().await;
+        p.as_ref()
+            .map(|(id, _name, req_type)| (id.clone(), req_type.clone()))
+    }
+
+    /// Clear the pending control request after it has been handled.
+    pub async fn clear_pending_request(&self) {
+        let mut p = self.pending_permission.write().await;
+        *p = None;
+    }
+
     pub async fn get_provider_session_id(&self) -> Option<String> {
         let sid = self.provider_session_id.read().await;
         sid.clone()
@@ -594,7 +607,7 @@ impl AgentController {
 
     pub(crate) async fn process_agent_event(
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
-        pending_perm: &Arc<RwLock<Option<(String, String)>>>,
+        pending_perm: &Arc<RwLock<Option<(String, String, String)>>>,
         session_arc: &Arc<RwLock<Option<AgentRuntime>>>,
         provider_session_id: &Arc<RwLock<Option<String>>>,
         event: AgentEvent,
@@ -658,9 +671,11 @@ impl AgentController {
                     input,
                 });
                 let pp = pending_perm.clone();
+                let req_id = request_id.clone();
+                let tname = tool_name.clone();
                 tokio::spawn(async move {
                     let mut p = pp.write().await;
-                    *p = Some((request_id, tool_name));
+                    *p = Some((req_id, tname, "permission".to_string()));
                 });
             }
             AgentEvent::ConfirmRequest {
@@ -669,9 +684,15 @@ impl AgentController {
                 options,
             } => {
                 let _ = event_tx.send(ControllerEvent::ConfirmRequest {
-                    request_id,
+                    request_id: request_id.clone(),
                     prompt,
                     options,
+                });
+                let pp = pending_perm.clone();
+                let req_id = request_id;
+                tokio::spawn(async move {
+                    let mut p = pp.write().await;
+                    *p = Some((req_id, "confirm".to_string(), "confirm".to_string()));
                 });
             }
             AgentEvent::SelectRequest {
@@ -680,9 +701,15 @@ impl AgentController {
                 options,
             } => {
                 let _ = event_tx.send(ControllerEvent::SelectRequest {
-                    request_id,
+                    request_id: request_id.clone(),
                     prompt,
                     options,
+                });
+                let pp = pending_perm.clone();
+                let req_id = request_id;
+                tokio::spawn(async move {
+                    let mut p = pp.write().await;
+                    *p = Some((req_id, "select".to_string(), "select".to_string()));
                 });
             }
             AgentEvent::QuestionRequest {
@@ -690,8 +717,14 @@ impl AgentController {
                 questions,
             } => {
                 let _ = event_tx.send(ControllerEvent::QuestionRequest {
-                    request_id,
+                    request_id: request_id.clone(),
                     questions,
+                });
+                let pp = pending_perm.clone();
+                let req_id = request_id;
+                tokio::spawn(async move {
+                    let mut p = pp.write().await;
+                    *p = Some((req_id, "question".to_string(), "question".to_string()));
                 });
             }
             AgentEvent::Error(error) => {

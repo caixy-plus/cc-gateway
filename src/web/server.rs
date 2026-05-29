@@ -52,6 +52,10 @@ pub fn create_app_with_config_path(
             post(handlers::session::handle_send_message),
         )
         .route(
+            "/api/sessions/{id}/permission",
+            post(handlers::session::handle_permission),
+        )
+        .route(
             "/api/sessions/{id}",
             post(handlers::session::handle_stop_session),
         )

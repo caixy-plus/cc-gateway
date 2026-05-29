@@ -759,6 +759,22 @@ pub fn t(key: &str) -> &str {
             Language::En => "No active agent session. Use /agent to start one.",
             Language::ZhCN => "没有活动的智能体会话。使用 /agent 启动一个。",
         },
+        "controller.no_pending_request" => match lang {
+            Language::En => "No pending permission request. The request may have already timed out or been handled.",
+            Language::ZhCN => "没有待处理的权限请求。请求可能已超时或被处理。",
+        },
+        "controller.permission_allowed" => match lang {
+            Language::En => "Permission allowed (request: {ID}).",
+            Language::ZhCN => "已允许权限 (请求: {ID})。",
+        },
+        "controller.permission_denied" => match lang {
+            Language::En => "Permission denied (request: {ID}).",
+            Language::ZhCN => "已拒绝权限 (请求: {ID})。",
+        },
+        "controller.failed_permission" => match lang {
+            Language::En => "Failed to respond to permission request: {ERR}",
+            Language::ZhCN => "响应权限请求失败: {ERR}",
+        },
 
         // platform/feishu.rs
         "feishu.permission_title" => match lang {
@@ -923,9 +939,17 @@ pub fn t(key: &str) -> &str {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
         },
-        "telegram.permission_denied" => match lang {
-            Language::En => "Permission denied: `{NAME}` (Telegram does not support interactive permission requests)",
-            Language::ZhCN => "权限已拒绝: `{NAME}`（Telegram 不支持交互式权限请求）",
+        "telegram.allow_button" => match lang {
+            Language::En => "Allow",
+            Language::ZhCN => "允许",
+        },
+        "telegram.deny_button" => match lang {
+            Language::En => "Deny",
+            Language::ZhCN => "拒绝",
+        },
+        "telegram.permission_responded" => match lang {
+            Language::En => "Request {ID} {ACTION}.",
+            Language::ZhCN => "请求 {ID} 已{ACTION}。",
         },
         "cursor.resume_may_ignore_flags" => match lang {
             Language::En => "Note: Cursor session resume may not honor CLI flags like --yolo/--print. If the resumed session behaves unexpectedly, create a new session.",
@@ -1070,16 +1094,16 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "需要权限: {NAME} (id: {ID})\n  输入 /allow 或 /deny",
         },
         "tui.confirm_request" => match lang {
-            Language::En => "Confirm (id: {ID}): {PROMPT}\nOptions: {OPTIONS}",
-            Language::ZhCN => "确认 (id: {ID}): {PROMPT}\n选项: {OPTIONS}",
+            Language::En => "Confirm (id: {ID}): {PROMPT}\nOptions: {OPTIONS}\n  /allow {ID} or /deny {ID}",
+            Language::ZhCN => "确认 (id: {ID}): {PROMPT}\n选项: {OPTIONS}\n  输入 /allow {ID} 或 /deny {ID}",
         },
         "tui.select_request" => match lang {
-            Language::En => "Select (id: {ID}): {PROMPT}\nOptions: {OPTIONS}",
-            Language::ZhCN => "选择 (id: {ID}): {PROMPT}\n选项: {OPTIONS}",
+            Language::En => "Select (id: {ID}): {PROMPT}\nOptions: {OPTIONS}\n  /allow {ID} or /deny {ID}",
+            Language::ZhCN => "选择 (id: {ID}): {PROMPT}\n选项: {OPTIONS}\n  输入 /allow {ID} 或 /deny {ID}",
         },
         "tui.questions_title" => match lang {
-            Language::En => "Questions (id: {ID}):\n",
-            Language::ZhCN => "问题 (id: {ID}):\n",
+            Language::En => "Questions (id: {ID}):\n  /allow {ID} or /deny {ID}",
+            Language::ZhCN => "问题 (id: {ID}):\n  输入 /allow {ID} 或 /deny {ID}",
         },
         "tui.question_item" => match lang {
             Language::En => "  {HEADER}: {QUESTION}\n",

@@ -619,6 +619,75 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
     (StatusCode::OK, body.to_string())
 }
 
+#[derive(Deserialize)]
+pub struct PermissionRequest {
+    pub request_id: String,
+    /// "allow" or "deny"
+    pub action: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+pub async fn handle_permission(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(req): Json<PermissionRequest>,
+) -> (StatusCode, String) {
+    use crate::runtime::protocol::{build_permission_allow, build_permission_deny};
+
+    let channel_id = match ensure_webui_channel(&state.default_dir).await {
+        Ok(id) => id,
+        Err(e) => {
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to ensure WebUI channel: {}", e),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
+        }
+    };
+
+    let active = match GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id) {
+        Some(a) => a,
+        None => {
+            let body = json_error(
+                "webui.session_not_found",
+                crate::t!("webui.session_not_found"),
+            );
+            return (StatusCode::NOT_FOUND, body.to_string());
+        }
+    };
+
+    let msg = match req.action.as_str() {
+        "allow" => build_permission_allow(&req.request_id),
+        "deny" => {
+            let reason = req.reason.as_deref().unwrap_or("Denied by user");
+            build_permission_deny(&req.request_id, reason)
+        }
+        _ => {
+            let body = json_error(
+                "webui.invalid_action",
+                "Action must be 'allow' or 'deny'",
+            );
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
+
+    let ctrl = active.controller.lock().await;
+    match ctrl.send_input(msg).await {
+        Ok(()) => {
+            let body = json!({ "status": "ok", "request_id": req.request_id, "action": req.action });
+            (StatusCode::OK, body.to_string())
+        }
+        Err(e) => {
+            let body = json_error(
+                "webui.failed_permission",
+                format!("Failed: {}", e),
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Claude event poller for WebUI
 // ---------------------------------------------------------------------------
@@ -649,21 +718,23 @@ impl EventPollSink for WebUIEventSink {
         tool_name: &str,
         input: Option<&serde_json::Value>,
     ) -> anyhow::Result<()> {
-        let mut card = crate::t_fmt!(
+        let mut body = crate::t_fmt!(
             "webui.permission_request",
             NAME = tool_name,
             ID = request_id
         );
         if let Some(input) = input {
             let pretty = serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
-            card.push_str("\n\n");
-            card.push_str(crate::t!("webui.permission_request_input"));
-            card.push('\n');
-            card.push_str("```json\n");
-            card.push_str(&pretty);
-            card.push_str("\n```");
+            body.push_str("\n\n");
+            body.push_str(crate::t!("webui.permission_request_input"));
+            body.push('\n');
+            body.push_str("```json\n");
+            body.push_str(&pretty);
+            body.push_str("\n```");
         }
-        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &card);
+        // Structured format: first line = request_id, rest = display text.
+        let content = format!("{}\n{}", request_id, body);
+        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
         Ok(())
     }
 
@@ -679,7 +750,8 @@ impl EventPollSink for WebUIEventSink {
             ID = request_id,
             OPTIONS = format!("{:?}", options)
         );
-        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &text);
+        let content = format!("{}\n{}", request_id, text);
+        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
         Ok(())
     }
 
@@ -695,7 +767,8 @@ impl EventPollSink for WebUIEventSink {
             ID = request_id,
             OPTIONS = format!("{:?}", options)
         );
-        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &text);
+        let content = format!("{}\n{}", request_id, text);
+        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
         Ok(())
     }
 
@@ -719,8 +792,8 @@ impl EventPollSink for WebUIEventSink {
                 ));
             }
         }
-        text.push('\n');
-        broadcast_event(&self.session_id, "webui", &self.session_id, "system", &text);
+        let content = format!("{}\n{}", request_id, text);
+        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
         Ok(())
     }
 }

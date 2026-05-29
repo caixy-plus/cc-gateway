@@ -168,6 +168,76 @@ async fn parses_core_commands_without_starting_claude() {
 }
 
 #[tokio::test]
+async fn routes_allow_in_active_session() {
+    let env = TestEnv::new();
+    let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
+    {
+        let ctrl = controller.lock().await;
+        ctrl.start_session(env.home().to_string_lossy().to_string(), Vec::new())
+            .await
+            .expect("fake Claude session should start");
+    }
+
+    assert!(matches!(
+        router.route("/allow").await,
+        CommandAction::PermissionAllow { request_id: None }
+    ));
+    assert!(matches!(
+        router.route("/allow abc123").await,
+        CommandAction::PermissionAllow { request_id } if request_id.as_deref() == Some("abc123")
+    ));
+
+    {
+        let ctrl = controller.lock().await;
+        ctrl.stop_session().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn routes_deny_in_active_session() {
+    let env = TestEnv::new();
+    let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
+    {
+        let ctrl = controller.lock().await;
+        ctrl.start_session(env.home().to_string_lossy().to_string(), Vec::new())
+            .await
+            .expect("fake Claude session should start");
+    }
+
+    assert!(matches!(
+        router.route("/deny").await,
+        CommandAction::PermissionDeny { request_id: None, reason: None }
+    ));
+    assert!(matches!(
+        router.route("/deny abc123").await,
+        CommandAction::PermissionDeny { request_id, reason: None } if request_id.as_deref() == Some("abc123")
+    ));
+    assert!(matches!(
+        router.route("/deny abc123 not now").await,
+        CommandAction::PermissionDeny { request_id, reason } if request_id.as_deref() == Some("abc123") && reason.as_deref() == Some("not now")
+    ));
+
+    {
+        let ctrl = controller.lock().await;
+        ctrl.stop_session().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn allow_and_deny_reply_no_session_when_inactive() {
+    let (router, _) = test_router();
+
+    assert!(matches!(
+        router.route("/allow").await,
+        CommandAction::Reply(_)
+    ));
+    assert!(matches!(
+        router.route("/deny").await,
+        CommandAction::Reply(_)
+    ));
+}
+
+#[tokio::test]
 async fn active_agent_session_forwards_slash_commands_except_gateway_controls() {
     let env = TestEnv::new();
     let (router, controller) = test_router_with_default(env.home().to_str().unwrap());

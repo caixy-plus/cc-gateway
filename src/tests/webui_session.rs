@@ -8,8 +8,8 @@ use crate::session::channel_model::AgentSessionState;
 use crate::web::handlers::cmd::{handle_cd, CdRequest};
 use crate::web::handlers::session::{
     handle_create_session, handle_delete_session, handle_get_history, handle_list_sessions,
-    handle_send_message, handle_start_session, handle_stop_session, AppState, CreateSessionRequest,
-    ListSessionsQuery, SendMessageRequest,
+    handle_permission, handle_send_message, handle_start_session, handle_stop_session, AppState,
+    CreateSessionRequest, ListSessionsQuery, PermissionRequest, SendMessageRequest,
 };
 use crate::web::state::EVENT_BUS;
 
@@ -473,5 +473,116 @@ async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Re
 
     let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_permission_allow_and_deny_endpoint() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-permission");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+    };
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
+        .await?;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_agent_session_for_platform(
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "Permission test".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
+        )
+        .await?;
+    let session_id = active.agent_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
+
+    // Allow
+    let (status, body) = short_timeout(
+        "permission allow",
+        handle_permission(
+            State(state.clone()),
+            Path(session_id.clone()),
+            Json(PermissionRequest {
+                request_id: "req-1".to_string(),
+                action: "allow".to_string(),
+                reason: None,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["request_id"], "req-1");
+    assert_eq!(body["action"], "allow");
+
+    // Deny with reason
+    let (status, body) = short_timeout(
+        "permission deny",
+        handle_permission(
+            State(state.clone()),
+            Path(session_id.clone()),
+            Json(PermissionRequest {
+                request_id: "req-2".to_string(),
+                action: "deny".to_string(),
+                reason: Some("Not now".to_string()),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["request_id"], "req-2");
+    assert_eq!(body["action"], "deny");
+
+    // Invalid action
+    let (status, _body) = short_timeout(
+        "permission invalid",
+        handle_permission(
+            State(state.clone()),
+            Path(session_id.clone()),
+            Json(PermissionRequest {
+                request_id: "req-3".to_string(),
+                action: "bogus".to_string(),
+                reason: None,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Missing session
+    let (status, _body) = short_timeout(
+        "permission missing session",
+        handle_permission(
+            State(state.clone()),
+            Path("nonexistent-id".to_string()),
+            Json(PermissionRequest {
+                request_id: "req-4".to_string(),
+                action: "allow".to_string(),
+                reason: None,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
     Ok(())
 }

@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, Mutex};
 use unicode_width::UnicodeWidthStr;
 
 use crate::command::builtin::TUI_EVENT_READER_PAUSED;
+use crate::runtime::protocol::{build_permission_allow, build_permission_deny};
 
 use crate::cli::interactive::format_banner;
 use crate::command::{CommandAction, CommandRouter};
@@ -227,6 +228,14 @@ impl ChatMessage {
         }
     }
 }
+/// Interactive permission/confirm/select/question prompt shown in the input bar.
+pub(crate) struct PermissionPrompt {
+    request_id: String,
+    tool_name: String,
+    /// true = Allow selected, false = Deny selected
+    allow_selected: bool,
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -254,6 +263,8 @@ pub(crate) struct App {
     pub(crate) channel_id: String,
     /// Whether a Claude event poller is already attached to this session.
     pub(crate) poller_running: bool,
+    /// Active interactive permission prompt (from agent poll events).
+    pub(crate) pending_permission: Option<PermissionPrompt>,
 }
 
 impl App {
@@ -284,12 +295,15 @@ impl App {
                 "/show-thinking".into(),
                 "/hide-thinking".into(),
                 "/agent-history".into(),
+                "/allow".into(),
+                "/deny".into(),
             ],
             completion_matches: Vec::new(),
             completion_index: 0,
             last_input_for_completion: String::new(),
             channel_id,
             poller_running: false,
+            pending_permission: None,
         }
     }
 
@@ -402,8 +416,40 @@ fn render(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, chunks[0]);
 
     // --- Input bar ---
-    let prompt = app.prompt_prefix();
     let input_block = Block::default().borders(Borders::NONE);
+
+    if let Some(ref perm) = app.pending_permission {
+        let (allow_style, deny_style) = if perm.allow_selected {
+            (
+                Style::default().fg(Color::Black).bg(Color::Green),
+                Style::default().fg(Color::Gray),
+            )
+        } else {
+            (
+                Style::default().fg(Color::Gray),
+                Style::default().fg(Color::Black).bg(Color::Red),
+            )
+        };
+
+        let hint = "  ← → to choose, Enter to confirm, a/d to toggle";
+        let input_line = Line::from(vec![
+            Span::styled("🔐 ", Style::default()),
+            Span::styled(&perm.tool_name, Style::default().fg(Color::Yellow)),
+            Span::styled("  ", Style::default()),
+            Span::styled("[Allow]", allow_style),
+            Span::styled("  ", Style::default()),
+            Span::styled("[Deny]", deny_style),
+            Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let input_para = Paragraph::new(input_line).block(input_block);
+        f.render_widget(input_para, chunks[1]);
+        // Position cursor off-screen since normal input is disabled.
+        f.set_cursor_position((0, chunks[1].y));
+        return;
+    }
+
+    let prompt = app.prompt_prefix();
     let mut cursor_idx = app.input_cursor.min(app.input.len());
     while cursor_idx > 0 && !app.input.is_char_boundary(cursor_idx) {
         cursor_idx -= 1;
@@ -447,11 +493,45 @@ enum KeyAction {
     Continue,
     Quit,
     Submit(String),
+    /// User confirmed the interactive permission prompt.
+    PermissionResponse { allow: bool },
 }
 
 fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {
     if !should_handle_key_event(key) {
         return KeyAction::Continue;
+    }
+
+    // When a permission prompt is active, intercept arrow keys and Enter.
+    if app.pending_permission.is_some() {
+        match key.code {
+            KeyCode::Left | KeyCode::Right => {
+                if let Some(ref mut perm) = app.pending_permission {
+                    perm.allow_selected = key.code == KeyCode::Left;
+                }
+                return KeyAction::Continue;
+            }
+            KeyCode::Enter => {
+                if let Some(ref perm) = app.pending_permission {
+                    return KeyAction::PermissionResponse {
+                        allow: perm.allow_selected,
+                    };
+                }
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                if let Some(ref mut perm) = app.pending_permission {
+                    perm.allow_selected = true;
+                }
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                if let Some(ref mut perm) = app.pending_permission {
+                    perm.allow_selected = false;
+                }
+                return KeyAction::Continue;
+            }
+            _ => return KeyAction::Continue,
+        }
     }
 
     match key.code {
@@ -731,12 +811,42 @@ async fn process_submit(
             }
         }
 
+        CommandAction::PermissionAllow { .. } | CommandAction::PermissionDeny { .. } => {
+            if let Some(reply) = router.execute(action).await {
+                app.add_message(MsgRole::System, &reply);
+            }
+            Ok(SubmitResult { poll_claude: false })
+        }
+
         other => {
             if let Some(reply) = router.execute(other).await {
                 app.add_message(MsgRole::System, &reply);
             }
             Ok(SubmitResult { poll_claude: false })
         }
+    }
+}
+
+/// Send the user's allow/deny response for the active permission prompt.
+async fn handle_permission_response(
+    app: &mut App,
+    controller: &Arc<Mutex<AgentController>>,
+    allow: bool,
+) {
+    if let Some(perm) = app.pending_permission.take() {
+        let ctrl = controller.lock().await;
+        let msg = if allow {
+            build_permission_allow(&perm.request_id)
+        } else {
+            build_permission_deny(&perm.request_id, "Denied by user")
+        };
+        let _ = ctrl.send_input(msg).await;
+        let reply = if allow {
+            crate::t_fmt!("controller.permission_allowed", ID = perm.request_id)
+        } else {
+            crate::t_fmt!("controller.permission_denied", ID = perm.request_id)
+        };
+        app.add_message(MsgRole::System, &reply);
     }
 }
 
@@ -753,6 +863,11 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
         TuiPollEvent::PermissionRequest(request_id, tool_name) => {
             let text = crate::t_fmt!("tui.permission_required", NAME = tool_name, ID = request_id);
             app.add_message(MsgRole::System, &text);
+            app.pending_permission = Some(PermissionPrompt {
+                request_id: request_id.clone(),
+                tool_name: tool_name.clone(),
+                allow_selected: true,
+            });
             false
         }
         TuiPollEvent::ConfirmRequest(request_id, prompt, options) => {
@@ -763,6 +878,11 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
                 OPTIONS = format!("{:?}", options)
             );
             app.add_message(MsgRole::System, &text);
+            app.pending_permission = Some(PermissionPrompt {
+                request_id: request_id.clone(),
+                tool_name: prompt.clone(),
+                allow_selected: true,
+            });
             false
         }
         TuiPollEvent::SelectRequest(request_id, prompt, options) => {
@@ -773,6 +893,11 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
                 OPTIONS = format!("{:?}", options)
             );
             app.add_message(MsgRole::System, &text);
+            app.pending_permission = Some(PermissionPrompt {
+                request_id: request_id.clone(),
+                tool_name: prompt.clone(),
+                allow_selected: true,
+            });
             false
         }
         TuiPollEvent::QuestionRequest(request_id, questions) => {
@@ -792,6 +917,11 @@ fn handle_poll_event(event: &TuiPollEvent, app: &mut App) -> bool {
                 }
             }
             app.add_message(MsgRole::System, &text);
+            app.pending_permission = Some(PermissionPrompt {
+                request_id: request_id.clone(),
+                tool_name: "question".to_string(),
+                allow_selected: true,
+            });
             false
         }
         TuiPollEvent::Done => true,
@@ -873,6 +1003,11 @@ pub async fn run_tui(
                             Some(key) => {
                                 match handle_key(&key, &mut app) {
                                     KeyAction::Quit => return Ok(()),
+                                    KeyAction::PermissionResponse { allow } => {
+                                        handle_permission_response(
+                                            &mut app, &controller, allow,
+                                        ).await;
+                                    }
                                     KeyAction::Submit(text) => {
                                         let was_active = app.session_active;
                                         let submit = process_submit(
@@ -921,6 +1056,11 @@ pub async fn run_tui(
                         match key_opt {
                             Some(key) => {
                                 match handle_key(&key, &mut app) {
+                                    KeyAction::PermissionResponse { allow } => {
+                                        handle_permission_response(
+                                            &mut app, &controller, allow,
+                                        ).await;
+                                    }
                                     KeyAction::Submit(text) => {
                                         let was_active = app.session_active;
                                         let submit = process_submit(

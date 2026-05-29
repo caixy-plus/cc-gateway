@@ -426,6 +426,98 @@ impl ChatCommandExecutor {
                 };
                 Ok(ChatCommandOutcome::ForwardToAgent { active, text })
             }
+            CommandAction::PermissionAllow { request_id } => {
+                let id = match request_id {
+                    Some(id) => id,
+                    None => match context.active_agent.as_ref() {
+                        Some(active) => {
+                            let ctrl = active.controller.lock().await;
+                            match ctrl.get_pending_request().await {
+                                Some((id, _)) => id,
+                                None => {
+                                    return Ok(ChatCommandOutcome::Reply(
+                                        t!("controller.no_pending_request").to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            return Ok(ChatCommandOutcome::Error(
+                                t!("controller.no_active_session").to_string(),
+                            ));
+                        }
+                    },
+                };
+                match context.active_agent.as_ref() {
+                    Some(active) => {
+                        let ctrl = active.controller.lock().await;
+                        let msg =
+                            crate::runtime::protocol::build_permission_allow(&id);
+                        match ctrl.send_input(msg).await {
+                            Ok(()) => {
+                                ctrl.clear_pending_request().await;
+                                Ok(ChatCommandOutcome::Reply(
+                                    t_fmt!("controller.permission_allowed", ID = id),
+                                ))
+                            }
+                            Err(e) => Ok(ChatCommandOutcome::Error(
+                                t_fmt!("controller.failed_permission", ERR = e),
+                            )),
+                        }
+                    }
+                    None => Ok(ChatCommandOutcome::Error(
+                        t!("controller.no_active_session").to_string(),
+                    )),
+                }
+            }
+            CommandAction::PermissionDeny {
+                request_id,
+                reason,
+            } => {
+                let id = match request_id {
+                    Some(id) => id,
+                    None => match context.active_agent.as_ref() {
+                        Some(active) => {
+                            let ctrl = active.controller.lock().await;
+                            match ctrl.get_pending_request().await {
+                                Some((id, _)) => id,
+                                None => {
+                                    return Ok(ChatCommandOutcome::Reply(
+                                        t!("controller.no_pending_request").to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            return Ok(ChatCommandOutcome::Error(
+                                t!("controller.no_active_session").to_string(),
+                            ));
+                        }
+                    },
+                };
+                let reason = reason.unwrap_or_else(|| "Denied by user".to_string());
+                match context.active_agent.as_ref() {
+                    Some(active) => {
+                        let ctrl = active.controller.lock().await;
+                        let msg =
+                            crate::runtime::protocol::build_permission_deny(&id, &reason);
+                        match ctrl.send_input(msg).await {
+                            Ok(()) => {
+                                ctrl.clear_pending_request().await;
+                                Ok(ChatCommandOutcome::Reply(
+                                    t_fmt!("controller.permission_denied", ID = id),
+                                ))
+                            }
+                            Err(e) => Ok(ChatCommandOutcome::Error(
+                                t_fmt!("controller.failed_permission", ERR = e),
+                            )),
+                        }
+                    }
+                    None => Ok(ChatCommandOutcome::Error(
+                        t!("controller.no_active_session").to_string(),
+                    )),
+                }
+            }
         }
     }
 

@@ -6,6 +6,7 @@ use crate::command::agents;
 use crate::command::builtin::BuiltinCommands;
 use crate::config::model::AgentProvider;
 use crate::runtime::controller::AgentController;
+use crate::runtime::protocol::{build_permission_allow, build_permission_deny};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
 
@@ -54,6 +55,14 @@ pub enum CommandAction {
     ForwardToAgent(String),
     /// Unknown slash command when no session is active
     UnknownCommand(String),
+    /// Allow a pending permission/confirm/select/question request.
+    /// If request_id is None, uses the controller's pending request.
+    PermissionAllow { request_id: Option<String> },
+    /// Deny a pending permission/confirm/select/question request.
+    PermissionDeny {
+        request_id: Option<String>,
+        reason: Option<String>,
+    },
     /// No operation needed
     NoOp,
 }
@@ -127,6 +136,17 @@ impl CommandRouter {
                 "/status" => CommandAction::Status,
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
+                "/allow" => {
+                    let request_id =
+                        if arg.is_empty() { None } else { Some(arg.to_string()) };
+                    CommandAction::PermissionAllow { request_id }
+                }
+                "/deny" => {
+                    let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
+                    let request_id = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    let reason = parts.get(2).map(|s| s.to_string());
+                    CommandAction::PermissionDeny { request_id, reason }
+                }
                 _ => CommandAction::ForwardToAgent(trimmed.to_string()),
             }
         } else {
@@ -206,6 +226,9 @@ impl CommandRouter {
                     } else {
                         CommandAction::UnknownCommand(cmd.to_string())
                     }
+                }
+                "/allow" | "/deny" => {
+                    CommandAction::Reply(t!("controller.no_active_session").to_string())
                 }
                 _ => {
                     if trimmed.starts_with('/') {
@@ -485,6 +508,50 @@ impl CommandRouter {
                 match ctrl.send_message(&text).await {
                     Ok(()) => None,
                     Err(e) => Some(t_fmt!("forward.failed_send", ERR = e)),
+                }
+            }
+            CommandAction::PermissionAllow { request_id } => {
+                let ctrl = self.controller.lock().await;
+                let id = match request_id {
+                    Some(id) => id,
+                    None => match ctrl.get_pending_request().await {
+                        Some((id, _)) => id,
+                        None => {
+                            return Some(t!("controller.no_pending_request").to_string());
+                        }
+                    },
+                };
+                let msg = build_permission_allow(&id);
+                match ctrl.send_input(msg).await {
+                    Ok(()) => {
+                        ctrl.clear_pending_request().await;
+                        Some(t_fmt!("controller.permission_allowed", ID = id))
+                    }
+                    Err(e) => Some(t_fmt!("controller.failed_permission", ERR = e)),
+                }
+            }
+            CommandAction::PermissionDeny {
+                request_id,
+                reason,
+            } => {
+                let ctrl = self.controller.lock().await;
+                let id = match request_id {
+                    Some(id) => id,
+                    None => match ctrl.get_pending_request().await {
+                        Some((id, _)) => id,
+                        None => {
+                            return Some(t!("controller.no_pending_request").to_string());
+                        }
+                    },
+                };
+                let reason = reason.unwrap_or_else(|| "Denied by user".to_string());
+                let msg = build_permission_deny(&id, &reason);
+                match ctrl.send_input(msg).await {
+                    Ok(()) => {
+                        ctrl.clear_pending_request().await;
+                        Some(t_fmt!("controller.permission_denied", ID = id))
+                    }
+                    Err(e) => Some(t_fmt!("controller.failed_permission", ERR = e)),
                 }
             }
             CommandAction::NoOp => Some(String::new()),
