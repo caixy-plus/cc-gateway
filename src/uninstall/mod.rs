@@ -81,8 +81,8 @@ fn run_platform(keep_data: bool) -> Result<()> {
 #[cfg(windows)]
 fn run_platform(keep_data: bool) -> Result<()> {
     // A running .exe cannot delete itself on Windows, so we write the uninstall
-    // script to a temp file and spawn a detached PowerShell that waits for this
-    // process to exit, then runs the cleanup.
+    // script to a temp file and spawn a PowerShell that waits for this process
+    // to exit, then runs the cleanup in the same terminal (visible output).
     //
     // The script content is embedded at compile time (not downloaded at runtime)
     // to avoid the "download + iex" pattern that triggers AV false positives.
@@ -95,7 +95,7 @@ fn run_platform(keep_data: bool) -> Result<()> {
 
     let keep = if keep_data { "$true" } else { "$false" };
     let script = format!(
-        r#"$pidToWait={pid}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; & '{temp}' -KeepData:{keep}; Remove-Item '{temp}'"#,
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait={pid}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; & '{temp}' -KeepData:{keep}; Remove-Item '{temp}' -ErrorAction SilentlyContinue"#,
         pid = self_pid,
         temp = temp_file.replace('\'', "''"),
         keep = keep,
@@ -109,14 +109,13 @@ fn run_platform(keep_data: bool) -> Result<()> {
             "-Command",
             &script,
         ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .context("failed to schedule Windows uninstall")?;
 
-    println!("{}", t!("uninstall.running_windows"));
-    Ok(())
+    std::process::exit(0);
 }
 
 #[cfg(unix)]

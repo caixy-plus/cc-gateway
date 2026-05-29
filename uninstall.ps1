@@ -9,7 +9,7 @@
 #   $env:CCG_KEEP_DATA='1'; .\cc-gateway-uninstall.ps1
 param([switch]$KeepData)
 
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Continue'
 if ($env:CCG_KEEP_DATA -eq '1') { $KeepData = $true }
 
 function Write-Msg($en, $zh) {

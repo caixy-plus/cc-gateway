@@ -368,10 +368,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "Running cleanup...",
             Language::ZhCN => "正在执行清理...",
         },
-        "uninstall.running_windows" => match lang {
-            Language::En => "Cleanup will finish in a background window after this process exits.",
-            Language::ZhCN => "本进程退出后，清理将在后台窗口完成。",
-        },
 
         // cli/interactive.rs
         "cli.banner" => match lang {

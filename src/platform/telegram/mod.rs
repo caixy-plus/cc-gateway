@@ -217,22 +217,6 @@ impl TelegramPlatform {
         ]
     }
 
-    fn telegram_help_text() -> String {
-        let mut out = String::new();
-        out.push_str(crate::t!("telegram.help_title"));
-        out.push('\n');
-        for (cmd, desc) in Self::telegram_commands() {
-            out.push('/');
-            out.push_str(cmd);
-            out.push_str("  ");
-            out.push_str(desc);
-            out.push('\n');
-        }
-        out.push('\n');
-        out.push_str(crate::t!("telegram.help_footer"));
-        out
-    }
-
     pub fn new<C: Into<AgentProfiles>>(
         config: TelegramConfig,
         default_dir: &str,
@@ -538,15 +522,6 @@ impl TelegramPlatform {
             }
         };
         if content.trim().is_empty() {
-            return Ok(());
-        }
-
-        // Telegram-specific help: do not reuse the generic TUI/CLI help text.
-        // (e.g. /help@botname is also common)
-        let cmd = content.split_whitespace().next().unwrap_or("");
-        if cmd == "/help" || cmd.starts_with("/help@") {
-            self.send_message(chat_id, &Self::telegram_help_text())
-                .await?;
             return Ok(());
         }
 
