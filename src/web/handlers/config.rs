@@ -1,4 +1,5 @@
 use crate::config::loader::ConfigLoader;
+use crate::session::pairing::GLOBAL_PAIRING_MANAGER;
 use crate::web::handlers::session::AppState;
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde_json::json;
@@ -84,7 +85,6 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             }
             config.feishu.enabled = c.enabled;
             config.feishu.app_id = c.app_id;
-            config.feishu.allow_from = c.allow_from;
             config.feishu.encrypt_key = c.encrypt_key;
             config.feishu.mode = c.mode;
             config.feishu.webhook_bind = c.webhook_bind;
@@ -98,7 +98,6 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
                 config.telegram.bot_token = c.bot_token;
             }
             config.telegram.enabled = c.enabled;
-            config.telegram.allow_from = c.allow_from;
             config.telegram.webhook_url = c.webhook_url;
             config.telegram.require_pairing = c.require_pairing;
         }
@@ -106,6 +105,12 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
 
     match ConfigLoader::save(&config) {
         Ok(()) => {
+            // Apply the pairing flags live so the toggle takes effect without
+            // a daemon restart (running platforms read the manager, not config).
+            crate::session::pairing::GLOBAL_PAIRING_MANAGER
+                .set_require_pairing("feishu", config.feishu.require_pairing);
+            crate::session::pairing::GLOBAL_PAIRING_MANAGER
+                .set_require_pairing("telegram", config.telegram.require_pairing);
             let body = json!({ "status": "saved" });
             (StatusCode::OK, body.to_string())
         }
@@ -125,16 +130,53 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
             "name": "feishu",
             "enabled": true,
             "mode": config.feishu.mode,
-            "allow_from": config.feishu.allow_from,
+            "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("feishu"),
         }));
     }
     if config.telegram.enabled {
         platforms.push(serde_json::json!({
             "name": "telegram",
             "enabled": true,
-            "allow_from": config.telegram.allow_from,
+            "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("telegram"),
         }));
     }
 
     Json(serde_json::json!({ "platforms": platforms }))
+}
+
+/// Quick toggle for a platform's `require_pairing` flag. Applies live (no
+/// restart) and persists to config.json so it survives the next restart.
+pub async fn handle_set_require_pairing(Json(body): Json<serde_json::Value>) -> (StatusCode, String) {
+    let platform = body.get("platform").and_then(|v| v.as_str()).unwrap_or("");
+    let required = match body.get("require_pairing").and_then(|v| v.as_bool()) {
+        Some(v) => v,
+        None => {
+            let body = json!({ "error": "Missing 'require_pairing' boolean" });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
+    if platform != "feishu" && platform != "telegram" {
+        let body = json!({ "error": "Unknown platform" });
+        return (StatusCode::BAD_REQUEST, body.to_string());
+    }
+
+    // Apply live first so it takes effect immediately.
+    GLOBAL_PAIRING_MANAGER.set_require_pairing(platform, required);
+
+    // Persist to config.json so the choice survives a restart.
+    if let Ok(path) = ConfigLoader::config_path() {
+        let mut config = ConfigLoader::load_from(&path).unwrap_or_default();
+        match platform {
+            "feishu" => config.feishu.require_pairing = required,
+            "telegram" => config.telegram.require_pairing = required,
+            _ => {}
+        }
+        if let Err(e) = ConfigLoader::save(&config) {
+            let body = json!({ "error": format!("Failed to persist config: {}", e) });
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
+        }
+    }
+
+    let body = json!({ "status": "ok", "platform": platform, "require_pairing": required });
+    (StatusCode::OK, body.to_string())
 }

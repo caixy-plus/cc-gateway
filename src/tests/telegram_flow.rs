@@ -7,12 +7,11 @@ use crate::session::channel_model::{AgentSession, AgentSessionState};
 
 use super::helpers::TestEnv;
 
-fn telegram_platform(allow_from: &str, default_dir: &str) -> TelegramPlatform {
+fn telegram_platform(default_dir: &str) -> TelegramPlatform {
     TelegramPlatform::new(
         TelegramConfig {
             enabled: true,
             bot_token: "telegram-token".to_string(),
-            allow_from: allow_from.to_string(),
             webhook_url: String::new(),
             require_pairing: false,
         },
@@ -23,19 +22,8 @@ fn telegram_platform(allow_from: &str, default_dir: &str) -> TelegramPlatform {
 }
 
 #[test]
-fn telegram_authorization_matches_user_id_username_and_wildcard() {
-    let explicit = telegram_platform("12345, alice", "~");
-    assert!(explicit.is_allowed_sender(12345, "bob"));
-    assert!(explicit.is_allowed_sender(67890, "alice"));
-    assert!(!explicit.is_allowed_sender(67890, "mallory"));
-
-    let wildcard = telegram_platform("*", "~");
-    assert!(wildcard.is_allowed_sender(1, "anyone"));
-}
-
-#[test]
 fn telegram_api_url_uses_configured_bot_token() {
-    let platform = telegram_platform("*", "~");
+    let platform = telegram_platform("~");
 
     assert_eq!(
         platform.api_url("sendMessage"),
@@ -45,7 +33,7 @@ fn telegram_api_url_uses_configured_bot_token() {
 
 #[test]
 fn telegram_mcp_context_targets_current_chat() {
-    let platform = telegram_platform("*", "~");
+    let platform = telegram_platform("~");
     let context = platform.mcp_context_for_chat("12345");
 
     match context.delivery {
@@ -106,7 +94,7 @@ fn telegram_bot_commands_payload_uses_valid_menu_commands() {
 
 #[test]
 fn telegram_directory_reply_markup_registers_callback_buttons() {
-    let platform = telegram_platform("*", "~");
+    let platform = telegram_platform("~");
     let markup = platform.directory_reply_markup(
         "12345",
         &[
@@ -125,7 +113,7 @@ fn telegram_directory_reply_markup_registers_callback_buttons() {
 
 #[test]
 fn telegram_history_reply_markup_registers_callback_buttons() {
-    let platform = telegram_platform("*", "~");
+    let platform = telegram_platform("~");
     let now = chrono::Utc::now();
     let sessions = vec![AgentSession {
         id: "session-1".to_string(),
@@ -188,7 +176,7 @@ fn telegram_history_message_includes_feishu_level_session_details() {
 async fn telegram_get_channel_reuses_runtime_and_persists_channel() {
     let env = TestEnv::new();
     db::init_schema().unwrap();
-    let platform = telegram_platform("*", env.home().to_str().unwrap());
+    let platform = telegram_platform(env.home().to_str().unwrap());
 
     let first = platform.get_channel("12345").await;
     let second = platform.get_channel("12345").await;

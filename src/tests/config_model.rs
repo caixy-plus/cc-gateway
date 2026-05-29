@@ -53,7 +53,6 @@ fn test_feishu_config_default() {
     let cfg = FeishuConfig::default();
     assert!(cfg.enabled);
     assert_eq!(cfg.app_id, "${FEISHU_APP_ID}");
-    assert_eq!(cfg.allow_from, "*");
     assert_eq!(cfg.mode, "websocket");
 }
 
@@ -64,7 +63,7 @@ fn test_gateway_config_serde_roundtrip() {
     let deserialized: GatewayConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(original.log.level, deserialized.log.level);
     assert_eq!(original.agent.default, deserialized.agent.default);
-    assert_eq!(original.feishu.allow_from, deserialized.feishu.allow_from);
+    assert_eq!(original.feishu.require_pairing, deserialized.feishu.require_pairing);
     assert_eq!(original.default_dir, deserialized.default_dir);
 }
 

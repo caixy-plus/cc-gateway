@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::command::router::CommandRouter;
 use crate::config::model::{AgentProfiles, TelegramConfig};
@@ -516,20 +516,6 @@ impl TelegramPlatform {
         };
 
         let chat_id = msg.chat.id;
-        let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
-        let username = msg
-            .from
-            .as_ref()
-            .and_then(|u| u.username.clone())
-            .unwrap_or_default();
-
-        if !self.is_allowed_sender(user_id, &username) {
-            debug!(
-                "Telegram message from unauthorized user: {} (@{})",
-                user_id, username
-            );
-            return Ok(());
-        }
 
         let content = match self
             .resolve_inbound_content(InboundContent {
@@ -577,7 +563,7 @@ impl TelegramPlatform {
         let approved =
             crate::session::pairing::GLOBAL_PAIRING_MANAGER.is_approved("telegram", &chat_id_str);
         if !approved {
-            if self.config.require_pairing {
+            if crate::session::pairing::GLOBAL_PAIRING_MANAGER.require_pairing("telegram") {
                 let code =
                     crate::session::pairing::GLOBAL_PAIRING_MANAGER
                         .get_or_create_pending("telegram", &chat_id_str);
@@ -717,22 +703,6 @@ impl TelegramPlatform {
 
         let chat_id = message.chat.id;
         let chat_id_str = chat_id.to_string();
-        let user_id = callback_query.from.id;
-        let username = callback_query.from.username.unwrap_or_default();
-
-        if !self.is_allowed_sender(user_id, &username) {
-            debug!(
-                "Telegram callback from unauthorized user: {} (@{})",
-                user_id, username
-            );
-            let _ = self
-                .answer_callback_query(
-                    &callback_query.id,
-                    Some(crate::t!("telegram.callback_expired")),
-                )
-                .await;
-            return Ok(());
-        }
 
         if message.chat.chat_type != "private" {
             self.send_message(chat_id, crate::t!("telegram.private_chat_only"))
@@ -936,16 +906,6 @@ impl TelegramPlatform {
         runtime
     }
 
-    pub(crate) fn is_allowed_sender(&self, user_id: i64, username: &str) -> bool {
-        if self.config.allow_from == "*" {
-            return true;
-        }
-        self.config.allow_from.split(',').any(|s| {
-            let s = s.trim();
-            s == user_id.to_string() || s == username
-        })
-    }
-
     pub async fn shutdown_all_sessions(&self) {
         for entry in self.channels.iter() {
             let chat_id = entry.key().clone();
@@ -1075,7 +1035,6 @@ struct Message {
     #[serde(rename = "message_id")]
     #[allow(dead_code)]
     message_id: i64,
-    from: Option<User>,
     chat: Chat,
     text: Option<String>,
     caption: Option<String>,
@@ -1084,13 +1043,6 @@ struct Message {
     video: Option<inbound::TelegramFileRef>,
     audio: Option<inbound::TelegramFileRef>,
     voice: Option<inbound::TelegramVoice>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct User {
-    id: i64,
-    #[serde(default)]
-    username: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1103,7 +1055,6 @@ struct Chat {
 #[derive(Debug, Clone, Deserialize)]
 struct CallbackQuery {
     id: String,
-    from: User,
     message: Option<CallbackMessage>,
     data: Option<String>,
 }

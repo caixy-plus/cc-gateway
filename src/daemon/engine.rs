@@ -52,6 +52,10 @@ impl DaemonEngine {
         }
         crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS.load_from_db();
         crate::session::pairing::GLOBAL_PAIRING_MANAGER.load_from_db();
+        crate::session::pairing::GLOBAL_PAIRING_MANAGER
+            .set_require_pairing("feishu", self.config.feishu.require_pairing);
+        crate::session::pairing::GLOBAL_PAIRING_MANAGER
+            .set_require_pairing("telegram", self.config.telegram.require_pairing);
 
         // Start all enabled platforms concurrently
         let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();

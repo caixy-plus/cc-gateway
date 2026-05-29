@@ -177,8 +177,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "发现已有配置。按 Enter 保留当前值。",
         },
         "wizard.init_skipped_existing" => match lang {
-            Language::En => "Config already exists at {PATH}, skipping initialization. Use `cc-gateway config` to edit.",
-            Language::ZhCN => "配置文件已存在于 {PATH}，跳过初始化。使用 `cc-gateway config` 进行修改。",
+            Language::En => "Config already exists at {PATH}, skipping initialization. Edit it in the WebUI settings or directly.",
+            Language::ZhCN => "配置文件已存在于 {PATH}，跳过初始化。可在 WebUI 设置中修改或直接编辑文件。",
         },
         "wizard.no_config_defaults" => match lang {
             Language::En => "No existing config found. Using defaults.",
@@ -216,9 +216,9 @@ pub fn t(key: &str) -> &str {
             Language::En => "  - Run: cc-gateway init",
             Language::ZhCN => "  - 运行: cc-gateway init",
         },
-        "wizard.run_config" => match lang {
-            Language::En => "  - Run: cc-gateway config",
-            Language::ZhCN => "  - 运行: cc-gateway config",
+        "wizard.open_webui" => match lang {
+            Language::En => "  - Open the WebUI and edit settings there (cc-gateway webui)",
+            Language::ZhCN => "  - 打开 WebUI 在设置中修改 (cc-gateway webui)",
         },
         "wizard.or_edit" => match lang {
             Language::En => "  - Or edit: {PATH}",
@@ -233,12 +233,98 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "      没有 app_id 和 app_secret，飞书机器人将无法工作。",
         },
         "wizard.configure_later" => match lang {
-            Language::En => "      You can configure it later by running 'cc-gateway config'.",
-            Language::ZhCN => "      您可以稍后通过运行 'cc-gateway config' 来配置。",
+            Language::En => "      You can configure it later in the WebUI settings.",
+            Language::ZhCN => "      您可以稍后在 WebUI 设置中配置。",
         },
         "wizard.please_edit_credentials" => match lang {
             Language::En => "Please edit it to add your Feishu app credentials.",
             Language::ZhCN => "请编辑以添加您的飞书应用凭证。",
+        },
+
+        // init guided setup (cc-gateway init)
+        "wizard.agent_section_title" => match lang {
+            Language::En => "--- Step 1/2: Agent ---",
+            Language::ZhCN => "--- 第 1/2 步：智能体 ---",
+        },
+        "wizard.agent_section_hint" => match lang {
+            Language::En => "Pick one agent to start with. You can enable and configure both later in the WebUI.",
+            Language::ZhCN => "先选择一个智能体。两者都可稍后在 WebUI 中启用并配置。",
+        },
+        "wizard.bot_section_title" => match lang {
+            Language::En => "--- Step 2/2: Bot Platform ---",
+            Language::ZhCN => "--- 第 2/2 步：机器人平台 ---",
+        },
+        "wizard.bot_section_hint" => match lang {
+            Language::En => "Pick one bot platform to start with. You can enable and configure both later in the WebUI.",
+            Language::ZhCN => "先选择一个机器人平台。两者都可稍后在 WebUI 中启用并配置。",
+        },
+        "wizard.opt_skip" => match lang {
+            Language::En => "  (Press Enter to skip)",
+            Language::ZhCN => "  (直接回车跳过)",
+        },
+        "wizard.choose_prompt" => match lang {
+            Language::En => "Your choice:",
+            Language::ZhCN => "请选择:",
+        },
+        "wizard.label_installed" => match lang {
+            Language::En => "[installed]",
+            Language::ZhCN => "[已安装]",
+        },
+        "wizard.label_not_found" => match lang {
+            Language::En => "[not found]",
+            Language::ZhCN => "[未检测到]",
+        },
+        "wizard.keep_or_clear" => match lang {
+            Language::En => "(Enter=keep, '-'=clear)",
+            Language::ZhCN => "(回车=保留, '-'=清空)",
+        },
+        "wizard.agent_unavailable_warn" => match lang {
+            Language::En => "  Note: '{NAME}' was not detected on PATH; this agent will be unavailable until it is installed.",
+            Language::ZhCN => "  注意: 未在 PATH 中检测到 '{NAME}'，安装前该智能体不可用。",
+        },
+        "wizard.agent_configured" => match lang {
+            Language::En => "  Agent set to: {NAME}",
+            Language::ZhCN => "  智能体已设为: {NAME}",
+        },
+        "wizard.bot_configured" => match lang {
+            Language::En => "  Bot platform set to: {NAME}",
+            Language::ZhCN => "  机器人平台已设为: {NAME}",
+        },
+        "wizard.skipped_agent" => match lang {
+            Language::En => "  Skipped agent configuration.",
+            Language::ZhCN => "  已跳过智能体配置。",
+        },
+        "wizard.skipped_bot" => match lang {
+            Language::En => "  Skipped bot configuration.",
+            Language::ZhCN => "  已跳过机器人配置。",
+        },
+        "wizard.review_title" => match lang {
+            Language::En => "--- Review ---",
+            Language::ZhCN => "--- 检查 ---",
+        },
+        "wizard.review_ok" => match lang {
+            Language::En => "Everything looks good.",
+            Language::ZhCN => "配置看起来没问题。",
+        },
+        "wizard.review_has_issues" => match lang {
+            Language::En => "Some settings are incomplete. You can finish them later in the WebUI:",
+            Language::ZhCN => "部分设置尚不完整，可稍后在 WebUI 中补全:",
+        },
+        "wizard.warn_agent_missing" => match lang {
+            Language::En => "  - Agent '{NAME}' is not installed; it won't work until installed.",
+            Language::ZhCN => "  - 智能体 '{NAME}' 未安装，安装前无法使用。",
+        },
+        "wizard.warn_feishu_incomplete" => match lang {
+            Language::En => "  - Feishu is enabled but app_id/app_secret are empty.",
+            Language::ZhCN => "  - 飞书已启用，但 app_id/app_secret 为空。",
+        },
+        "wizard.warn_telegram_incomplete" => match lang {
+            Language::En => "  - Telegram is enabled but bot_token is empty.",
+            Language::ZhCN => "  - Telegram 已启用，但 bot_token 为空。",
+        },
+        "wizard.webui_from_now" => match lang {
+            Language::En => "Setup done. From now on, manage everything in the WebUI (run: cc-gateway webui).",
+            Language::ZhCN => "初始化完成。之后所有配置都在 WebUI 中管理 (运行: cc-gateway webui)。",
         },
 
         // cli/interactive.rs
@@ -464,7 +550,7 @@ pub fn t(key: &str) -> &str {
             Language::En => "Failed to clear context: {ERR}",
             Language::ZhCN => "清理上下文失败: {ERR}",
         },
-        "builtin.status_inactive" => match lang {
+        "builtin.status_no_session" => match lang {
             Language::En => "No active agent session.",
             Language::ZhCN => "无活跃智能体会话。",
         },

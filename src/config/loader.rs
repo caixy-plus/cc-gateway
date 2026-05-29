@@ -10,8 +10,35 @@ pub struct ConfigLoader;
 
 impl ConfigLoader {
     pub fn load() -> Result<GatewayConfig> {
-        let path = Self::config_path()?;
+        // Guarantee a config file always exists, even if the user bypassed
+        // `cc-gateway init` and started the daemon / TUI / WebUI directly. Once
+        // the file exists, `init` is skipped and all further changes happen in
+        // the WebUI.
+        let path = Self::ensure_config_file()?;
         Self::load_from(&path)
+    }
+
+    /// Create a default config file at the standard path if one does not exist.
+    /// Idempotent: never overwrites an existing file. Returns the config path.
+    pub fn ensure_config_file() -> Result<PathBuf> {
+        let path = Self::config_path()?;
+        Self::ensure_config_file_at(&path)?;
+        Ok(path)
+    }
+
+    /// Path-parameterized core of [`ensure_config_file`], split out for testing.
+    fn ensure_config_file_at(path: &Path) -> Result<()> {
+        if path.is_file() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create config dir {}", parent.display()))?;
+        }
+        let content = serde_json::to_string_pretty(&GatewayConfig::default())?;
+        fs::write(path, content)
+            .with_context(|| format!("Failed to write default config to {}", path.display()))?;
+        Ok(())
     }
 
     pub fn load_from(path: &Path) -> Result<GatewayConfig> {
@@ -138,6 +165,27 @@ mod tests {
             Some("custom-claude")
         );
         assert_eq!(config.agent.claude.default_args.as_deref(), Some("--foo"));
+    }
+
+    #[test]
+    fn ensure_config_file_creates_default_then_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("cc-gateway-ensure-{}", std::process::id()));
+        let path = dir.join("nested").join("config.json");
+        let _ = fs::remove_dir_all(&dir);
+
+        // First call creates a parseable default config (and parent dirs).
+        assert!(!path.is_file());
+        ConfigLoader::ensure_config_file_at(&path).unwrap();
+        assert!(path.is_file());
+        let config = ConfigLoader::load_from(&path).unwrap();
+        assert_eq!(config.port, GatewayConfig::default().port);
+
+        // Second call must NOT overwrite a user-modified file.
+        fs::write(&path, r#"{"port": 12345}"#).unwrap();
+        ConfigLoader::ensure_config_file_at(&path).unwrap();
+        assert_eq!(ConfigLoader::load_from(&path).unwrap().port, 12345);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

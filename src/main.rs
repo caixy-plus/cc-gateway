@@ -65,12 +65,6 @@ enum Commands {
     Disable,
     /// Initialize configuration interactively
     Init,
-    /// Edit configuration
-    Config {
-        /// Print default config to stdout
-        #[arg(long)]
-        init: bool,
-    },
     /// Open WebUI in the default browser (starts daemon if not running)
     Webui {
         /// Config file path
@@ -140,14 +134,6 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Init) => {
             config::wizard::run_init_config()?;
-        }
-        Some(Commands::Config { init }) => {
-            if init {
-                let default = config::model::GatewayConfig::default();
-                println!("{}", serde_json::to_string_pretty(&default)?);
-            } else {
-                config::wizard::run_interactive_config()?;
-            }
         }
         Some(Commands::Webui { config }) => {
             daemon::webui(config).await?;

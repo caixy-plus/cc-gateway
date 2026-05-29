@@ -282,12 +282,6 @@ impl FeishuPlatform {
             .unwrap_or("")
             .to_string();
 
-        // ACL check
-        if !self.is_allowed_sender(&sender_open_id) {
-            warn!("Feishu ACL blocked sender {}", sender_open_id);
-            return None;
-        }
-
         let message = event.get("message")?;
         let message_id = message
             .get("message_id")
@@ -378,7 +372,7 @@ impl FeishuPlatform {
         use crate::session::pairing::GLOBAL_PAIRING_MANAGER;
         let approved = GLOBAL_PAIRING_MANAGER.is_approved("feishu", &chat_id);
         if !approved {
-            if self.config.require_pairing {
+            if GLOBAL_PAIRING_MANAGER.require_pairing("feishu") {
                 let code = GLOBAL_PAIRING_MANAGER.get_or_create_pending("feishu", &chat_id);
                 let msg_text = crate::t_fmt!("pairing.wait_message", CODE = code);
                 let _ = self

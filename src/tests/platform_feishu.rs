@@ -7,7 +7,6 @@ fn test_platform() -> FeishuPlatform {
         enabled: true,
         app_id: "${FEISHU_APP_ID}".to_string(),
         app_secret: "${FEISHU_APP_SECRET}".to_string(),
-        allow_from: "*".to_string(),
         encrypt_key: "".to_string(),
         mode: "websocket".to_string(),
         webhook_bind: "0.0.0.0:3000".to_string(),

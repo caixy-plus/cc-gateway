@@ -73,6 +73,10 @@ pub fn create_app_with_config_path(
             "/api/platforms",
             get(handlers::config::handle_get_platforms),
         )
+        .route(
+            "/api/platforms/require_pairing",
+            post(handlers::config::handle_set_require_pairing),
+        )
         .route("/api/version", get(handlers::system::handle_version))
         .route(
             "/api/version/check",
@@ -98,6 +102,18 @@ pub fn create_app_with_config_path(
         .route(
             "/api/pairing/reject",
             post(handlers::pairing::handle_reject),
+        )
+        .route(
+            "/api/pairing/approved",
+            get(handlers::pairing::handle_list_approved),
+        )
+        .route(
+            "/api/pairing/approved/set_enabled",
+            post(handlers::pairing::handle_set_approval_enabled),
+        )
+        .route(
+            "/api/pairing/approved/remove",
+            post(handlers::pairing::handle_delete_approval),
         )
         // WebUI static files
         .route("/", get(handlers::ui::serve_index))

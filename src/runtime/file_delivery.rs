@@ -83,7 +83,6 @@ impl FileDelivery for FeishuFileTarget {
         let config = crate::config::model::FeishuConfig {
             app_id: self.app_id.clone(),
             app_secret: self.app_secret.clone(),
-            allow_from: "*".to_string(),
             encrypt_key: String::new(),
             enabled: true,
             mode: "websocket".to_string(),

@@ -342,7 +342,7 @@ impl ChatCommandExecutor {
                         let ctrl = active.controller.lock().await;
                         ctrl.status_summary().await
                     }
-                    None => t!("builtin.status_inactive").to_string(),
+                    None => t!("builtin.status_no_session").to_string(),
                 };
                 Ok(ChatCommandOutcome::Reply(summary))
             }

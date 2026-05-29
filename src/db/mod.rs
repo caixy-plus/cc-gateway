@@ -73,11 +73,24 @@ pub fn init_schema() -> Result<()> {
             chat_id TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS approved_chats (
+            platform TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            approved_at TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (platform, chat_id)
+        );
         PRAGMA journal_mode=WAL;",
     )?;
 
     let _ = conn.execute(
         "ALTER TABLE channel_sessions ADD COLUMN default_provider TEXT",
+        [],
+    );
+
+    // Backfill `enabled` for DBs created before the column existed.
+    let _ = conn.execute(
+        "ALTER TABLE approved_chats ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
         [],
     );
 
@@ -464,6 +477,104 @@ fn try_load_all_pending_pairings() -> Result<Vec<(String, String, String, String
         match row {
             Ok(p) => list.push(p),
             Err(e) => warn!("Failed to parse pending pairing row: {}", e),
+        }
+    }
+    Ok(list)
+}
+
+// ------------------------------------------------------------------
+// Approved chats CRUD (explicit allow-list for paired bot chats)
+// ------------------------------------------------------------------
+
+pub fn insert_approved_chat(platform: &str, chat_id: &str, approved_at: &str, enabled: bool) {
+    if let Err(e) = try_insert_approved_chat(platform, chat_id, approved_at, enabled) {
+        warn!(
+            "Failed to persist approved chat {}:{}: {}",
+            platform, chat_id, e
+        );
+    }
+}
+
+fn try_insert_approved_chat(
+    platform: &str,
+    chat_id: &str,
+    approved_at: &str,
+    enabled: bool,
+) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO approved_chats (platform, chat_id, approved_at, enabled)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![platform, chat_id, approved_at, enabled as i64],
+    )?;
+    Ok(())
+}
+
+pub fn set_approved_chat_enabled(platform: &str, chat_id: &str, enabled: bool) {
+    if let Err(e) = try_set_approved_chat_enabled(platform, chat_id, enabled) {
+        warn!(
+            "Failed to update approved chat {}:{}: {}",
+            platform, chat_id, e
+        );
+    }
+}
+
+fn try_set_approved_chat_enabled(platform: &str, chat_id: &str, enabled: bool) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "UPDATE approved_chats SET enabled = ?3 WHERE platform = ?1 AND chat_id = ?2",
+        params![platform, chat_id, enabled as i64],
+    )?;
+    Ok(())
+}
+
+pub fn delete_approved_chat(platform: &str, chat_id: &str) {
+    if let Err(e) = try_delete_approved_chat(platform, chat_id) {
+        warn!(
+            "Failed to delete approved chat {}:{}: {}",
+            platform, chat_id, e
+        );
+    }
+}
+
+fn try_delete_approved_chat(platform: &str, chat_id: &str) -> Result<()> {
+    let conn = open_conn()?;
+    conn.execute(
+        "DELETE FROM approved_chats WHERE platform = ?1 AND chat_id = ?2",
+        params![platform, chat_id],
+    )?;
+    Ok(())
+}
+
+/// Returns (platform, chat_id, approved_at, enabled).
+pub fn load_all_approved_chats() -> Vec<(String, String, String, bool)> {
+    match try_load_all_approved_chats() {
+        Ok(list) => list,
+        Err(e) => {
+            error!("Failed to load approved chats from DB: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+fn try_load_all_approved_chats() -> Result<Vec<(String, String, String, bool)>> {
+    let conn = open_conn()?;
+    let mut stmt =
+        conn.prepare("SELECT platform, chat_id, approved_at, enabled FROM approved_chats")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)? != 0,
+        ))
+    })?;
+
+    let mut list = Vec::new();
+    for row in rows {
+        match row {
+            Ok(p) => list.push(p),
+            Err(e) => warn!("Failed to parse approved chat row: {}", e),
         }
     }
     Ok(list)
