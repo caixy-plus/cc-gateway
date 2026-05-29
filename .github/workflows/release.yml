@@ -98,6 +98,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/cc-gateway dist/
           cp install.sh dist/
+          cp uninstall.sh dist/
           cp README.md dist/
           cp -r docs dist/
           cd dist
@@ -109,6 +110,7 @@ jobs:
           mkdir dist
           cp target/${{ matrix.target }}/release/cc-gateway.exe dist/
           cp install.ps1 dist/
+          cp uninstall.ps1 dist/
           cp README.md dist/
           cp -r docs dist/
           cd dist

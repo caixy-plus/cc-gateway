@@ -14,6 +14,7 @@ mod platform;
 mod prompt;
 mod runtime;
 mod session;
+mod uninstall;
 mod update;
 mod utils;
 mod web;
@@ -86,6 +87,15 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Uninstall cc-gateway (binary, auto-start, PATH entry, and data)
+    Uninstall {
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Keep the data directory (~/.cc-gateway) instead of deleting it
+        #[arg(long)]
+        keep_data: bool,
+    },
     /// Internal: run the daemon engine (do not use directly)
     #[command(hide = true, name = "_daemon")]
     Daemon {
@@ -145,6 +155,9 @@ async fn main() -> Result<()> {
             config,
         }) => {
             update::run(check, force, yes, config).await?;
+        }
+        Some(Commands::Uninstall { yes, keep_data }) => {
+            uninstall::run(yes, keep_data)?;
         }
         Some(Commands::McpServer) => {
             runtime::mcp_server::run_mcp_server().await?;

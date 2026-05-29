@@ -327,6 +327,52 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "初始化完成。之后所有配置都在 WebUI 中管理 (运行: cc-gateway webui)。",
         },
 
+        // uninstall (cc-gateway uninstall)
+        "uninstall.plan_title" => match lang {
+            Language::En => "This will completely uninstall cc-gateway:",
+            Language::ZhCN => "即将彻底卸载 cc-gateway：",
+        },
+        "uninstall.plan_stop" => match lang {
+            Language::En => "  - stop the running daemon",
+            Language::ZhCN => "  - 停止守护进程",
+        },
+        "uninstall.plan_autostart" => match lang {
+            Language::En => "  - remove auto-start (launchd/systemd)",
+            Language::ZhCN => "  - 移除开机自启 (launchd/systemd)",
+        },
+        "uninstall.plan_binary" => match lang {
+            Language::En => "  - delete the binary: {PATH}",
+            Language::ZhCN => "  - 删除二进制：{PATH}",
+        },
+        "uninstall.plan_path_entry" => match lang {
+            Language::En => "  - remove the PATH entry added at install time",
+            Language::ZhCN => "  - 清理安装时写入的 PATH 配置",
+        },
+        "uninstall.plan_data_delete" => match lang {
+            Language::En => "  - delete all data: ~/.cc-gateway (config, logs, history, media, skills)",
+            Language::ZhCN => "  - 删除全部数据：~/.cc-gateway（配置、日志、会话历史、媒体、skills）",
+        },
+        "uninstall.plan_data_keep" => match lang {
+            Language::En => "  - keep data: ~/.cc-gateway (use without --keep-data to delete it)",
+            Language::ZhCN => "  - 保留数据：~/.cc-gateway（不加 --keep-data 则会删除）",
+        },
+        "uninstall.confirm_prompt" => match lang {
+            Language::En => "This cannot be undone. Continue? [y/N]:",
+            Language::ZhCN => "此操作不可恢复。确认卸载？[y/N]：",
+        },
+        "uninstall.cancelled" => match lang {
+            Language::En => "Uninstall cancelled.",
+            Language::ZhCN => "已取消卸载。",
+        },
+        "uninstall.running" => match lang {
+            Language::En => "Running cleanup...",
+            Language::ZhCN => "正在执行清理...",
+        },
+        "uninstall.running_windows" => match lang {
+            Language::En => "Cleanup will finish in a background window after this process exits.",
+            Language::ZhCN => "本进程退出后，清理将在后台窗口完成。",
+        },
+
         // cli/interactive.rs
         "cli.banner" => match lang {
             Language::En => "cc-gateway interactive mode  Type '/help' for commands, '/quit' to exit.\n",
