@@ -103,6 +103,45 @@ pub fn build_download_url(repo: &str, tag: &str, platform: &str) -> String {
     )
 }
 
+/// Fetch commit messages between two refs from GitHub compare API.
+pub async fn fetch_compare_commits(
+    client: &reqwest::Client,
+    repo: &str,
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>> {
+    let url = format!(
+        "https://api.github.com/repos/{}/compare/{}...{}",
+        repo, base, head
+    );
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "cc-gateway-updater")
+        .send()
+        .await
+        .context("failed to fetch compare from GitHub API")?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("GitHub compare API returned status: {}", resp.status());
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .context("failed to parse compare response")?;
+
+    let commits: Vec<String> = json["commits"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c["commit"]["message"].as_str().map(|m| m.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(commits)
+}
+
 /// Fetch the latest release from GitHub.
 pub async fn fetch_latest_release(client: &reqwest::Client, repo: &str) -> Result<GitHubRelease> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);

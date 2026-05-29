@@ -64,6 +64,42 @@ pub async fn handle_version() -> (StatusCode, String) {
     (StatusCode::OK, body.to_string())
 }
 
+/// Returns true when the release body is just an auto-generated "Full Changelog" link.
+fn is_auto_changelog(body: &str) -> bool {
+    let trimmed = body.trim();
+    trimmed.starts_with("**Full Changelog**:") && !trimmed.contains('\n')
+}
+
+/// Fetch commit log from compare API and format it as release notes.
+async fn fetch_changelog(
+    client: &reqwest::Client,
+    current: &str,
+    latest: &str,
+) -> Option<String> {
+    let commits = crate::update::fetch_compare_commits(
+        client,
+        UPDATE_REPO,
+        &format!("v{}", current),
+        latest,
+    )
+    .await
+    .ok()?;
+    if commits.is_empty() {
+        return None;
+    }
+    Some(
+        commits
+            .iter()
+            .map(|c| {
+                // Take just the first line (subject) of each commit message
+                let subject = c.lines().next().unwrap_or(c);
+                format!("  • {}", subject)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
 pub async fn handle_update_check() -> (StatusCode, String) {
     let current = env!("CARGO_PKG_VERSION");
     let client = match reqwest::Client::builder()
@@ -85,7 +121,17 @@ pub async fn handle_update_check() -> (StatusCode, String) {
         }
     };
 
-    let body = match build_update_check_body(current, release) {
+    // If the release body is just the auto-generated link, fetch actual commits.
+    let mut release_with_notes = release;
+    if is_auto_changelog(&release_with_notes.body.clone().unwrap_or_default()) {
+        if let Some(changelog) =
+            fetch_changelog(&client, current, &release_with_notes.tag_name).await
+        {
+            release_with_notes.body = Some(changelog);
+        }
+    }
+
+    let body = match build_update_check_body(current, release_with_notes) {
         Ok(body) => body,
         Err(e) => {
             let status = if e.starts_with("Invalid latest version") {
