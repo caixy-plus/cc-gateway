@@ -485,6 +485,7 @@ async fn controller_start_session_with_explicit_claude_provider() -> Result<()> 
             mode: None,
             permission: None,
         },
+        pi: AgentProviderConfig::default(),
     };
 
     let controller = AgentController::new(settings, false);
@@ -541,6 +542,7 @@ async fn resume_session_uses_stored_provider_not_agent_default() -> Result<()> {
             mode: None,
             permission: None,
         },
+        pi: AgentProviderConfig::default(),
     };
 
     let channel = GLOBAL_CHANNEL_SESSIONS

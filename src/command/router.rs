@@ -208,17 +208,27 @@ impl CommandRouter {
                         arg.split_whitespace().map(|s| s.to_string()).collect()
                     },
                 },
+                "/agent_pi" => CommandAction::StartSession {
+                    work_dir: None,
+                    provider: Some(AgentProvider::Pi),
+                    args: if arg.is_empty() {
+                        vec![]
+                    } else {
+                        arg.split_whitespace().map(|s| s.to_string()).collect()
+                    },
+                },
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
                 "/agent-history" | "/agent_history" => CommandAction::ShowAgentHistory {
                     arg: arg.to_string(),
                 },
-                "/agents" | "/agents_claude" | "/agents_cursor" => {
+                "/agents" | "/agents_claude" | "/agents_cursor" | "/agents_pi" => {
                     let mut args: Vec<String> =
                         arg.split_whitespace().map(|s| s.to_string()).collect();
                     let provider = match cmd {
                         "/agents_claude" => Some(AgentProvider::Claude),
                         "/agents_cursor" => Some(AgentProvider::Cursor),
+                        "/agents_pi" => Some(AgentProvider::Pi),
                         _ => parse_provider_prefix(&mut args),
                     };
                     if provider.is_some() || arg.trim().is_empty() {
@@ -563,6 +573,7 @@ fn parse_provider_prefix(args: &mut Vec<String>) -> Option<AgentProvider> {
     let provider = match args.first().map(|s| s.as_str()) {
         Some("claude") => Some(AgentProvider::Claude),
         Some("cursor") => Some(AgentProvider::Cursor),
+        Some("pi") => Some(AgentProvider::Pi),
         _ => None,
     };
     if provider.is_some() {

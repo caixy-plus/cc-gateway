@@ -42,6 +42,7 @@ impl FeishuPlatform {
             .await
             .context("Failed to connect to Feishu WebSocket")?;
         info!("Feishu WebSocket connected successfully");
+        crate::platform::status::set_connected("feishu", true);
 
         let (write, mut read) = ws_stream.split();
         let write = std::sync::Arc::new(tokio::sync::Mutex::new(write));
@@ -132,6 +133,7 @@ impl FeishuPlatform {
         .await;
 
         heartbeat_handle.abort();
+        crate::platform::status::set_connected("feishu", false);
         read_result
     }
 

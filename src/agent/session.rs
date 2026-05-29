@@ -3,6 +3,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
+use crate::agent::pi_rpc::PiRpcSession;
 use crate::config::model::{AgentConfig, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{InputMessage, OutputEvent};
@@ -11,6 +12,7 @@ use crate::runtime::session::StreamJsonSession;
 pub enum AgentRuntime {
     Claude(StreamJsonSession),
     Cursor(CursorAcpSession),
+    Pi(PiRpcSession),
 }
 
 impl AgentRuntime {
@@ -55,6 +57,17 @@ impl AgentRuntime {
                 .await?;
                 Ok((Self::Cursor(session), session_id))
             }
+            AgentProvider::Pi => {
+                let (session, session_id) = PiRpcSession::spawn(
+                    work_dir,
+                    extra_args,
+                    config,
+                    event_tx,
+                    resume_session_id,
+                )
+                .await?;
+                Ok((Self::Pi(session), session_id))
+            }
         }
     }
 
@@ -66,6 +79,7 @@ impl AgentRuntime {
                     .await
             }
             AgentRuntime::Cursor(session) => session.send_user_message(text).await,
+            AgentRuntime::Pi(session) => session.send_user_message(text).await,
         }
     }
 
@@ -74,6 +88,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
             AgentRuntime::Cursor(session) => session.send_cancel().await,
+            AgentRuntime::Pi(session) => session.send_cancel().await,
         }
     }
 
@@ -87,6 +102,7 @@ impl AgentRuntime {
                     .await
             }
             AgentRuntime::Cursor(session) => session.send_user_message("/clear").await,
+            AgentRuntime::Pi(session) => session.send_clear().await,
         }
     }
 
@@ -110,6 +126,23 @@ impl AgentRuntime {
                 }
                 InputMessage::Interrupt => session.send_cancel().await,
             },
+            AgentRuntime::Pi(session) => match msg {
+                InputMessage::ControlResponse { response } => {
+                    let allow = response.response.behavior == "allow";
+                    session
+                        .send_permission_response(&response.request_id, allow)
+                        .await
+                }
+                InputMessage::User { message } => {
+                    let text = message
+                        .content
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| message.content.to_string());
+                    session.send_user_message(&text).await
+                }
+                InputMessage::Interrupt => session.send_cancel().await,
+            },
         }
     }
 
@@ -117,6 +150,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Claude(session) => session.stop().await,
             AgentRuntime::Cursor(session) => session.stop().await,
+            AgentRuntime::Pi(session) => session.stop().await,
         }
     }
 
@@ -128,6 +162,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Claude(session) => session.force_stop().await,
             AgentRuntime::Cursor(session) => session.force_stop().await,
+            AgentRuntime::Pi(session) => session.force_stop().await,
         }
     }
 
@@ -135,6 +170,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Claude(session) => session.is_alive(),
             AgentRuntime::Cursor(session) => session.is_alive(),
+            AgentRuntime::Pi(session) => session.is_alive(),
         }
     }
 
@@ -142,6 +178,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Claude(session) => session.recent_stderr(),
             AgentRuntime::Cursor(_) => String::new(),
+            AgentRuntime::Pi(session) => session.recent_stderr(),
         }
     }
 }

@@ -1045,6 +1045,7 @@ impl Platform for TelegramPlatform {
         loop {
             match self.get_updates().await {
                 Ok(updates) => {
+                    crate::platform::status::set_connected("telegram", true);
                     for update in updates {
                         let next_offset = update.update_id + 1;
                         self.offset.store(next_offset, Ordering::SeqCst);

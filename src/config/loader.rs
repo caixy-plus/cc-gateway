@@ -103,7 +103,8 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
                 json!({
                     "default": "claude",
                     "claude": { "cli_path": cli_path, "default_args": default_args },
-                    "cursor": {}
+                    "cursor": {},
+                    "pi": {}
                 }),
             );
         }
@@ -118,12 +119,13 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
             let mut profiles = json!({
                 "default": provider,
                 "claude": {},
-                "cursor": {}
+                "cursor": {},
+                "pi": {}
             });
-            let profile_key = if provider == "cursor" {
-                "cursor"
-            } else {
-                "claude"
+            let profile_key = match provider {
+                "cursor" => "cursor",
+                "pi" => "pi",
+                _ => "claude",
             };
             if let Some(profiles_obj) = profiles.as_object_mut() {
                 if let Some(profile) = profiles_obj

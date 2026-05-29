@@ -4,9 +4,6 @@ use std::process::Stdio;
 
 use crate::{t, t_fmt};
 
-const UNINSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/uninstall.sh";
-
 /// `cc-gateway uninstall`: the binary only handles the confirmation prompt and
 /// then hands off ALL cleanup to `uninstall.sh` / `uninstall.ps1`. The
 /// `--keep-data` choice is passed through to the script untouched.
@@ -30,7 +27,6 @@ fn print_plan(keep_data: bool) {
     println!("{}", t!("uninstall.plan_stop"));
     println!("{}", t!("uninstall.plan_autostart"));
     println!("{}", t_fmt!("uninstall.plan_binary", PATH = bin));
-    println!("{}", t!("uninstall.plan_path_entry"));
     if keep_data {
         println!("{}", t!("uninstall.plan_data_keep"));
     } else {
@@ -51,23 +47,28 @@ fn confirm() -> Result<bool> {
 
 #[cfg(unix)]
 fn run_platform(keep_data: bool) -> Result<()> {
-    // On Unix the running executable can be unlinked while running, so we run the
-    // cleanup script attached in the current terminal for visible progress.
-    let flag = if keep_data { "--keep-data" } else { "" };
-    let cmd = format!(
-        "curl -fsSL {} | sh -s -- {}",
-        shell_single_quote(UNINSTALL_SH_URL),
-        flag
-    );
+    // Write the embedded uninstall script to a temp file so we can run it.
+    // Unlike Windows, the running Unix binary CAN be unlinked, so we can
+    // safely run the cleanup in the foreground and show visible output.
+    let temp_file = std::env::temp_dir().join("cc-gateway-uninstall.sh");
+    std::fs::write(&temp_file, include_str!("../../uninstall.sh"))
+        .context("failed to write uninstall script to temp")?;
+
     println!("{}", t!("uninstall.running"));
-    let status = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(cmd)
+
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.arg(&temp_file);
+    if keep_data {
+        cmd.arg("--keep-data");
+    }
+    let status = cmd
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
         .context("failed to run uninstall script")?;
+
+    let _ = std::fs::remove_file(&temp_file);
 
     if !status.success() {
         anyhow::bail!(
@@ -116,10 +117,5 @@ fn run_platform(keep_data: bool) -> Result<()> {
         .context("failed to schedule Windows uninstall")?;
 
     std::process::exit(0);
-}
-
-#[cfg(unix)]
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 

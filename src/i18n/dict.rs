@@ -344,10 +344,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "  - delete the binary: {PATH}",
             Language::ZhCN => "  - 删除二进制：{PATH}",
         },
-        "uninstall.plan_path_entry" => match lang {
-            Language::En => "  - remove the PATH entry added at install time",
-            Language::ZhCN => "  - 清理安装时写入的 PATH 配置",
-        },
         "uninstall.plan_data_delete" => match lang {
             Language::En => "  - delete all data: ~/.cc-gateway (config, logs, history, media, skills)",
             Language::ZhCN => "  - 删除全部数据：~/.cc-gateway（配置、日志、会话历史、媒体、skills）",

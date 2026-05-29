@@ -274,3 +274,71 @@ async fn test_get_pending_request_and_clear() {
     }
     assert!(pending_perm.read().await.is_none());
 }
+
+mod pi_tests {
+    use crate::agent::event::AgentEvent;
+    use crate::agent::pi_rpc::PiRpcSession;
+    use crate::config::model::AgentConfig;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_pi_spawn_and_prompt() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let config = AgentConfig {
+            provider: crate::config::model::AgentProvider::Pi,
+            cli_path: "pi".to_string(),
+            default_args: String::new(),
+            mode: String::new(),
+            permission: String::new(),
+        };
+        let (session, _session_id) = PiRpcSession::spawn(
+            std::env::temp_dir().to_string_lossy().to_string(),
+            vec![],
+            &config,
+            tx,
+            None,
+        )
+        .await
+        .expect("Failed to spawn Pi session");
+
+        session.send_user_message("say 'hello world'").await.unwrap();
+
+        // Collect events, looking for text and done
+        let mut texts = Vec::new();
+        let mut tools = Vec::new();
+        let mut done = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
+        while !done && std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
+                Ok(Some(event)) => match event {
+                    AgentEvent::Text(t) => texts.push(t),
+                    AgentEvent::Thinking(t) => texts.push(format!("<think>{}<think>", t)),
+                    AgentEvent::ToolUse(name, args) => tools.push(format!("{}:{}", name, args)),
+                    AgentEvent::ToolResult(text, _) => texts.push(text),
+                    AgentEvent::Done => done = true,
+                    AgentEvent::Error(e) => texts.push(format!("ERROR: {}", e)),
+                    _ => {}
+                },
+                Ok(None) => break,
+                Err(_) => {
+                    eprintln!("Pi test timed out waiting for events, got so far: texts={:?} tools={:?}", texts, tools);
+                    break;
+                }
+            }
+        }
+
+        session.stop().await.ok();
+
+        let all_text = texts.join("");
+        println!("Pi response: {}", all_text);
+        println!("Tools: {:?}", tools);
+        assert!(done, "Expected AgentEvent::Done");
+        assert!(!all_text.is_empty(), "Expected some response text");
+        assert!(
+            all_text.to_lowercase().contains("hello"),
+            "Expected hello in response, got: {}",
+            all_text
+        );
+    }
+}

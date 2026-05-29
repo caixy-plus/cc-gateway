@@ -57,5 +57,13 @@ if ($KeepData) {
     Write-Msg "  - removed data: $ConfigDir" "  - 已删除数据：$ConfigDir"
 }
 
+# 5. Verify cleanup — check if cc-gateway is still on PATH.
+$remaining = Get-Command cc-gateway -ErrorAction SilentlyContinue
+if ($remaining) {
+    Write-Host ""
+    Write-Msg "WARNING: cc-gateway is still found at: $($remaining.Source)" "警告：cc-gateway 仍在以下位置存在：$($remaining.Source)"
+    Write-Msg "It may have been installed to a non-standard location." "它可能被安装到了非标准位置。"
+}
+
 Write-Msg "cc-gateway has been uninstalled." "cc-gateway 已卸载完成。"
-Write-Msg "Open a new terminal for PATH changes to take effect." "请打开新终端以使 PATH 变更生效。"
+Write-Msg "Open a new terminal for PATH changes to take effect." "请重新打开终端以使 PATH 变更生效。"

@@ -71,11 +71,13 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
     println!("{}", t!("wizard.agent_section_hint"));
     println!("  1. claude   {}", status_label(cli_installed("claude")));
     println!("  2. cursor   {}", status_label(cli_installed("agent")));
+    println!("  3. pi       {}", status_label(cli_installed("pi")));
     println!("  {}", t!("wizard.opt_skip"));
 
     let provider = match read_choice()?.as_str() {
         "1" | "claude" => AgentProvider::Claude,
         "2" | "cursor" => AgentProvider::Cursor,
+        "3" | "pi" => AgentProvider::Pi,
         _ => {
             println!("{}", t!("wizard.skipped_agent"));
             return Ok(());
@@ -90,6 +92,7 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
     let target = match provider {
         AgentProvider::Claude => &mut config.agent.claude,
         AgentProvider::Cursor => &mut config.agent.cursor,
+        AgentProvider::Pi => &mut config.agent.pi,
     };
     target.cli_path = Some(cli_path.clone());
     target.default_args = Some(default_args);

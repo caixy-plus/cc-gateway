@@ -12,6 +12,9 @@ pub fn available_providers(profiles: &crate::config::model::AgentProfiles) -> Ve
     if profiles.cursor.cli_path.is_some() {
         providers.push(AgentProvider::Cursor);
     }
+    if profiles.pi.cli_path.is_some() {
+        providers.push(AgentProvider::Pi);
+    }
     providers
 }
 
@@ -19,6 +22,7 @@ pub fn provider_display_name(provider: &AgentProvider) -> &'static str {
     match provider {
         AgentProvider::Claude => "claude",
         AgentProvider::Cursor => "cursor",
+        AgentProvider::Pi => "pi",
     }
 }
 

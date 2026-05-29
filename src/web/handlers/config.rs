@@ -129,6 +129,7 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
         platforms.push(serde_json::json!({
             "name": "feishu",
             "enabled": true,
+            "connected": crate::platform::status::is_connected("feishu"),
             "mode": config.feishu.mode,
             "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("feishu"),
         }));
@@ -137,6 +138,7 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
         platforms.push(serde_json::json!({
             "name": "telegram",
             "enabled": true,
+            "connected": crate::platform::status::is_connected("telegram"),
             "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("telegram"),
         }));
     }

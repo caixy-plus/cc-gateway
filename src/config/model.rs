@@ -32,6 +32,7 @@ pub enum AgentProvider {
     #[default]
     Claude,
     Cursor,
+    Pi,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,7 @@ pub struct AgentProfiles {
     pub default: AgentProvider,
     pub claude: AgentProviderConfig,
     pub cursor: AgentProviderConfig,
+    pub pi: AgentProviderConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -130,6 +132,7 @@ impl std::fmt::Display for AgentProvider {
         match self {
             AgentProvider::Claude => write!(f, "claude"),
             AgentProvider::Cursor => write!(f, "cursor"),
+            AgentProvider::Pi => write!(f, "pi"),
         }
     }
 }
@@ -138,6 +141,7 @@ impl AgentProvider {
     pub fn parse_str(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "cursor" => AgentProvider::Cursor,
+            "pi" => AgentProvider::Pi,
             _ => AgentProvider::Claude,
         }
     }
@@ -161,6 +165,7 @@ impl Default for AgentProfiles {
             default: AgentProvider::Claude,
             claude: AgentProviderConfig::default(),
             cursor: AgentProviderConfig::default(),
+            pi: AgentProviderConfig::default(),
         }
     }
 }
@@ -174,6 +179,13 @@ impl AgentConfig {
                 cli_path: "agent".to_string(),
                 default_args: String::new(),
                 mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
+            AgentProvider::Pi => Self {
+                provider: AgentProvider::Pi,
+                cli_path: "pi".to_string(),
+                default_args: String::new(),
+                mode: "rpc".to_string(),
                 permission: "prompt".to_string(),
             },
         }
@@ -202,10 +214,19 @@ impl AgentConfig {
                 self.default_args.clear();
             }
         }
+        if matches!(self.provider, AgentProvider::Pi) {
+            if self.cli_path.is_empty() || self.cli_path == "claude" {
+                self.cli_path = "pi".to_string();
+            }
+            if self.default_args == "--dangerously-skip-permissions" {
+                self.default_args.clear();
+            }
+        }
         if self.cli_path.is_empty() {
             self.cli_path = match self.provider {
                 AgentProvider::Claude => "claude".to_string(),
                 AgentProvider::Cursor => "agent".to_string(),
+                AgentProvider::Pi => "pi".to_string(),
             };
         }
         self
@@ -223,6 +244,7 @@ impl AgentProfiles {
         let profile = match selected {
             AgentProvider::Claude => &self.claude,
             AgentProvider::Cursor => &self.cursor,
+            AgentProvider::Pi => &self.pi,
         };
         if let Some(ref cli_path) = profile.cli_path {
             config.cli_path = cli_path.clone();

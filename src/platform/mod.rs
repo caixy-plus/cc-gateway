@@ -4,6 +4,7 @@ use async_trait::async_trait;
 pub mod feishu;
 pub mod inbound_media;
 pub mod proto;
+pub mod status;
 pub mod telegram;
 
 /// Platform abstraction for chat bot integrations (Feishu, Telegram, Discord, etc.).
