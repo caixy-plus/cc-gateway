@@ -836,7 +836,7 @@ async fn handle_permission_response(
     if let Some(perm) = app.pending_permission.take() {
         let ctrl = controller.lock().await;
         let msg = if allow {
-            build_permission_allow(&perm.request_id)
+            build_permission_allow(&perm.request_id, None)
         } else {
             build_permission_deny(&perm.request_id, "Denied by user")
         };

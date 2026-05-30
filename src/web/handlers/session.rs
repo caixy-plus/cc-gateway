@@ -662,7 +662,7 @@ pub async fn handle_permission(
     };
 
     let msg = match req.action.as_str() {
-        "allow" => build_permission_allow(&req.request_id),
+        "allow" => build_permission_allow(&req.request_id, None),
         "deny" => {
             let reason = req.reason.as_deref().unwrap_or("Denied by user");
             build_permission_deny(&req.request_id, reason)

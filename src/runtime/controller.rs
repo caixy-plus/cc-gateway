@@ -646,7 +646,7 @@ impl AgentController {
                 if tool_name == "mcp__cc-gateway__send_file" {
                     let mut s = session_arc.write().await;
                     if let Some(ref mut session) = *s {
-                        let allow_msg = build_permission_allow(&request_id);
+                        let allow_msg = build_permission_allow(&request_id, None);
                         let _ = session.send_input(allow_msg).await;
                     }
                     if permission_policy == "allow" || permission_policy == "deny" {
@@ -657,7 +657,7 @@ impl AgentController {
                     let mut s = session_arc.write().await;
                     if let Some(ref mut session) = *s {
                         let msg = if permission_policy == "allow" {
-                            build_permission_allow(&request_id)
+                            build_permission_allow(&request_id, None)
                         } else {
                             build_permission_deny(&request_id, "Denied by cc-gateway config")
                         };

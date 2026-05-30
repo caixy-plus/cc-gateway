@@ -942,6 +942,50 @@ pub fn t(key: &str) -> &str {
             Language::En => "Permission request: {NAME} ({ID})",
             Language::ZhCN => "权限请求: {NAME} ({ID})",
         },
+        "feishu.card_dir_changed_title" => match lang {
+            Language::En => "Directory Changed",
+            Language::ZhCN => "目录已切换",
+        },
+        "feishu.card_agent_set_title" => match lang {
+            Language::En => "Agent Set",
+            Language::ZhCN => "智能体已设置",
+        },
+        "feishu.card_session_deleted_title" => match lang {
+            Language::En => "Session Deleted",
+            Language::ZhCN => "会话已删除",
+        },
+        "feishu.card_starting_title" => match lang {
+            Language::En => "Starting Session",
+            Language::ZhCN => "正在启动会话",
+        },
+        "feishu.card_resumed_title" => match lang {
+            Language::En => "Session Resumed",
+            Language::ZhCN => "会话已恢复",
+        },
+        "feishu.card_allowed" => match lang {
+            Language::En => "Permission allowed.",
+            Language::ZhCN => "已允许该操作。",
+        },
+        "feishu.card_denied" => match lang {
+            Language::En => "Permission denied.",
+            Language::ZhCN => "已拒绝该操作。",
+        },
+        "feishu.card_selected_title" => match lang {
+            Language::En => "Selected",
+            Language::ZhCN => "已选择",
+        },
+        "feishu.card_selected" => match lang {
+            Language::En => "Option selected.",
+            Language::ZhCN => "已选择该选项。",
+        },
+        "feishu.card_processing" => match lang {
+            Language::En => "Processing...",
+            Language::ZhCN => "处理中...",
+        },
+        "feishu.card_starting" => match lang {
+            Language::En => "Starting a new session, please wait...",
+            Language::ZhCN => "正在启动新会话，请稍候...",
+        },
         // platform/telegram
         "telegram.error_generic" => match lang {
             Language::En => "Error: {ERR}",
@@ -1106,6 +1150,14 @@ pub fn t(key: &str) -> &str {
         "telegram.cannot_delete_active" => match lang {
             Language::En => "Cannot delete an active session. Use /quit to stop it first.",
             Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
+        },
+        "telegram.card_allowed" => match lang {
+            Language::En => "Allowed.",
+            Language::ZhCN => "已允许。",
+        },
+        "telegram.card_denied" => match lang {
+            Language::En => "Denied.",
+            Language::ZhCN => "已拒绝。",
         },
         "telegram.callback_expired" => match lang {
             Language::En => "This action has expired. Please run the command again.",

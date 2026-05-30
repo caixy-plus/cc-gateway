@@ -452,7 +452,7 @@ impl ChatCommandExecutor {
                     Some(active) => {
                         let ctrl = active.controller.lock().await;
                         let msg =
-                            crate::runtime::protocol::build_permission_allow(&id);
+                            crate::runtime::protocol::build_permission_allow(&id, None);
                         match ctrl.send_input(msg).await {
                             Ok(()) => {
                                 ctrl.clear_pending_request().await;

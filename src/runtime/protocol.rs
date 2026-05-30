@@ -221,7 +221,7 @@ pub fn build_user_message(text: &str) -> InputMessage {
     }
 }
 
-pub fn build_permission_allow(request_id: &str) -> InputMessage {
+pub fn build_permission_allow(request_id: &str, updated_input: Option<Value>) -> InputMessage {
     InputMessage::ControlResponse {
         response: ControlResponseBody {
             subtype: "success".to_string(),
@@ -229,7 +229,7 @@ pub fn build_permission_allow(request_id: &str) -> InputMessage {
             response: PermissionResult {
                 behavior: "allow".to_string(),
                 message: None,
-                updated_input: None,
+                updated_input,
             },
         },
     }

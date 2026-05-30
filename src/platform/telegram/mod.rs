@@ -370,6 +370,47 @@ impl TelegramPlatform {
         Ok(())
     }
 
+    async fn edit_message_text(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+    ) -> Result<()> {
+        let url = self.api_url("editMessageText");
+        let payload = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        });
+        let resp = self.http_client.post(&url).json(&payload).send().await?;
+        if !resp.status().is_success() {
+            let body = resp.text().await?;
+            warn!("Telegram editMessageText failed: {}", body);
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    async fn edit_message_reply_markup(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        reply_markup: Value,
+    ) -> Result<()> {
+        let url = self.api_url("editMessageReplyMarkup");
+        let payload = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": reply_markup,
+        });
+        let resp = self.http_client.post(&url).json(&payload).send().await?;
+        if !resp.status().is_success() {
+            let body = resp.text().await?;
+            warn!("Telegram editMessageReplyMarkup failed: {}", body);
+        }
+        Ok(())
+    }
+
     async fn answer_callback_query(&self, callback_id: &str, text: Option<&str>) -> Result<()> {
         let url = self.api_url("answerCallbackQuery");
         let mut payload = json!({
@@ -728,6 +769,7 @@ impl TelegramPlatform {
 
         let chat_id = message.chat.id;
         let chat_id_str = chat_id.to_string();
+        let message_id = message.message_id;
 
         if message.chat.chat_type != "private" {
             self.send_message(chat_id, crate::t!("telegram.private_chat_only"))
@@ -744,6 +786,9 @@ impl TelegramPlatform {
                 .await;
             return Ok(());
         };
+
+        // Acknowledge the callback to dismiss the loading spinner on the button
+        let _ = self.answer_callback_query(&callback_query.id, None).await;
 
         match action {
             TelegramCallbackAction::ChangeDir {
@@ -767,9 +812,8 @@ impl TelegramPlatform {
                 if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
                     rt.channel_session.work_dir = path.clone();
                 }
-                let _ = self.answer_callback_query(&callback_query.id, None).await;
-                self.send_message(chat_id, &crate::t_fmt!("builtin.dir_changed", PATH = path))
-                    .await?;
+                let text = crate::t_fmt!("builtin.dir_changed", PATH = path);
+                let _ = self.edit_message_text(chat_id, message_id, &text).await;
             }
             TelegramCallbackAction::SetChannelAgent {
                 chat_id: action_chat_id,
@@ -791,12 +835,8 @@ impl TelegramPlatform {
                     .set_channel_default_provider(&runtime.channel_session.id, provider)
                 {
                     Ok(()) => {
-                        let _ = self.answer_callback_query(&callback_query.id, None).await;
-                        self.send_message(
-                            chat_id,
-                            &crate::t_fmt!("builtin.channel_agent_set", NAME = name),
-                        )
-                        .await?;
+                        let text = crate::t_fmt!("builtin.channel_agent_set", NAME = name);
+                        let _ = self.edit_message_text(chat_id, message_id, &text).await;
                     }
                     Err(e) => {
                         let _ = self
@@ -839,12 +879,9 @@ impl TelegramPlatform {
                     rt.channel_session.work_dir = work_dir.clone();
                     rt.active_agent = Some(active);
                 }
-                let _ = self.answer_callback_query(&callback_query.id, None).await;
-                self.send_message(
-                    chat_id,
-                    &crate::command::agents::session_restarted_message(&provider, &work_dir),
-                )
-                .await?;
+                let text =
+                    crate::command::agents::session_restarted_message(&provider, &work_dir);
+                let _ = self.edit_message_text(chat_id, message_id, &text).await;
             }
             TelegramCallbackAction::StartNewSession {
                 chat_id: action_chat_id,
@@ -885,12 +922,9 @@ impl TelegramPlatform {
                     rt.channel_session.work_dir = work_dir.clone();
                     rt.active_agent = Some(active);
                 }
-                let _ = self.answer_callback_query(&callback_query.id, None).await;
-                self.send_message(
-                    chat_id,
-                    &crate::command::agents::session_started_message(&started_provider, &work_dir),
-                )
-                .await?;
+                let text =
+                    crate::command::agents::session_started_message(&started_provider, &work_dir);
+                let _ = self.edit_message_text(chat_id, message_id, &text).await;
             }
             TelegramCallbackAction::DeleteSession {
                 chat_id: action_chat_id,
@@ -906,13 +940,12 @@ impl TelegramPlatform {
                     return Ok(());
                 }
 
-                let message = if GLOBAL_CHANNEL_SESSIONS.remove_agent_session(&session_id) {
+                let text = if GLOBAL_CHANNEL_SESSIONS.remove_agent_session(&session_id) {
                     crate::t!("telegram.session_deleted")
                 } else {
                     crate::t!("telegram.cannot_delete_active")
                 };
-                let _ = self.answer_callback_query(&callback_query.id, None).await;
-                self.send_message(chat_id, message).await?;
+                let _ = self.edit_message_text(chat_id, message_id, text).await;
             }
             TelegramCallbackAction::PermissionResponse {
                 chat_id: action_chat_id,
@@ -933,7 +966,7 @@ impl TelegramPlatform {
                 if let Some(ref active) = runtime.active_agent {
                     let ctrl = active.controller.lock().await;
                     let msg = if allow {
-                        crate::runtime::protocol::build_permission_allow(&request_id)
+                        crate::runtime::protocol::build_permission_allow(&request_id, None)
                     } else {
                         crate::runtime::protocol::build_permission_deny(
                             &request_id,
@@ -943,20 +976,14 @@ impl TelegramPlatform {
                     let _ = ctrl.send_input(msg).await;
                 }
 
+                // Edit the permission message in-place to show result
                 let action_text = if allow {
-                    crate::t!("telegram.allow_button")
+                    crate::t!("telegram.card_allowed")
                 } else {
-                    crate::t!("telegram.deny_button")
+                    crate::t!("telegram.card_denied")
                 };
                 let _ = self
-                    .answer_callback_query(
-                        &callback_query.id,
-                        Some(&crate::t_fmt!(
-                            "telegram.permission_responded",
-                            ID = request_id,
-                            ACTION = action_text
-                        )),
-                    )
+                    .edit_message_text(chat_id, message_id, action_text)
                     .await;
             }
         }
@@ -1150,5 +1177,7 @@ struct CallbackQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 struct CallbackMessage {
+    #[serde(rename = "message_id")]
+    message_id: i64,
     chat: Chat,
 }

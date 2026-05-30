@@ -292,6 +292,7 @@ pub struct PendingPermissionContext {
     pub tool_name: String,
     pub chat_id: String,
     pub sender_open_id: String,
+    pub input: Option<serde_json::Value>,
     pub created_at: Instant,
 }
 
@@ -444,6 +445,8 @@ pub struct FeishuPlatform {
     pub(crate) rate_limiter: Arc<RateLimiter>,
     pub(crate) anomaly_tracker: Arc<AnomalyTracker>,
     pub(crate) channels: Arc<DashMap<String, FeishuChannelRuntime>>,
+    /// message_id → original card JSON, for disabling buttons on callback
+    pub(crate) sent_cards: Arc<DashMap<String, Value>>,
 }
 
 // ---------------------------------------------------------------------------

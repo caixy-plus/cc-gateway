@@ -531,7 +531,7 @@ impl CommandRouter {
                         }
                     },
                 };
-                let msg = build_permission_allow(&id);
+                let msg = build_permission_allow(&id, None);
                 match ctrl.send_input(msg).await {
                     Ok(()) => {
                         ctrl.clear_pending_request().await;

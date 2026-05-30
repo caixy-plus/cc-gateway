@@ -14,7 +14,7 @@ fn test_build_user_message() {
 
 #[test]
 fn test_build_permission_allow() {
-    let msg = build_permission_allow("req-1");
+    let msg = build_permission_allow("req-1", None);
     let json = serde_json::to_string(&msg).unwrap();
     assert!(json.contains("\"type\":\"control_response\""));
     assert!(json.contains("\"subtype\":\"success\""));

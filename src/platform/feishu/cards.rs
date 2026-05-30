@@ -478,3 +478,58 @@ pub fn build_text_card(title: &str, text: &str) -> Value {
         }
     })
 }
+
+/// Build a simple result card showing operation outcome (success or error).
+pub fn build_result_card(title: &str, text: &str, success: bool) -> Value {
+    json!({
+        "schema": "2.0",
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": title
+            },
+            "template": if success { "green" } else { "red" }
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": text
+                    }
+                }
+            ]
+        }
+    })
+}
+
+/// Recursively disable all interactive components in a card JSON by setting
+/// `disabled: true` on every button, select_menu, overflow, date_picker, etc.
+/// The card keeps its visual appearance but buttons become unclickable.
+pub fn disable_card_buttons(card: &Value) -> Value {
+    match card {
+        Value::Object(map) => {
+            let tag = map.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+            let is_interactive = matches!(
+                tag,
+                "button" | "select_menu" | "overflow" | "date_picker" | "picker"
+            );
+            if is_interactive {
+                let mut m = map.clone();
+                m.insert("disabled".to_string(), Value::Bool(true));
+                Value::Object(m)
+            } else {
+                Value::Object(
+                    map.iter()
+                        .map(|(k, v)| (k.clone(), disable_card_buttons(v)))
+                        .collect(),
+                )
+            }
+        }
+        Value::Array(arr) => {
+            Value::Array(arr.iter().map(|v| disable_card_buttons(v)).collect())
+        }
+        other => other.clone(),
+    }
+}
