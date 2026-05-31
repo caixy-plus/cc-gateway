@@ -78,15 +78,17 @@ pub fn run_init_config() -> Result<()> {
 fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) -> Result<()> {
     println!("\n{}", t!("wizard.agent_section_title"));
     println!("{}", t!("wizard.agent_section_hint"));
-    println!("  1. claude   {}", status_label(cli_installed("claude")));
-    println!("  2. cursor   {}", status_label(cli_installed("agent")));
-    println!("  3. pi       {}", status_label(cli_installed("pi")));
+    println!("  1. claude    {}", status_label(cli_installed("claude")));
+    println!("  2. cursor    {}", status_label(cli_installed("agent")));
+    println!("  3. pi        {}", status_label(cli_installed("pi")));
+    println!("  4. codew {}", status_label(cli_installed("codewhale")));
     println!("  {}", t!("wizard.opt_skip"));
 
     let provider = match read_choice()?.as_str() {
         "1" | "claude" => AgentProvider::Claude,
         "2" | "cursor" => AgentProvider::Cursor,
         "3" | "pi" => AgentProvider::Pi,
+        "4" | "codew" => AgentProvider::CodeWhale,
         _ => {
             println!("{}", t!("wizard.skipped_agent"));
             return Ok(());
@@ -95,19 +97,18 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
 
     config.agent.default = provider.clone();
     let defaults = AgentConfig::default_for_provider(provider.clone());
-    let cli_path = prompt_field("cli_path", &defaults.cli_path)?;
     let default_args = prompt_field("default_args", &defaults.default_args)?;
 
     let target = match provider {
         AgentProvider::Claude => &mut config.agent.claude,
         AgentProvider::Cursor => &mut config.agent.cursor,
         AgentProvider::Pi => &mut config.agent.pi,
+        AgentProvider::CodeWhale => &mut config.agent.codewhale,
     };
-    target.cli_path = Some(cli_path.clone());
     target.default_args = Some(default_args);
 
-    if !cli_installed(&cli_path) {
-        println!("{}", t_fmt!("wizard.agent_unavailable_warn", NAME = cli_path));
+    if !cli_installed(&defaults.cli_path) {
+        println!("{}", t_fmt!("wizard.agent_unavailable_warn", NAME = defaults.cli_path));
         warnings.push(t_fmt!(
             "wizard.warn_agent_missing",
             NAME = provider.to_string()

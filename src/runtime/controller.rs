@@ -7,7 +7,7 @@ use tracing::info;
 
 use crate::agent::event::AgentEvent;
 pub use crate::agent::event::QuestionItem;
-use crate::agent::session::AgentRuntime;
+use crate::agent::session::{AgentRuntime, NewProviderSessionCtx};
 use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{build_permission_allow, build_permission_deny, InputMessage};
@@ -252,14 +252,14 @@ impl AgentController {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         if !session.is_alive() {
             let stderr = session.recent_stderr();
+            let provider_name = config.provider.to_string();
             if stderr.trim().is_empty() {
                 return Err(anyhow::anyhow!(
-                    "Claude process exited immediately after spawn; no stderr output was captured"
+                    "{provider_name} process exited immediately after spawn; no stderr output was captured"
                 ));
             }
             return Err(anyhow::anyhow!(
-                "Claude process exited immediately after spawn: {}",
-                stderr
+                "{provider_name} process exited immediately after spawn: {stderr}"
             ));
         }
 
@@ -367,7 +367,7 @@ impl AgentController {
             drop(s);
         }
 
-        info!("Claude session started in {}", validated);
+        info!("Agent session started in {}", validated);
         Ok(())
     }
 
@@ -415,16 +415,19 @@ impl AgentController {
         Ok(())
     }
 
-    /// Clear current session context.
+    /// Clear current session context by starting a fresh provider session.
     ///
-    /// Sends an interrupt (best-effort) to stop any in-progress generation,
-    /// then forwards a clear-context command to the agent. The agent handles
-    /// the actual context reset internally — the session and process stay alive,
-    /// session ID unchanged.
-    pub async fn clear_session(&self) -> Result<()> {
-        // Best-effort interrupt: if the agent is generating, stop it so it
-        // can read and process the clear command.
-        let _ = self.send_interrupt().await;
+    /// Stops in-flight generation (best-effort), then calls provider-specific
+    /// `session/new` (or equivalent). Updates `provider_session_id` when a new id
+    /// is returned. The gateway agent record and subprocess stay alive.
+    pub async fn clear_session(&self) -> Result<Option<String>> {
+        let _ = self.send_stop_generation().await;
+
+        let work_dir = self.get_work_dir().await;
+        let provider_name = self.provider_name().await;
+        let provider = AgentProvider::parse_str(&provider_name);
+        let config = self.config.config_for_provider(Some(provider));
+        let mcp_ctx = self.mcp_context.read().await.clone();
 
         let state = self.session_state.read().await.clone();
         match state {
@@ -432,12 +435,24 @@ impl AgentController {
                 anyhow::bail!("{}", t!("controller.no_active_session"))
             }
             SessionState::Active => {
+                let ctx = NewProviderSessionCtx {
+                    work_dir,
+                    config: &config,
+                    extra_args: Vec::new(),
+                    mcp_context: mcp_ctx,
+                };
                 let mut s = self.session.write().await;
-                if let Some(ref mut session) = *s {
-                    session.send_clear().await
+                let new_id = if let Some(ref mut session) = *s {
+                    session.new_provider_session(&ctx).await?
                 } else {
                     anyhow::bail!("{}", t!("controller.no_active_session"))
+                };
+                if let Some(ref id) = new_id {
+                    let mut sid = self.provider_session_id.write().await;
+                    *sid = Some(id.clone());
                 }
+                self.is_busy.store(false, Ordering::Relaxed);
+                Ok(new_id)
             }
         }
     }
@@ -466,8 +481,12 @@ impl AgentController {
         }
     }
 
-    /// Send ESC / interrupt to the active session.
-    pub async fn send_interrupt(&self) -> Result<()> {
+    pub async fn has_buffered_messages(&self) -> bool {
+        !self.message_buffer.lock().await.is_empty()
+    }
+
+    /// Flush queued user messages to the active provider.
+    pub async fn flush_queued_messages(&self) -> Result<()> {
         let state = self.session_state.read().await.clone();
         match state {
             SessionState::Inactive | SessionState::Starting => {
@@ -476,7 +495,35 @@ impl AgentController {
             SessionState::Active => {
                 let mut s = self.session.write().await;
                 if let Some(ref mut session) = *s {
-                    session.send_interrupt().await?;
+                    session.flush_queued_messages().await?;
+                } else {
+                    anyhow::bail!("{}", t!("controller.no_active_session"))
+                }
+            }
+        }
+
+        let messages = {
+            let mut buf = self.message_buffer.lock().await;
+            std::mem::take(&mut *buf)
+        };
+        for msg in messages {
+            self.send_message(&msg).await?;
+        }
+        Ok(())
+    }
+
+    /// Stop the current generation without killing the session.
+    pub async fn send_stop_generation(&self) -> Result<()> {
+        let state = self.session_state.read().await.clone();
+        match state {
+            SessionState::Inactive | SessionState::Starting => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Active => {
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.send_stop_generation().await?;
+                    self.is_busy.store(false, Ordering::Relaxed);
                     Ok(())
                 } else {
                     anyhow::bail!("{}", t!("controller.no_active_session"))

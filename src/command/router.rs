@@ -44,9 +44,11 @@ pub enum CommandAction {
     ShowAgentHistory { arg: String },
     /// Set this channel's default agent (`/agents` picker or `/agents claude|cursor`)
     SelectChannelAgent { provider: Option<AgentProvider> },
-    /// ESC / interrupt: force-send queued messages and stop current generation.
-    /// Optional prompt is forwarded to the agent immediately after the interrupt.
-    Interrupt { prompt: Option<String> },
+    /// ESC: force-send queued messages without stopping generation.
+    /// Optional prompt is forwarded immediately after the flush.
+    FlushQueue { prompt: Option<String> },
+    /// Stop current generation without ending the session.
+    StopGeneration,
     /// Clear current agent session context (restart fresh in same directory)
     ClearSession,
     /// Show current agent status (ready / generating output)
@@ -125,13 +127,14 @@ impl CommandRouter {
             // controls that affect the gateway process itself.
             match cmd {
                 "/quit" => CommandAction::StopSession,
-                "/esc" => CommandAction::Interrupt {
+                "/esc" => CommandAction::FlushQueue {
                     prompt: if arg.is_empty() {
                         None
                     } else {
                         Some(arg.to_string())
                     },
                 },
+                "/stop" => CommandAction::StopGeneration,
                 "/clear" => CommandAction::ClearSession,
                 "/status" => CommandAction::Status,
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
@@ -183,54 +186,28 @@ impl CommandRouter {
                         CommandAction::MakeDir(PathBuf::from(expanded))
                     }
                 }
-                "/agent" | "/agent_claude" => {
+                "/agent" => {
                     let mut args: Vec<String> = arg
                         .split_whitespace()
                         .filter(|s| *s != "--new")
                         .map(|s| s.to_string())
                         .collect();
-                    let provider = match cmd {
-                        "/agent_claude" => Some(AgentProvider::Claude),
-                        _ => parse_provider_prefix(&mut args),
-                    };
+                    let provider = parse_provider_prefix(&mut args);
                     CommandAction::StartSession {
                         work_dir: None,
                         provider,
                         args,
                     }
                 }
-                "/agent_cursor" => CommandAction::StartSession {
-                    work_dir: None,
-                    provider: Some(AgentProvider::Cursor),
-                    args: if arg.is_empty() {
-                        vec![]
-                    } else {
-                        arg.split_whitespace().map(|s| s.to_string()).collect()
-                    },
-                },
-                "/agent_pi" => CommandAction::StartSession {
-                    work_dir: None,
-                    provider: Some(AgentProvider::Pi),
-                    args: if arg.is_empty() {
-                        vec![]
-                    } else {
-                        arg.split_whitespace().map(|s| s.to_string()).collect()
-                    },
-                },
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
                 "/agent-history" | "/agent_history" => CommandAction::ShowAgentHistory {
                     arg: arg.to_string(),
                 },
-                "/agents" | "/agents_claude" | "/agents_cursor" | "/agents_pi" => {
+                "/agents" => {
                     let mut args: Vec<String> =
                         arg.split_whitespace().map(|s| s.to_string()).collect();
-                    let provider = match cmd {
-                        "/agents_claude" => Some(AgentProvider::Claude),
-                        "/agents_cursor" => Some(AgentProvider::Cursor),
-                        "/agents_pi" => Some(AgentProvider::Pi),
-                        _ => parse_provider_prefix(&mut args),
-                    };
+                    let provider = parse_provider_prefix(&mut args);
                     if provider.is_some() || arg.trim().is_empty() {
                         CommandAction::SelectChannelAgent { provider }
                     } else {
@@ -267,32 +244,55 @@ impl CommandRouter {
                     Err(e) => Some(t_fmt!("builtin.failed_stop_session", ERR = e)),
                 }
             }
-            CommandAction::Interrupt { prompt } => {
+            CommandAction::FlushQueue { prompt } => {
                 let ctrl = self.controller.lock().await;
-                if !ctrl.is_busy() && prompt.is_none() {
-                    return Some(t!("builtin.esc_already_idle").to_string());
+                let provider =
+                    crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
+                let has_buffered = ctrl.has_buffered_messages().await;
+                let busy = ctrl.is_busy();
+                if !busy && prompt.is_none() && !has_buffered {
+                    return Some(crate::command::agents::esc_already_idle_message(&provider));
                 }
-                match ctrl.send_interrupt().await {
-                    Ok(()) => {
-                        if let Some(ref text) = prompt {
-                            match ctrl.send_message(text).await {
-                                Ok(()) => Some(t_fmt!(
-                                    "builtin.esc_with_prompt_sent",
-                                    MSG = text
-                                )),
-                                Err(e) => Some(t_fmt!("builtin.failed_esc", ERR = e)),
-                            }
-                        } else {
-                            Some(t!("builtin.esc_sent").to_string())
-                        }
+                if busy || has_buffered {
+                    if let Err(e) = ctrl.flush_queued_messages().await {
+                        return Some(t_fmt!("builtin.failed_esc", ERR = e));
                     }
-                    Err(e) => Some(t_fmt!("builtin.failed_esc", ERR = e)),
+                }
+                if let Some(ref text) = prompt {
+                    match ctrl.send_message(text).await {
+                        Ok(()) => Some(crate::command::agents::esc_with_prompt_sent_message(
+                            &provider, text,
+                        )),
+                        Err(e) => Some(t_fmt!("builtin.failed_esc", ERR = e)),
+                    }
+                } else {
+                    Some(crate::command::agents::esc_sent_message(&provider))
+                }
+            }
+            CommandAction::StopGeneration => {
+                let ctrl = self.controller.lock().await;
+                let provider =
+                    crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
+                if !ctrl.is_busy() {
+                    return Some(crate::command::agents::stop_already_idle_message(&provider));
+                }
+                match ctrl.send_stop_generation().await {
+                    Ok(()) => Some(crate::command::agents::stop_sent_message(&provider)),
+                    Err(e) => Some(t_fmt!("builtin.failed_stop_generation", ERR = e)),
                 }
             }
             CommandAction::ClearSession => {
                 let ctrl = self.controller.lock().await;
                 match ctrl.clear_session().await {
-                    Ok(()) => Some(t!("builtin.context_cleared").to_string()),
+                    Ok(_) => {
+                        drop(ctrl);
+                        if let Some(ref channel_id) = self.channel_id {
+                            GLOBAL_CHANNEL_SESSIONS
+                                .refresh_active_controller_session(channel_id, &self.controller)
+                                .await;
+                        }
+                        Some(t!("builtin.context_cleared").to_string())
+                    }
                     Err(e) => Some(t_fmt!("builtin.failed_clear", ERR = e)),
                 }
             }
@@ -508,7 +508,7 @@ impl CommandRouter {
                 Some(self.builtin.agent_history(&arg).await)
             }
             CommandAction::UnknownCommand(cmd) => {
-                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status", cmd))
+                Some(format!("Unknown command: {}. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status", cmd))
             }
             CommandAction::ForwardToAgent(text) => {
                 let ctrl = self.controller.lock().await;
@@ -574,6 +574,7 @@ fn parse_provider_prefix(args: &mut Vec<String>) -> Option<AgentProvider> {
         Some("claude") => Some(AgentProvider::Claude),
         Some("cursor") => Some(AgentProvider::Cursor),
         Some("pi") => Some(AgentProvider::Pi),
+        Some("codew") => Some(AgentProvider::CodeWhale),
         _ => None,
     };
     if provider.is_some() {

@@ -6,14 +6,17 @@ use crate::{t, t_fmt};
 /// Only these appear in the `/agents` picker.
 pub fn available_providers(profiles: &crate::config::model::AgentProfiles) -> Vec<AgentProvider> {
     let mut providers = Vec::new();
-    if profiles.claude.cli_path.is_some() {
+    if profiles.claude.enabled {
         providers.push(AgentProvider::Claude);
     }
-    if profiles.cursor.cli_path.is_some() {
+    if profiles.cursor.enabled {
         providers.push(AgentProvider::Cursor);
     }
-    if profiles.pi.cli_path.is_some() {
+    if profiles.pi.enabled {
         providers.push(AgentProvider::Pi);
+    }
+    if profiles.codewhale.enabled {
+        providers.push(AgentProvider::CodeWhale);
     }
     providers
 }
@@ -23,6 +26,7 @@ pub fn provider_display_name(provider: &AgentProvider) -> &'static str {
         AgentProvider::Claude => "claude",
         AgentProvider::Cursor => "cursor",
         AgentProvider::Pi => "pi",
+        AgentProvider::CodeWhale => "codew",
     }
 }
 
@@ -104,6 +108,52 @@ pub fn failed_start_agent_message(provider: &AgentProvider, err: impl std::fmt::
     )
 }
 
+/// User-visible reply when `/esc` is used but there is nothing to flush.
+pub fn esc_already_idle_message(provider: &AgentProvider) -> String {
+    match provider {
+        AgentProvider::Claude => t!("builtin.esc_already_idle_claude").to_string(),
+        _ => t!("builtin.esc_already_idle").to_string(),
+    }
+}
+
+/// User-visible reply when `/stop` is used but the agent is already idle.
+pub fn stop_already_idle_message(provider: &AgentProvider) -> String {
+    match provider {
+        AgentProvider::Claude => t!("builtin.stop_already_idle_claude").to_string(),
+        _ => t!("builtin.stop_already_idle").to_string(),
+    }
+}
+
+/// User-visible reply after `/stop` succeeds.
+pub fn stop_sent_message(provider: &AgentProvider) -> String {
+    match provider {
+        AgentProvider::Claude => t!("builtin.stop_sent_claude").to_string(),
+        AgentProvider::Cursor => t!("builtin.stop_sent_cursor").to_string(),
+        AgentProvider::Pi => t!("builtin.stop_sent_pi").to_string(),
+        AgentProvider::CodeWhale => t!("builtin.stop_sent_codewhale").to_string(),
+    }
+}
+
+/// User-visible reply after `/esc` without a prompt succeeds.
+pub fn esc_sent_message(provider: &AgentProvider) -> String {
+    match provider {
+        AgentProvider::Claude => t!("builtin.esc_sent_claude").to_string(),
+        AgentProvider::Cursor => t!("builtin.esc_sent_cursor").to_string(),
+        AgentProvider::Pi => t!("builtin.esc_sent_pi").to_string(),
+        AgentProvider::CodeWhale => t!("builtin.esc_sent_codewhale").to_string(),
+    }
+}
+
+/// User-visible reply after `/esc <prompt>` succeeds.
+pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> String {
+    match provider {
+        AgentProvider::Claude => t_fmt!("builtin.esc_with_prompt_sent_claude", MSG = msg),
+        AgentProvider::Cursor => t_fmt!("builtin.esc_with_prompt_sent_cursor", MSG = msg),
+        AgentProvider::Pi => t_fmt!("builtin.esc_with_prompt_sent_pi", MSG = msg),
+        AgentProvider::CodeWhale => t_fmt!("builtin.esc_with_prompt_sent_codewhale", MSG = msg),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,14 +162,8 @@ mod tests {
 
     fn test_profiles_both() -> AgentProfiles {
         AgentProfiles {
-            claude: AgentProviderConfig {
-                cli_path: Some("claude".to_string()),
-                ..Default::default()
-            },
-            cursor: AgentProviderConfig {
-                cli_path: Some("agent".to_string()),
-                ..Default::default()
-            },
+            claude: AgentProviderConfig::default(),
+            cursor: AgentProviderConfig::default(),
             ..Default::default()
         }
     }
@@ -147,9 +191,10 @@ mod tests {
     fn build_provider_items_marks_current_default() {
         let profiles = test_profiles_both();
         let items = build_provider_items(&profiles, &AgentProvider::Cursor);
-        assert_eq!(items.len(), 2);
-        assert!(items[0].0.contains("claude"));
-        assert!(items[1].0.contains('*') || items[1].0.contains("cursor"));
+        // All four providers enabled by default
+        assert_eq!(items.len(), 4);
+        assert!(items.iter().any(|(label, _)| label.contains("claude")));
+        assert!(items.iter().any(|(label, _)| label.contains("cursor")));
     }
 
     #[test]
@@ -179,7 +224,8 @@ mod tests {
     fn available_providers_filters_by_configured_cli_path() {
         let profiles = test_profiles_both();
         let available = available_providers(&profiles);
-        assert_eq!(available.len(), 2);
+        // All four providers default to enabled=true
+        assert_eq!(available.len(), 4);
         assert!(available.contains(&AgentProvider::Claude));
         assert!(available.contains(&AgentProvider::Cursor));
     }
@@ -187,21 +233,29 @@ mod tests {
     #[test]
     fn available_providers_excludes_unconfigured() {
         let profiles = AgentProfiles {
-            claude: AgentProviderConfig {
-                cli_path: Some("claude".to_string()),
+            claude: AgentProviderConfig::default(), // enabled=true
+            cursor: AgentProviderConfig {
+                enabled: false,
                 ..Default::default()
             },
-            // cursor has no cli_path set
             ..Default::default()
         };
         let available = available_providers(&profiles);
-        assert_eq!(available.len(), 1);
-        assert_eq!(available[0], AgentProvider::Claude);
+        // claude is enabled (default), cursor is disabled, pi & codewhale are
+        // enabled by default → 3 total.
+        assert_eq!(available.len(), 3);
+        assert!(available.contains(&AgentProvider::Claude));
     }
 
     #[test]
     fn available_providers_returns_empty_when_none_configured() {
-        let profiles = AgentProfiles::default();
+        let profiles = AgentProfiles {
+            claude: AgentProviderConfig { enabled: false, ..Default::default() },
+            cursor: AgentProviderConfig { enabled: false, ..Default::default() },
+            pi: AgentProviderConfig { enabled: false, ..Default::default() },
+            codewhale: AgentProviderConfig { enabled: false, ..Default::default() },
+            ..Default::default()
+        };
         let available = available_providers(&profiles);
         assert!(available.is_empty());
     }

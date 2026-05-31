@@ -45,7 +45,7 @@ fn test_agent_profiles_default() {
     assert_eq!(cfg.default, AgentProvider::Claude);
     let agent = cfg.effective_config();
     assert_eq!(agent.cli_path, "claude");
-    assert_eq!(agent.default_args, "--dangerously-skip-permissions");
+    assert_eq!(agent.default_args, "");
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn gateway_config_upgrades_legacy_top_level_claude_block() {
 
     let agent = config.effective_agent_config();
     assert_eq!(agent.provider, AgentProvider::Claude);
-    assert_eq!(agent.cli_path, "custom-claude");
+    assert_eq!(agent.cli_path, "claude");
     assert_eq!(agent.default_args, "--foo");
 }
 
@@ -138,7 +138,7 @@ fn nested_agent_config_selects_default_profile() {
 
     let agent = config.effective_agent_config();
     assert_eq!(agent.provider, AgentProvider::Cursor);
-    assert_eq!(agent.cli_path, "cursor-agent");
+    assert_eq!(agent.cli_path, "agent");
     assert_eq!(agent.default_args, "--force");
     assert_eq!(agent.mode, "plan");
     assert_eq!(agent.permission, "allow");
@@ -166,10 +166,10 @@ fn nested_agent_config_uses_named_profile_for_override() {
     let cursor = settings.config_for_provider(Some(AgentProvider::Cursor));
 
     assert_eq!(claude.provider, AgentProvider::Claude);
-    assert_eq!(claude.cli_path, "custom-claude");
+    assert_eq!(claude.cli_path, "claude");
     assert_eq!(claude.default_args, "--model sonnet");
     assert_eq!(cursor.provider, AgentProvider::Cursor);
-    assert_eq!(cursor.cli_path, "cursor-agent");
+    assert_eq!(cursor.cli_path, "agent");
     assert_eq!(cursor.default_args, "--force");
 }
 

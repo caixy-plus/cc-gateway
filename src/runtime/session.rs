@@ -23,10 +23,11 @@ struct AgentSessionFile {
 pub struct StreamJsonSession {
     child: Child,
     stdin: tokio::process::ChildStdin,
-    #[allow(dead_code)]
     work_dir: String,
     mcp_config_path: Option<PathBuf>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
+    /// Retained so `/clear` can respawn Claude while keeping the same event bridge alive.
+    output_tx: mpsc::UnboundedSender<OutputEvent>,
 }
 
 pub(crate) fn resolve_cli_path(config_path: &str) -> String {
@@ -34,6 +35,24 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     let path = std::path::PathBuf::from(config_path);
     if path.is_absolute() && path.exists() {
         return config_path.to_string();
+    }
+
+    // Walk PATH before shell lookup so test fakes (prepended to PATH) win over
+    // global installs and zsh functions that `command -v` may prefer.
+    if let Ok(path_env) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            let candidate = dir.join(config_path);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+            #[cfg(windows)]
+            {
+                let candidate_exe = dir.join(format!("{}.exe", config_path));
+                if candidate_exe.is_file() {
+                    return candidate_exe.to_string_lossy().to_string();
+                }
+            }
+        }
     }
 
     // On Windows, try resolving via `where` (handles .exe, .cmd, .bat, etc.)
@@ -87,6 +106,7 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
         .unwrap_or_default();
     let fallbacks = [
         format!("{}/.local/bin/{}", home, config_path),
+        format!("{}/{}", home, config_path),
         format!("/usr/local/bin/{}", config_path),
         format!("/opt/homebrew/bin/{}", config_path),
         format!("/usr/bin/{}", config_path),
@@ -221,9 +241,117 @@ impl StreamJsonSession {
                 work_dir,
                 mcp_config_path,
                 stderr_lines,
+                output_tx: event_tx,
             },
             provider_session_id,
         ))
+    }
+
+    /// Start a fresh Claude subprocess (no `--resume`) and return the new provider session id.
+    pub async fn restart_fresh(
+        &mut self,
+        extra_args: Vec<String>,
+        config: &AgentConfig,
+        mcp_context: Option<McpContext>,
+    ) -> Result<Option<String>> {
+        let _ = self.child.kill().await;
+        if let Some(ref path) = self.mcp_config_path {
+            if let Err(e) = std::fs::remove_file(path) {
+                warn!("Failed to remove MCP config file {:?}: {}", path, e);
+            }
+        }
+
+        let cli_path = resolve_cli_path(&config.cli_path);
+        let mut args = vec![
+            "--input-format".to_string(),
+            "stream-json".to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--permission-prompt-tool".to_string(),
+            "stdio".to_string(),
+            "--verbose".to_string(),
+        ];
+        if !config.default_args.is_empty() {
+            for arg in config.default_args.split_whitespace() {
+                args.push(arg.to_string());
+            }
+        }
+
+        let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
+            let config_path =
+                std::env::temp_dir().join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
+            let target_json = mcp_ctx.to_env_json()?;
+            let config_json = serde_json::json!({
+                "mcpServers": {
+                    "cc-gateway": {
+                        "command": std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cc-gateway")),
+                        "args": ["_mcp-server"],
+                        "env": {
+                            (MCP_TARGET_ENV): target_json,
+                        }
+                    }
+                }
+            });
+            let content = serde_json::to_string_pretty(&config_json)?;
+            tokio::fs::write(&config_path, &content).await?;
+            args.push("--mcp-config".to_string());
+            args.push(config_path.to_string_lossy().to_string());
+            Some(config_path)
+        } else {
+            None
+        };
+
+        for arg in extra_args {
+            args.push(arg);
+        }
+
+        info!(
+            "Restarting Claude session (fresh): {} {:?} in {}",
+            cli_path, args, self.work_dir
+        );
+
+        let mut cmd = Command::new(&cli_path);
+        cmd.args(&args)
+            .current_dir(&self.work_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let env_vars: Vec<(String, String)> = std::env::vars()
+            .filter(|(k, _)| k != "CLAUDECODE")
+            .collect();
+        cmd.env_clear();
+        for (k, v) in env_vars {
+            cmd.env(k, v);
+        }
+
+        let mut child = cmd.spawn().with_context(|| {
+            format!(
+                "Failed to respawn Claude Code. Is '{}' installed and on PATH? Tried '{}'.",
+                config.cli_path, cli_path
+            )
+        })?;
+
+        let pid = child.id();
+        let stdin = child.stdin.take().context("Failed to open stdin pipe")?;
+        let stdout = child.stdout.take().context("Failed to open stdout pipe")?;
+        let stderr = child.stderr.take().context("Failed to open stderr pipe")?;
+
+        if let Ok(mut lines) = self.stderr_lines.lock() {
+            lines.clear();
+        }
+        tokio::spawn(Self::stderr_reader(stderr, self.stderr_lines.clone()));
+        tokio::spawn(Self::stdout_reader(stdout, self.output_tx.clone()));
+
+        self.child = child;
+        self.stdin = stdin;
+        self.mcp_config_path = mcp_config_path;
+
+        let provider_session_id = if let Some(pid) = pid {
+            Self::extract_session_id_with_retry(pid).await
+        } else {
+            None
+        };
+        Ok(provider_session_id)
     }
 
     async fn extract_session_id_with_retry(pid: u32) -> Option<String> {

@@ -469,6 +469,19 @@ pub async fn handle_send_message(
             let body = json!({ "response": "" });
             (StatusCode::OK, body.to_string())
         }
+        CommandAction::ClearSession => {
+            let response = active.router.execute(CommandAction::ClearSession).await;
+            GLOBAL_CHANNEL_SESSIONS
+                .refresh_agent_session_from_controller(&session_id, &active.controller)
+                .await;
+            if let Some(text) = response {
+                broadcast_event(&session_id, "webui", &session_id, "system", &text);
+                let body = json!({ "response": text });
+                return (StatusCode::OK, body.to_string());
+            }
+            let body = json!({ "response": "" });
+            (StatusCode::OK, body.to_string())
+        }
         _ => {
             let response = active.router.execute(action).await;
             if let Some(text) = response {

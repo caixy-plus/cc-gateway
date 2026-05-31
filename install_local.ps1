@@ -124,7 +124,7 @@ if (Test-PortInUse $defaultPort) {
         } catch {}
     }
     if ($isCgRunning) {
-        Write-Msg "Default port $defaultPort is used by cc-gateway (PID: $cgPid), continuing..." "默认端口 $defaultPort 已被 cc-gateway 占用 (PID: $cgPid)，继续..."
+        Write-Msg "Default port $defaultPort is used by cc-gateway (PID: $cgPid), continuing..." "默认端口 $defaultPort 可以使用，继续..."
     } else {
         Write-Msg "Default port $defaultPort is occupied by another process" "默认端口 $defaultPort 被其他进程占用"
         $newPort = $defaultPort

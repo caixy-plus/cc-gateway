@@ -90,10 +90,6 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
 
     if let Some(claude) = obj.remove("claude") {
         if !obj.contains_key("agent") {
-            let cli_path = claude
-                .get("cli_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("claude");
             let default_args = claude
                 .get("default_args")
                 .and_then(|v| v.as_str())
@@ -102,7 +98,7 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
                 "agent".to_string(),
                 json!({
                     "default": "claude",
-                    "claude": { "cli_path": cli_path, "default_args": default_args },
+                    "claude": { "default_args": default_args },
                     "cursor": {},
                     "pi": {}
                 }),
@@ -132,7 +128,7 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
                     .get_mut(profile_key)
                     .and_then(|v| v.as_object_mut())
                 {
-                    for key in ["cli_path", "default_args", "mode", "permission"] {
+                    for key in ["default_args", "mode", "permission"] {
                         if let Some(v) = agent.get(key) {
                             profile.insert(key.to_string(), v.clone());
                         }
@@ -162,10 +158,6 @@ mod tests {
         let upgraded = upgrade_config_json(raw);
         let config: GatewayConfig = serde_json::from_value(upgraded).unwrap();
         assert_eq!(config.agent.default, AgentProvider::Claude);
-        assert_eq!(
-            config.agent.claude.cli_path.as_deref(),
-            Some("custom-claude")
-        );
         assert_eq!(config.agent.claude.default_args.as_deref(), Some("--foo"));
     }
 
@@ -205,6 +197,6 @@ mod tests {
             config.agent.effective_config().provider,
             AgentProvider::Cursor
         );
-        assert_eq!(config.agent.effective_config().cli_path, "cursor-agent");
+        assert_eq!(config.agent.effective_config().cli_path, "agent");
     }
 }

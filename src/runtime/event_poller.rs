@@ -1,9 +1,14 @@
 use anyhow::Result;
 use serde_json::Value;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
 use crate::runtime::controller::{AgentController, ControllerEvent};
+
+/// After `Done`, keep draining the event channel briefly so late ACP `session/update`
+/// chunks (Cursor/CodeWhale) are not dropped when the prompt RPC returns early.
+const LATE_EVENT_GRACE: Duration = Duration::from_millis(2000);
 
 /// Buffers assistant text for one agent turn; platforms flush on `Done` / errors.
 #[derive(Default)]
@@ -318,47 +323,8 @@ impl AgentEventPoller {
                 Some(ControllerEvent::Done) | None => {
                     sink.flush_buffer(true).await?;
                     sink.flush("", true).await?;
-                    // Drain any late-arriving events (best-effort).
-                    loop {
-                        let late_event = {
-                            let mut rx = self.event_rx.lock().await;
-                            rx.try_recv().ok()
-                        };
-                        match late_event {
-                            Some(ControllerEvent::Text(text)) => {
-                                sink.flush(&text, false).await?;
-                            }
-                            Some(ControllerEvent::Thinking(text)) => {
-                                if text.trim().is_empty() {
-                                    if !hidden_thinking_placeholder_sent {
-                                        sink.on_thinking(crate::t!("claude.thinking_placeholder"))
-                                            .await?;
-                                        hidden_thinking_placeholder_sent = true;
-                                    }
-                                } else {
-                                    sink.on_thinking(&text).await?;
-                                }
-                            }
-                            Some(ControllerEvent::ToolUse(name, input)) => {
-                                let text = format!("\n[Tool: {}]\n{}\n", name, input);
-                                sink.flush(&text, false).await?;
-                            }
-                            Some(ControllerEvent::ToolResult(text, is_error)) => {
-                                let prefix = if is_error {
-                                    "Tool error"
-                                } else {
-                                    "Tool result"
-                                };
-                                let formatted = format!("\n[{}]\n{}\n", prefix, text);
-                                sink.flush(&formatted, false).await?;
-                            }
-                            Some(ControllerEvent::Error(text)) => {
-                                sink.flush(&format!("Error: {}", text), false).await?;
-                            }
-                            _ => break,
-                        }
-                    }
-                    // Ensure any buffered late events are flushed before exit.
+                    self.drain_late_events(sink, &mut hidden_thinking_placeholder_sent)
+                        .await?;
                     sink.flush_buffer(true).await?;
                     break;
                 }
@@ -366,6 +332,68 @@ impl AgentEventPoller {
         }
 
         debug!("AgentEventPoller: buffered poll loop ended");
+        Ok(())
+    }
+
+    async fn drain_late_events<T: EventPollSink + Send>(
+        &self,
+        sink: &mut BufferedSink<T>,
+        hidden_thinking_placeholder_sent: &mut bool,
+    ) -> Result<()> {
+        let deadline = std::time::Instant::now() + LATE_EVENT_GRACE;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let late_event = {
+                let mut rx = self.event_rx.lock().await;
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(ev) => ev,
+                    Err(_) => break,
+                }
+            };
+            match late_event {
+                None => break,
+                Some(ControllerEvent::Done) => continue,
+                Some(ControllerEvent::Text(text)) => {
+                    sink.flush(&text, false).await?;
+                }
+                Some(ControllerEvent::Thinking(text)) => {
+                    if text.trim().is_empty() {
+                        if !*hidden_thinking_placeholder_sent {
+                            sink.on_thinking(crate::t!("claude.thinking_placeholder"))
+                                .await?;
+                            *hidden_thinking_placeholder_sent = true;
+                        }
+                    } else {
+                        sink.on_thinking(&text).await?;
+                    }
+                }
+                Some(ControllerEvent::ToolUse(name, input)) => {
+                    let text = format!("\n[Tool: {}]\n{}\n", name, input);
+                    sink.flush(&text, false).await?;
+                }
+                Some(ControllerEvent::ToolResult(text, is_error)) => {
+                    let prefix = if is_error {
+                        "Tool error"
+                    } else {
+                        "Tool result"
+                    };
+                    let formatted = format!("\n[{}]\n{}\n", prefix, text);
+                    sink.flush(&formatted, false).await?;
+                }
+                Some(ControllerEvent::Error(text)) => {
+                    sink.flush(&format!("Error: {}", text), false).await?;
+                }
+                Some(
+                    ControllerEvent::PermissionRequest { .. }
+                    | ControllerEvent::ConfirmRequest { .. }
+                    | ControllerEvent::SelectRequest { .. }
+                    | ControllerEvent::QuestionRequest { .. },
+                ) => break,
+            }
+        }
         Ok(())
     }
 }

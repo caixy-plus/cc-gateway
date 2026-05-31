@@ -1,27 +1,23 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, info, warn};
+use tokio::process::{ChildStdin, Command};
+use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, info};
 
+use std::sync::atomic::AtomicBool;
+
+use crate::agent::acp_client::{
+    emit_acp_turn_done, is_acp_turn_complete_update, reset_acp_turn_done, AcpClient,
+};
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
 use crate::config::model::AgentConfig;
 
-type PendingResponse = oneshot::Sender<std::result::Result<Value, String>>;
-
 pub struct CursorAcpSession {
-    child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
-    next_id: Arc<AtomicU64>,
-    pending: Arc<Mutex<HashMap<u64, PendingResponse>>>,
-    pending_permissions: Arc<Mutex<HashMap<String, Value>>>,
+    client: AcpClient,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     session_id: String,
+    turn_done_sent: Arc<AtomicBool>,
 }
 
 impl CursorAcpSession {
@@ -36,8 +32,7 @@ impl CursorAcpSession {
         let mut args: Vec<String> = Vec::new();
         if !config.default_args.is_empty() {
             args.extend(
-                config
-                    .default_args
+                config.default_args
                     .split_whitespace()
                     .map(|s| s.to_string()),
             );
@@ -50,12 +45,11 @@ impl CursorAcpSession {
             cli_path, args, work_dir
         );
 
-        let mut command = cursor_command(&cli_path, &args);
-        let mut child = command
+        let mut child = cursor_command(&cli_path, &args)
             .current_dir(&work_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .with_context(|| {
                 format!(
@@ -64,44 +58,102 @@ impl CursorAcpSession {
                 )
             })?;
 
-        let stdin = Arc::new(Mutex::new(
-            child
-                .stdin
-                .take()
-                .context("Failed to open Cursor ACP stdin")?,
-        ));
-        let stdout = child
-            .stdout
-            .take()
-            .context("Failed to open Cursor ACP stdout")?;
-        let stderr = child
-            .stderr
-            .take()
-            .context("Failed to open Cursor ACP stderr")?;
+        let stdin = child.stdin.take().context("Failed to open Cursor ACP stdin")?;
+        let stdout = child.stdout.take().context("Failed to open Cursor ACP stdout")?;
+        let stderr = child.stderr.take().context("Failed to open Cursor ACP stderr")?;
 
-        let pending = Arc::new(Mutex::new(HashMap::<u64, PendingResponse>::new()));
-        let pending_permissions = Arc::new(Mutex::new(HashMap::<String, Value>::new()));
-        let next_id = Arc::new(AtomicU64::new(1));
+        let client = AcpClient::new(child, stdin);
+        let pending = client.pending();
+        let pending_permissions = client.pending_permissions();
+        let si = client.stdin_arc();
 
-        tokio::spawn(Self::stderr_reader(stderr));
-        tokio::spawn(Self::stdout_reader(
-            stdout,
-            pending.clone(),
-            pending_permissions.clone(),
-            stdin.clone(),
-            event_tx.clone(),
-        ));
+        client.spawn_stderr_reader(stderr);
+        // Build notification handler closure
+        let tx = event_tx.clone();
+        let pp = pending_permissions.clone();
+        let turn_done = Arc::new(AtomicBool::new(false));
+        let turn_done_notify = turn_done.clone();
+        let on_notification: crate::agent::acp_client::NotificationHandler = Arc::new(
+            move |msg: &Value| {
+                let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                match method {
+                    "session/update" => {
+                        if let Some(update) = msg.get("params").and_then(|p| p.get("update")) {
+                            handle_session_update(update, &tx, &turn_done_notify);
+                        }
+                    }
+                    "session/request_permission" => {
+                        if let Some(id) = msg.get("id").cloned() {
+                            let key = rpc_id_key(&id);
+                            let pp2 = pp.clone();
+                            let key2 = key.clone();
+                            tokio::spawn(async move {
+                                pp2.lock().await.insert(key2, id);
+                            });
+                            let params = msg.get("params").cloned();
+                            let tool_name = params
+                                .as_ref()
+                                .and_then(extract_permission_label)
+                                .unwrap_or_else(|| "cursor_permission".to_string());
+                            let _ = tx.send(AgentEvent::PermissionRequest {
+                                request_id: key,
+                                tool_name,
+                                input: params,
+                            });
+                        }
+                    }
+                    "cursor/ask_question" => {
+                        if let Some(params) = msg.get("params") {
+                            if let Some(questions) = parse_cursor_questions(params) {
+                                let request_id = msg
+                                    .get("id")
+                                    .map(rpc_id_key)
+                                    .unwrap_or_else(|| "cursor-question".to_string());
+                                let _ = tx.send(AgentEvent::QuestionRequest {
+                                    request_id,
+                                    questions,
+                                });
+                            }
+                        }
+                        respond_extension(&si, msg, json!({
+                            "outcome": { "outcome": "skipped", "reason": "cc-gateway does not yet collect Cursor ACP question answers" }
+                        }));
+                    }
+                    "cursor/create_plan" => {
+                        if let Some(plan) = msg
+                            .get("params")
+                            .and_then(|p| p.get("plan"))
+                            .and_then(|p| p.as_str())
+                        {
+                            let _ = tx
+                                .send(AgentEvent::Text(format!("\n[Plan requested]\n{}\n", plan)));
+                        }
+                        respond_extension(&si, msg, json!({
+                            "outcome": { "outcome": "rejected", "reason": "Plan approval is not available through cc-gateway yet" }
+                        }));
+                    }
+                    "cursor/update_todos" | "cursor/task" | "cursor/generate_image" => {
+                        debug!("Cursor ACP extension notification: {}", method);
+                    }
+                    _ => {
+                        if !method.is_empty() {
+                            debug!("Unhandled Cursor ACP method: {}", method);
+                        }
+                    }
+                }
+            },
+        );
+
+        AcpClient::spawn_stdout_reader(stdout, pending, on_notification);
 
         let session = Self {
-            child,
-            stdin,
-            next_id,
-            pending,
-            pending_permissions,
+            client,
             event_tx: event_tx.clone(),
             session_id: String::new(),
+            turn_done_sent: turn_done,
         };
 
+        // ACP handshake: initialize → authenticate → session/new or session/load
         session
             .send_request(
                 "initialize",
@@ -147,8 +199,6 @@ impl CursorAcpSession {
             {
                 Ok(v) => v,
                 Err(e) => {
-                    // Cursor ACP session ids may not be resumable across agent process restarts.
-                    // If the stored session id is no longer recognized, fall back to starting a new session.
                     let err = e.to_string();
                     if is_cursor_session_not_found_error(&err) {
                         let _ = event_tx.send(AgentEvent::Text(crate::t_fmt!(
@@ -193,6 +243,7 @@ impl CursorAcpSession {
     }
 
     pub async fn send_user_message(&self, text: &str) -> Result<()> {
+        reset_acp_turn_done(&self.turn_done_sent);
         let rx = self
             .send_request_detached(
                 "session/prompt",
@@ -203,249 +254,112 @@ impl CursorAcpSession {
             )
             .await?;
         let event_tx = self.event_tx.clone();
+        let turn_done = self.turn_done_sent.clone();
         tokio::spawn(async move {
             match rx.await {
                 Ok(Ok(_)) => {
-                    let _ = event_tx.send(AgentEvent::Done);
+                    // Cursor streams assistant text via session/update; the prompt RPC
+                    // often returns before the last chunk. Wait for a turn-complete
+                    // update, with a timeout fallback.
+                    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                    emit_acp_turn_done(&event_tx, &turn_done);
                 }
                 Ok(Err(err)) => {
                     let _ = event_tx.send(AgentEvent::Error(err));
-                    let _ = event_tx.send(AgentEvent::Done);
+                    emit_acp_turn_done(&event_tx, &turn_done);
                 }
                 Err(_) => {
                     let _ = event_tx.send(AgentEvent::Error(
                         "Cursor ACP prompt response channel closed".to_string(),
                     ));
-                    let _ = event_tx.send(AgentEvent::Done);
+                    emit_acp_turn_done(&event_tx, &turn_done);
                 }
             }
         });
         Ok(())
     }
 
-    /// Send ESC / cancel to Cursor ACP without killing the process.
     pub async fn send_cancel(&self) -> Result<()> {
-        Self::write_json(
-            &self.stdin,
-            json!({
-                "jsonrpc": "2.0",
-                "method": "session/cancel",
-                "params": { "sessionId": self.session_id.clone() }
-            }),
-        )
-        .await
+        self.client.write_json(json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": { "sessionId": self.session_id.clone() }
+        })).await
+    }
+
+    /// Create a new ACP session in the same process and return its id.
+    pub async fn new_provider_session(
+        &mut self,
+        work_dir: &str,
+        config: &AgentConfig,
+    ) -> Result<Option<String>> {
+        let mode = if config.mode.trim().is_empty() {
+            "agent"
+        } else {
+            config.mode.trim()
+        };
+        let result = self
+            .send_request(
+                "session/new",
+                json!({
+                    "cwd": work_dir,
+                    "mode": mode,
+                    "mcpServers": []
+                }),
+            )
+            .await?;
+        let session_id = extract_session_id(&result)
+            .ok_or_else(|| anyhow::anyhow!("Cursor ACP did not return a session id"))?;
+        self.session_id = session_id.clone();
+        let _ = self.event_tx.send(AgentEvent::SessionId(session_id.clone()));
+        Ok(Some(session_id))
     }
 
     pub async fn send_permission_response(&self, request_id: &str, allow: bool) -> Result<()> {
-        let id = self
-            .pending_permissions
+        let id_value = self
+            .client
+            .pending_permissions()
             .lock()
             .await
             .remove(request_id)
             .unwrap_or_else(|| Value::String(request_id.to_string()));
         let option_id = if allow { "allow-once" } else { "reject-once" };
-        Self::write_json(
-            &self.stdin,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": { "outcome": { "outcome": "selected", "optionId": option_id } }
-            }),
-        )
-        .await
+        let id = id_value.as_u64().unwrap_or(0);
+        self.client.write_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": { "outcome": { "outcome": "selected", "optionId": option_id } }
+        })).await
     }
 
-    pub async fn stop(mut self) -> Result<()> {
-        let _ = Self::write_json(
-            &self.stdin,
-            json!({
-                "jsonrpc": "2.0",
-                "method": "session/cancel",
-                "params": { "sessionId": self.session_id.clone() }
-            }),
-        )
-        .await;
-        let _ = self.child.kill().await;
-        info!("Cursor ACP session stopped");
-        Ok(())
+    pub async fn stop(self) -> Result<()> {
+        let _ = self.client.write_json(json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": { "sessionId": self.session_id.clone() }
+        })).await;
+        self.client.stop().await
     }
 
-    pub async fn force_stop(mut self) -> Result<()> {
-        // Do not attempt any JSON-RPC shutdown — just kill immediately.
-        let _ = self.child.kill().await;
-        info!("Cursor ACP session force-stopped");
-        Ok(())
+    pub async fn force_stop(self) -> Result<()> {
+        self.client.force_stop().await
     }
 
     pub fn is_alive(&mut self) -> bool {
-        match self.child.try_wait() {
-            Ok(None) => true,
-            Ok(Some(status)) => {
-                warn!("Cursor ACP process exited with status: {}", status);
-                false
-            }
-            Err(e) => {
-                warn!("Failed to check Cursor ACP process status: {}", e);
-                false
-            }
-        }
+        self.client.is_alive()
     }
 
+    // Re-export client methods for internal use
     async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
-        let rx = self.send_request_detached(method, params).await?;
-        match rx.await.context("Cursor ACP response channel closed")? {
-            Ok(value) => Ok(value),
-            Err(err) => anyhow::bail!(err),
-        }
+        self.client.send_request(method, params).await
     }
 
     async fn send_request_detached(
         &self,
         method: &str,
         params: Value,
-    ) -> Result<oneshot::Receiver<std::result::Result<Value, String>>> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
-        Self::write_json(
-            &self.stdin,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": method,
-                "params": params
-            }),
-        )
-        .await?;
-        Ok(rx)
-    }
-
-    async fn write_json(stdin: &Arc<Mutex<ChildStdin>>, value: Value) -> Result<()> {
-        let line = serde_json::to_string(&value)?;
-        debug!("→ Cursor ACP: {}", line);
-        let mut stdin = stdin.lock().await;
-        stdin.write_all(line.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
-        stdin.flush().await?;
-        Ok(())
-    }
-
-    async fn stdout_reader(
-        stdout: tokio::process::ChildStdout,
-        pending: Arc<Mutex<HashMap<u64, PendingResponse>>>,
-        pending_permissions: Arc<Mutex<HashMap<String, Value>>>,
-        stdin: Arc<Mutex<ChildStdin>>,
-        event_tx: mpsc::UnboundedSender<AgentEvent>,
-    ) {
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
-
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            debug!("← Cursor ACP: {}", line);
-
-            let msg: Value = match serde_json::from_str(&line) {
-                Ok(value) => value,
-                Err(e) => {
-                    debug!("Non-JSON line from Cursor ACP: {} (err: {})", line, e);
-                    continue;
-                }
-            };
-
-            if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
-                if msg.get("result").is_some() || msg.get("error").is_some() {
-                    let result = if let Some(error) = msg.get("error") {
-                        Err(error.to_string())
-                    } else {
-                        Ok(msg.get("result").cloned().unwrap_or(Value::Null))
-                    };
-                    if let Some(tx) = pending.lock().await.remove(&id) {
-                        let _ = tx.send(result);
-                    }
-                    continue;
-                }
-            }
-
-            let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
-            match method {
-                "session/update" => {
-                    if let Some(update) = msg.get("params").and_then(|p| p.get("update")) {
-                        handle_session_update(update, &event_tx);
-                    }
-                }
-                "session/request_permission" => {
-                    if let Some(id) = msg.get("id").cloned() {
-                        let key = rpc_id_key(&id);
-                        pending_permissions.lock().await.insert(key.clone(), id);
-                        let params = msg.get("params").cloned();
-                        let tool_name = params
-                            .as_ref()
-                            .and_then(extract_permission_label)
-                            .unwrap_or_else(|| "cursor_permission".to_string());
-                        let _ = event_tx.send(AgentEvent::PermissionRequest {
-                            request_id: key,
-                            tool_name,
-                            input: params,
-                        });
-                    }
-                }
-                "cursor/ask_question" => {
-                    if let Some(params) = msg.get("params") {
-                        if let Some(questions) = parse_cursor_questions(params) {
-                            let request_id = msg
-                                .get("id")
-                                .map(rpc_id_key)
-                                .unwrap_or_else(|| "cursor-question".to_string());
-                            let _ = event_tx.send(AgentEvent::QuestionRequest {
-                                request_id,
-                                questions,
-                            });
-                        }
-                    }
-                    respond_extension(&stdin, &msg, json!({
-                        "outcome": { "outcome": "skipped", "reason": "cc-gateway does not yet collect Cursor ACP question answers" }
-                    }))
-                    .await;
-                }
-                "cursor/create_plan" => {
-                    if let Some(plan) = msg
-                        .get("params")
-                        .and_then(|p| p.get("plan"))
-                        .and_then(|p| p.as_str())
-                    {
-                        let _ = event_tx
-                            .send(AgentEvent::Text(format!("\n[Plan requested]\n{}\n", plan)));
-                    }
-                    respond_extension(&stdin, &msg, json!({
-                        "outcome": { "outcome": "rejected", "reason": "Plan approval is not available through cc-gateway yet" }
-                    }))
-                    .await;
-                }
-                "cursor/update_todos" | "cursor/task" | "cursor/generate_image" => {
-                    debug!("Cursor ACP extension notification: {}", method);
-                }
-                _ => {
-                    if !method.is_empty() {
-                        debug!("Unhandled Cursor ACP method: {}", method);
-                    }
-                }
-            }
-        }
-
-        info!("Cursor ACP stdout reader ended");
-    }
-
-    async fn stderr_reader(stderr: tokio::process::ChildStderr) {
-        let reader = BufReader::new(stderr);
-        let mut lines = reader.lines();
-
-        while let Ok(Some(line)) = lines.next_line().await {
-            if !line.trim().is_empty() {
-                debug!("Cursor ACP stderr: {}", line);
-            }
-        }
+    ) -> Result<tokio::sync::oneshot::Receiver<std::result::Result<Value, String>>> {
+        self.client.send_request_detached(method, params).await
     }
 }
 
@@ -494,20 +408,27 @@ fn extract_permission_label(params: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn handle_session_update(update: &Value, event_tx: &mpsc::UnboundedSender<AgentEvent>) {
+fn handle_session_update(
+    update: &Value,
+    event_tx: &mpsc::UnboundedSender<AgentEvent>,
+    turn_done_sent: &AtomicBool,
+) {
+    let kind = update
+        .get("sessionUpdate")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
     if let Some(text) = update
         .get("content")
         .and_then(|c| c.get("text"))
         .and_then(|v| v.as_str())
     {
         let _ = event_tx.send(AgentEvent::Text(text.to_string()));
+        if is_acp_turn_complete_update(kind) {
+            emit_acp_turn_done(event_tx, turn_done_sent);
+        }
         return;
     }
-
-    let kind = update
-        .get("sessionUpdate")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
 
     if kind.contains("tool") {
         let _ = event_tx.send(AgentEvent::ToolUse(
@@ -516,6 +437,8 @@ fn handle_session_update(update: &Value, event_tx: &mpsc::UnboundedSender<AgentE
         ));
     } else if kind.contains("error") {
         let _ = event_tx.send(AgentEvent::Error(update.to_string()));
+    } else if is_acp_turn_complete_update(kind) {
+        emit_acp_turn_done(event_tx, turn_done_sent);
     }
 }
 
@@ -561,27 +484,31 @@ fn parse_cursor_questions(params: &Value) -> Option<Vec<QuestionItem>> {
     }
 }
 
-async fn respond_extension(stdin: &Arc<Mutex<ChildStdin>>, msg: &Value, result: Value) {
+fn respond_extension(stdin: &Arc<Mutex<ChildStdin>>, msg: &Value, result: Value) {
     if let Some(id) = msg.get("id") {
-        let _ = CursorAcpSession::write_json(
-            stdin,
-            json!({
+        let stdin = stdin.clone();
+        let result = result.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            let line = serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": result
-            }),
-        )
-        .await;
+            }))
+            .unwrap();
+            let mut stdin = stdin.lock().await;
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(line.as_bytes()).await;
+            let _ = stdin.write_all(b"\n").await;
+            let _ = stdin.flush().await;
+        });
     }
 }
 
 fn is_cursor_session_not_found_error(err: &str) -> bool {
-    // Cursor ACP returns JSON-RPC errors as JSON strings, for example:
-    // {"code":-32602,"data":{"message":"Session \"...\" not found"},"message":"Invalid params"}
     if !err.contains("Session") || !err.contains("not found") {
         return false;
     }
-    // Best-effort JSON parse to avoid matching unrelated errors.
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(err) {
         let msg = v
             .get("data")
@@ -634,18 +561,33 @@ mod tests {
     #[test]
     fn maps_cursor_text_update_to_agent_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let done = AtomicBool::new(false);
         handle_session_update(
             &json!({
                 "sessionUpdate": "agent_message_chunk",
                 "content": { "text": "hello" }
             }),
             &tx,
+            &done,
         );
 
         match rx.try_recv().expect("event should be sent") {
             AgentEvent::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text event, got {:?}", other),
         }
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn maps_cursor_turn_complete_to_done() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let done = AtomicBool::new(false);
+        handle_session_update(
+            &json!({ "sessionUpdate": "agent_message_complete" }),
+            &tx,
+            &done,
+        );
+        assert!(matches!(rx.try_recv(), Ok(AgentEvent::Done)));
     }
 
     #[test]

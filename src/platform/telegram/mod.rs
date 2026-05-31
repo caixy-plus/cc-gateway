@@ -205,14 +205,11 @@ impl TelegramPlatform {
             ("mkdir", crate::t!("telegram.command_mkdir")),
             ("agent", crate::t!("telegram.command_agent")),
             ("agents", crate::t!("telegram.command_agents")),
-            ("agent_claude", crate::t!("telegram.command_agent_claude")),
-            ("agent_cursor", crate::t!("telegram.command_agent_cursor")),
-            ("agents_claude", crate::t!("telegram.command_agents_claude")),
-            ("agents_cursor", crate::t!("telegram.command_agents_cursor")),
             ("agent_history", crate::t!("telegram.command_agent_history")),
             ("show_thinking", crate::t!("telegram.command_show_thinking")),
             ("hide_thinking", crate::t!("telegram.command_hide_thinking")),
             ("esc", crate::t!("telegram.command_esc")),
+            ("stop", crate::t!("telegram.command_stop")),
             ("clear", crate::t!("telegram.command_clear")),
             ("status", crate::t!("telegram.command_status")),
             ("quit", crate::t!("telegram.command_quit")),
@@ -571,6 +568,7 @@ impl TelegramPlatform {
                 .to_string();
             lines.push(String::new());
             lines.push(format!("{}. {} {}", idx + 1, status_dot, session.title));
+            lines.push(format!("\u{1F916} {}", session.provider));
             lines.push(format!("\u{1F4C1} {}", session.work_dir));
             lines.push(format!("\u{1F552} {}", time));
             if let Some(ref session_id) = session.provider_session_id {

@@ -421,7 +421,20 @@ impl ChannelManager {
         channel_id: &str,
         controller: &Arc<Mutex<AgentController>>,
     ) {
-        let Some(mut session) = self.get_active_agent_session(channel_id) else {
+        let Some(session) = self.get_active_agent_session(channel_id) else {
+            return;
+        };
+        self.refresh_agent_session_from_controller(&session.id, controller)
+            .await;
+    }
+
+    /// Update an existing agent session row from the live controller (same `id`, no new record).
+    pub async fn refresh_agent_session_from_controller(
+        &self,
+        agent_session_id: &str,
+        controller: &Arc<Mutex<AgentController>>,
+    ) {
+        let Some(mut session) = self.get_agent_session(agent_session_id) else {
             return;
         };
         let ctrl = controller.lock().await;
@@ -584,6 +597,14 @@ impl ChannelManager {
         }
         let work_dir = existing.work_dir.clone();
         let stored_provider = existing.stored_provider();
+
+        if !agent_settings.is_provider_enabled(&stored_provider) {
+            return Err(anyhow::anyhow!(
+                "Provider '{}' is disabled in the current configuration. \
+                 Enable it to resume this session.",
+                stored_provider
+            ));
+        }
 
         let controller = Arc::new(Mutex::new(AgentController::new(
             agent_settings.clone(),

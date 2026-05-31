@@ -283,6 +283,7 @@ impl App {
                 "/help".into(),
                 "/quit".into(),
                 "/esc".into(),
+                "/stop".into(),
                 "/clear".into(),
                 "/status".into(),
                 "/cd".into(),

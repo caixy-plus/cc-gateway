@@ -20,7 +20,7 @@ if is_port_in_use "$DEFAULT_PORT"; then
     fi
 
     if [ -n "$CG_PID" ] && is_process_alive "$CG_PID"; then
-        echo "默认端口 $DEFAULT_PORT 已被 cc-gateway 占用 (PID: $CG_PID)，继续..."
+        echo "默认端口 $DEFAULT_PORT 可以使用，继续..."
     else
         echo "默认端口 $DEFAULT_PORT 被其他进程占用"
         NEW_PORT=$DEFAULT_PORT

@@ -130,14 +130,18 @@ async fn parses_core_commands_without_starting_claude() {
         CommandAction::ListDir { path: None }
     ));
     assert!(matches!(
-        router.route("/agent_claude").await,
+        router.route("/agent claude").await,
         CommandAction::StartSession { provider: Some(AgentProvider::Claude), args, .. } if args.is_empty()
     ));
     assert!(matches!(
-        router.route("/agents_cursor").await,
+        router.route("/agents cursor").await,
         CommandAction::SelectChannelAgent {
             provider: Some(AgentProvider::Cursor)
         }
+    ));
+    assert!(matches!(
+        router.route("/agent codew").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::CodeWhale), args, .. } if args.is_empty()
     ));
     assert!(matches!(
         router.route("/agent cursor --force").await,
@@ -254,11 +258,15 @@ async fn active_agent_session_forwards_slash_commands_except_gateway_controls() 
     ));
     assert!(matches!(
         router.route("/esc").await,
-        CommandAction::Interrupt { prompt: None }
+        CommandAction::FlushQueue { prompt: None }
     ));
     assert!(matches!(
         router.route("/esc /clear").await,
-        CommandAction::Interrupt { prompt } if prompt.as_deref() == Some("/clear")
+        CommandAction::FlushQueue { prompt } if prompt.as_deref() == Some("/clear")
+    ));
+    assert!(matches!(
+        router.route("/stop").await,
+        CommandAction::StopGeneration
     ));
     assert!(matches!(
         router.route("/clear").await,

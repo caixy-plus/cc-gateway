@@ -46,6 +46,7 @@ pub enum AgentProvider {
     Claude,
     Cursor,
     Pi,
+    CodeWhale,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,19 +66,36 @@ pub struct AgentProfiles {
     pub claude: AgentProviderConfig,
     pub cursor: AgentProviderConfig,
     pub pi: AgentProviderConfig,
+    pub codewhale: AgentProviderConfig,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentProviderConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cli_path: Option<String>,
+    /// Whether this provider appears in /agents pickers and can be started.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_args: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+impl Default for AgentProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_args: None,
+            mode: None,
+            permission: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +163,7 @@ impl std::fmt::Display for AgentProvider {
             AgentProvider::Claude => write!(f, "claude"),
             AgentProvider::Cursor => write!(f, "cursor"),
             AgentProvider::Pi => write!(f, "pi"),
+            AgentProvider::CodeWhale => write!(f, "codew"),
         }
     }
 }
@@ -154,6 +173,7 @@ impl AgentProvider {
         match s.trim().to_ascii_lowercase().as_str() {
             "cursor" => AgentProvider::Cursor,
             "pi" => AgentProvider::Pi,
+            "codew" => AgentProvider::CodeWhale,
             _ => AgentProvider::Claude,
         }
     }
@@ -164,7 +184,7 @@ impl Default for AgentConfig {
         Self {
             provider: AgentProvider::Claude,
             cli_path: "claude".to_string(),
-            default_args: "--dangerously-skip-permissions".to_string(),
+            default_args: String::new(),
             mode: "agent".to_string(),
             permission: "prompt".to_string(),
         }
@@ -178,6 +198,7 @@ impl Default for AgentProfiles {
             claude: AgentProviderConfig::default(),
             cursor: AgentProviderConfig::default(),
             pi: AgentProviderConfig::default(),
+            codewhale: AgentProviderConfig::default(),
         }
     }
 }
@@ -200,6 +221,13 @@ impl AgentConfig {
                 mode: "rpc".to_string(),
                 permission: "prompt".to_string(),
             },
+            AgentProvider::CodeWhale => Self {
+                provider: AgentProvider::CodeWhale,
+                cli_path: "codewhale".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
         }
     }
 
@@ -218,34 +246,27 @@ impl AgentConfig {
     }
 
     pub fn normalized(mut self) -> Self {
-        if matches!(self.provider, AgentProvider::Cursor) {
-            if self.cli_path.is_empty() || self.cli_path == "claude" {
-                self.cli_path = "agent".to_string();
-            }
+        // Clear Claude-specific flags that don't apply to other providers.
+        if !matches!(self.provider, AgentProvider::Claude) {
             if self.default_args == "--dangerously-skip-permissions" {
                 self.default_args.clear();
             }
-        }
-        if matches!(self.provider, AgentProvider::Pi) {
-            if self.cli_path.is_empty() || self.cli_path == "claude" {
-                self.cli_path = "pi".to_string();
-            }
-            if self.default_args == "--dangerously-skip-permissions" {
-                self.default_args.clear();
-            }
-        }
-        if self.cli_path.is_empty() {
-            self.cli_path = match self.provider {
-                AgentProvider::Claude => "claude".to_string(),
-                AgentProvider::Cursor => "agent".to_string(),
-                AgentProvider::Pi => "pi".to_string(),
-            };
         }
         self
     }
 }
 
 impl AgentProfiles {
+    /// Whether a provider is enabled in the current configuration.
+    pub fn is_provider_enabled(&self, provider: &AgentProvider) -> bool {
+        match provider {
+            AgentProvider::Claude => self.claude.enabled,
+            AgentProvider::Cursor => self.cursor.enabled,
+            AgentProvider::Pi => self.pi.enabled,
+            AgentProvider::CodeWhale => self.codewhale.enabled,
+        }
+    }
+
     pub fn effective_config(&self) -> AgentConfig {
         self.config_for_provider(None)
     }
@@ -257,10 +278,8 @@ impl AgentProfiles {
             AgentProvider::Claude => &self.claude,
             AgentProvider::Cursor => &self.cursor,
             AgentProvider::Pi => &self.pi,
+            AgentProvider::CodeWhale => &self.codewhale,
         };
-        if let Some(ref cli_path) = profile.cli_path {
-            config.cli_path = cli_path.clone();
-        }
         if let Some(ref default_args) = profile.default_args {
             config.default_args = default_args.clone();
         }

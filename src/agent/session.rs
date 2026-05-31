@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tokio::sync::mpsc;
 
+use crate::agent::codewhale_acp::CodeWhaleAcpSession;
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
 use crate::agent::pi_rpc::PiRpcSession;
@@ -9,10 +10,19 @@ use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{InputMessage, OutputEvent};
 use crate::runtime::session::StreamJsonSession;
 
+/// Parameters for starting a fresh provider session without respawning the gateway record.
+pub struct NewProviderSessionCtx<'a> {
+    pub work_dir: String,
+    pub config: &'a AgentConfig,
+    pub extra_args: Vec<String>,
+    pub mcp_context: Option<McpContext>,
+}
+
 pub enum AgentRuntime {
     Claude(StreamJsonSession),
     Cursor(CursorAcpSession),
     Pi(PiRpcSession),
+    CodeWhale(CodeWhaleAcpSession),
 }
 
 impl AgentRuntime {
@@ -68,6 +78,17 @@ impl AgentRuntime {
                 .await?;
                 Ok((Self::Pi(session), session_id))
             }
+            AgentProvider::CodeWhale => {
+                let (session, session_id) = CodeWhaleAcpSession::spawn(
+                    work_dir,
+                    extra_args,
+                    config,
+                    event_tx,
+                    resume_session_id,
+                )
+                .await?;
+                Ok((Self::CodeWhale(session), session_id))
+            }
         }
     }
 
@@ -80,29 +101,52 @@ impl AgentRuntime {
             }
             AgentRuntime::Cursor(session) => session.send_user_message(text).await,
             AgentRuntime::Pi(session) => session.send_user_message(text).await,
+            AgentRuntime::CodeWhale(session) => session.send_message(text).await,
         }
     }
 
-    /// Send ESC / interrupt to the active provider.
-    pub async fn send_interrupt(&mut self) -> Result<()> {
+    /// Flush queued user messages (Claude stream-json `interrupt` frame).
+    pub async fn flush_queued_messages(&mut self) -> Result<()> {
         match self {
+            AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
+            AgentRuntime::Cursor(_) | AgentRuntime::Pi(_) | AgentRuntime::CodeWhale(_) => Ok(()),
+        }
+    }
+
+    /// Stop the current generation without killing the session.
+    pub async fn send_stop_generation(&mut self) -> Result<()> {
+        match self {
+            // stream-json mode does not accept `/stop` as a user message; use interrupt frame.
             AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
             AgentRuntime::Cursor(session) => session.send_cancel().await,
             AgentRuntime::Pi(session) => session.send_cancel().await,
+            AgentRuntime::CodeWhale(session) => session.send_stop_generation().await,
         }
     }
 
-    /// Send clear-context command to the active provider.
-    /// The provider handles context reset internally; session ID stays the same.
-    pub async fn send_clear(&mut self) -> Result<()> {
+    /// Start a fresh provider session (ACP `session/new`, Pi `new_session`, Claude respawn).
+    /// Returns the new provider session id when the backend exposes one.
+    pub async fn new_provider_session(
+        &mut self,
+        ctx: &NewProviderSessionCtx<'_>,
+    ) -> Result<Option<String>> {
         match self {
             AgentRuntime::Claude(session) => {
                 session
-                    .send(crate::runtime::protocol::build_user_message("/clear"))
+                    .restart_fresh(ctx.extra_args.clone(), ctx.config, ctx.mcp_context.clone())
                     .await
             }
-            AgentRuntime::Cursor(session) => session.send_user_message("/clear").await,
-            AgentRuntime::Pi(session) => session.send_clear().await,
+            AgentRuntime::Cursor(session) => {
+                session
+                    .new_provider_session(&ctx.work_dir, ctx.config)
+                    .await
+            }
+            AgentRuntime::Pi(session) => session.new_provider_session().await,
+            AgentRuntime::CodeWhale(session) => {
+                session
+                    .new_provider_session(&ctx.work_dir, ctx.config)
+                    .await
+            }
         }
     }
 
@@ -124,7 +168,7 @@ impl AgentRuntime {
                         .unwrap_or_else(|| message.content.to_string());
                     session.send_user_message(&text).await
                 }
-                InputMessage::Interrupt => session.send_cancel().await,
+                InputMessage::Interrupt => Ok(()),
             },
             AgentRuntime::Pi(session) => match msg {
                 InputMessage::ControlResponse { response } => {
@@ -141,7 +185,22 @@ impl AgentRuntime {
                         .unwrap_or_else(|| message.content.to_string());
                     session.send_user_message(&text).await
                 }
-                InputMessage::Interrupt => session.send_cancel().await,
+                InputMessage::Interrupt => Ok(()),
+            },
+            AgentRuntime::CodeWhale(session) => match msg {
+                InputMessage::ControlResponse { response } => {
+                    let allow = response.response.behavior == "allow";
+                    session.send_control_response(&response.request_id, allow).await
+                }
+                InputMessage::User { message } => {
+                    let text = message
+                        .content
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| message.content.to_string());
+                    session.send_message(&text).await
+                }
+                InputMessage::Interrupt => Ok(()),
             },
         }
     }
@@ -151,6 +210,7 @@ impl AgentRuntime {
             AgentRuntime::Claude(session) => session.stop().await,
             AgentRuntime::Cursor(session) => session.stop().await,
             AgentRuntime::Pi(session) => session.stop().await,
+            AgentRuntime::CodeWhale(session) => session.stop().await,
         }
     }
 
@@ -163,6 +223,7 @@ impl AgentRuntime {
             AgentRuntime::Claude(session) => session.force_stop().await,
             AgentRuntime::Cursor(session) => session.force_stop().await,
             AgentRuntime::Pi(session) => session.force_stop().await,
+            AgentRuntime::CodeWhale(session) => session.force_stop().await,
         }
     }
 
@@ -171,6 +232,7 @@ impl AgentRuntime {
             AgentRuntime::Claude(session) => session.is_alive(),
             AgentRuntime::Cursor(session) => session.is_alive(),
             AgentRuntime::Pi(session) => session.is_alive(),
+            AgentRuntime::CodeWhale(session) => session.is_alive(),
         }
     }
 
@@ -179,6 +241,7 @@ impl AgentRuntime {
             AgentRuntime::Claude(session) => session.recent_stderr(),
             AgentRuntime::Cursor(_) => String::new(),
             AgentRuntime::Pi(session) => session.recent_stderr(),
+            AgentRuntime::CodeWhale(session) => session.recent_stderr(),
         }
     }
 }

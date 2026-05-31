@@ -457,8 +457,8 @@ pub fn t(key: &str) -> &str {
 
         // command/builtin.rs
         "builtin.help" => match lang {
-            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /esc                 Interrupt agent (flush queued messages)\n  /clear               Clear session context\n  /status              Show agent status (ready / busy)\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
-            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /esc                 打断智能体（强制发送排队消息）\n  /clear               清理会话上下文\n  /status              显示智能体状态（就绪 / 输出中）\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /esc [msg]           Flush queued messages (Claude: best-effort)\n  /stop                Stop current generation (Claude: best-effort)\n  /clear               Clear session context\n  /status              Show agent status (ready / busy)\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
+            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /esc [消息]           强推排队消息（Claude：best-effort）\n  /stop                停止当前输出（Claude：best-effort）\n  /clear               清理会话上下文\n  /status              显示智能体状态（就绪 / 输出中）\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
         },
         "builtin.help_title" => match lang {
             Language::En => "cc-gateway commands:",
@@ -513,8 +513,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "  /agents              设置本频道默认智能体（交互选择）",
         },
         "builtin.help_esc" => match lang {
-            Language::En => "  /esc                 Interrupt agent (flush queued messages)",
-            Language::ZhCN => "  /esc                 打断智能体（强制发送排队消息）",
+            Language::En => "  /esc [msg]           Flush queued messages (Claude: best-effort)",
+            Language::ZhCN => "  /esc [消息]           强推排队消息（Claude：best-effort）",
         },
         "builtin.help_clear" => match lang {
             Language::En => "  /clear               Clear context",
@@ -589,20 +589,88 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "停止会话失败: {ERR}",
         },
         "builtin.esc_sent" => match lang {
-            Language::En => "ESC sent — interrupting agent.",
-            Language::ZhCN => "ESC 已发送 — 正在打断智能体。",
+            Language::En => "ESC sent — queued messages flushed.",
+            Language::ZhCN => "ESC 已发送 — 排队消息已强推。",
+        },
+        "builtin.esc_sent_claude" => match lang {
+            Language::En => "Flush signal sent to Claude (best-effort). cc-gateway cannot guarantee queued messages are processed immediately — especially while a tool is running.",
+            Language::ZhCN => "已向 Claude 发送 flush 信号（best-effort）。gateway 无法保证排队消息立刻生效，工具运行期间尤其如此。",
+        },
+        "builtin.esc_sent_cursor" => match lang {
+            Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
+            Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
+        },
+        "builtin.esc_sent_pi" => match lang {
+            Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
+            Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
+        },
+        "builtin.esc_sent_codewhale" => match lang {
+            Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
+            Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
         },
         "builtin.esc_already_idle" => match lang {
-            Language::En => "Agent is already idle — no need to interrupt.",
-            Language::ZhCN => "智能体已经处于就绪状态，无需打断。",
+            Language::En => "Agent is idle with no queued messages.",
+            Language::ZhCN => "智能体已就绪，无排队消息。",
+        },
+        "builtin.esc_already_idle_claude" => match lang {
+            Language::En => "Claude is idle on the gateway side — nothing to flush here. Messages sent while busy are queued inside Claude and usually processed when the current turn ends; stream-json mode does not support a reliable force-flush.",
+            Language::ZhCN => "Claude 当前空闲（gateway 侧无待发消息）。busy 时发送的内容在 Claude 内部排队，通常需等当前 turn 结束；stream-json 模式暂无可靠的强推机制。",
         },
         "builtin.esc_with_prompt_sent" => match lang {
-            Language::En => "ESC sent — interrupted and forwarded: {MSG}",
-            Language::ZhCN => "ESC 已发送 — 已打断并转发: {MSG}",
+            Language::En => "ESC sent — flushed queue and forwarded: {MSG}",
+            Language::ZhCN => "ESC 已发送 — 已强推排队消息并转发: {MSG}",
+        },
+        "builtin.esc_with_prompt_sent_claude" => match lang {
+            Language::En => "Sent to Claude: {MSG}. If the agent is busy, stream-json may defer processing until the current turn ends.",
+            Language::ZhCN => "已发送给 Claude：{MSG}。若智能体正 busy，stream-json 下可能需等当前 turn 结束才处理。",
+        },
+        "builtin.esc_with_prompt_sent_cursor" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
+        "builtin.esc_with_prompt_sent_pi" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
+        "builtin.esc_with_prompt_sent_codewhale" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
         },
         "builtin.failed_esc" => match lang {
             Language::En => "Failed to send ESC: {ERR}",
             Language::ZhCN => "发送 ESC 失败: {ERR}",
+        },
+        "builtin.stop_sent" => match lang {
+            Language::En => "Stop sent — generation interrupted.",
+            Language::ZhCN => "Stop 已发送 — 已中断当前输出。",
+        },
+        "builtin.stop_sent_claude" => match lang {
+            Language::En => "Stop signal sent to Claude (best-effort). stream-json mode may not abort a running tool immediately; wait for the turn to end if nothing changes.",
+            Language::ZhCN => "已向 Claude 发送 stop 信号（best-effort）。stream-json 模式下正在运行的工具可能不会立刻中止；若无变化请等待当前 turn 结束。",
+        },
+        "builtin.stop_sent_cursor" => match lang {
+            Language::En => "Stop sent — current generation cancelled via ACP.",
+            Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
+        },
+        "builtin.stop_sent_pi" => match lang {
+            Language::En => "Stop sent — current operation aborted.",
+            Language::ZhCN => "Stop 已发送 — 已中止当前操作。",
+        },
+        "builtin.stop_sent_codewhale" => match lang {
+            Language::En => "Stop sent — the running CodeWhale process will be killed.",
+            Language::ZhCN => "Stop 已发送 — 正在运行的 CodeWhale 进程将被终止。",
+        },
+        "builtin.stop_already_idle" => match lang {
+            Language::En => "Agent is already idle — nothing to stop.",
+            Language::ZhCN => "智能体已就绪，无需停止。",
+        },
+        "builtin.stop_already_idle_claude" => match lang {
+            Language::En => "Claude is idle — there is no output to stop.",
+            Language::ZhCN => "Claude 当前空闲，没有可中断的输出。",
+        },
+        "builtin.failed_stop_generation" => match lang {
+            Language::En => "Failed to stop generation: {ERR}",
+            Language::ZhCN => "停止输出失败: {ERR}",
         },
         "builtin.context_cleared" => match lang {
             Language::En => "Context cleared.",
@@ -862,8 +930,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "目录已更改为: {PATH}",
         },
         "feishu.unknown_command" => match lang {
-            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
-            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
         },
 
         "feishu.file_from_user" => match lang {
@@ -1027,6 +1095,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Cursor session not found ({ID}); a new session was started. If you rely on flags like --yolo/--print, consider creating a new session explicitly.",
             Language::ZhCN => "未找到 Cursor 会话（{ID}），已自动新建会话。如果你依赖 --yolo/--print 等启动参数，建议显式新建会话。",
         },
+        "codewhale.session_not_found_new_session" => match lang {
+            Language::En => "CodeWhale session not found ({ID}); a new session was started.",
+            Language::ZhCN => "未找到 CodeWhale 会话（{ID}），已自动新建会话。",
+        },
         "telegram.command_help" => match lang {
             Language::En => "Show help",
             Language::ZhCN => "查看帮助",
@@ -1040,8 +1112,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "其他文本将直接发送给活动智能体。",
         },
         "telegram.help_text" => match lang {
-            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Interrupt agent\n/clear Clear context\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nAny other text will be forwarded to the active agent.",
-            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   打断智能体\n/clear 清理上下文\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, codew).\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、codew）。\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",
@@ -1068,28 +1140,12 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "创建目录",
         },
         "telegram.command_agent" => match lang {
-            Language::En => "Start agent session",
-            Language::ZhCN => "启动智能体会话",
+            Language::En => "Start agent session (or /agent <provider>)",
+            Language::ZhCN => "启动智能体会话（也可 /agent <智能体>）",
         },
         "telegram.command_agents" => match lang {
-            Language::En => "Set default agent for this chat",
-            Language::ZhCN => "设置本聊天默认智能体",
-        },
-        "telegram.command_agent_claude" => match lang {
-            Language::En => "Start Claude Code session",
-            Language::ZhCN => "启动 Claude Code 会话",
-        },
-        "telegram.command_agent_cursor" => match lang {
-            Language::En => "Start Cursor agent session",
-            Language::ZhCN => "启动 Cursor 智能体会话",
-        },
-        "telegram.command_agents_claude" => match lang {
-            Language::En => "Set default agent to Claude",
-            Language::ZhCN => "默认智能体设为 Claude",
-        },
-        "telegram.command_agents_cursor" => match lang {
-            Language::En => "Set default agent to Cursor",
-            Language::ZhCN => "默认智能体设为 Cursor",
+            Language::En => "Set default agent (or /agents <provider>)",
+            Language::ZhCN => "设置默认智能体（也可 /agents <智能体>）",
         },
         "telegram.command_agent_history" => match lang {
             Language::En => "Show agent history",
@@ -1108,8 +1164,12 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "停止当前会话",
         },
         "telegram.command_esc" => match lang {
-            Language::En => "Interrupt agent",
-            Language::ZhCN => "打断智能体",
+            Language::En => "Flush queued messages",
+            Language::ZhCN => "强推排队消息",
+        },
+        "telegram.command_stop" => match lang {
+            Language::En => "Stop current generation",
+            Language::ZhCN => "停止当前输出",
         },
         "telegram.command_clear" => match lang {
             Language::En => "Clear context",

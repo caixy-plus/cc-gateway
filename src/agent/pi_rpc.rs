@@ -54,12 +54,9 @@ impl PiRpcSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        // Pass through environment, filtering out CLAUDECODE (not relevant for pi)
-        let env_vars: Vec<(String, String)> = std::env::vars()
-            .filter(|(k, _)| k != "CLAUDECODE")
-            .collect();
+        // Pass through environment, filtering out provider-specific vars
         cmd.env_clear();
-        for (k, v) in env_vars {
+        for (k, v) in crate::agent::passthrough_env() {
             cmd.env(k, v);
         }
 
@@ -137,9 +134,10 @@ impl PiRpcSession {
         self.write_json(&response).await
     }
 
-    /// Send a clear-context command via new_session.
-    pub async fn send_clear(&self) -> Result<()> {
-        self.write_json(&json!({"type": "new_session"})).await
+    /// Reset Pi context via `new_session` (no separate provider session id).
+    pub async fn new_provider_session(&self) -> Result<Option<String>> {
+        self.write_json(&json!({"type": "new_session"})).await?;
+        Ok(None)
     }
 
     pub async fn stop(mut self) -> Result<()> {

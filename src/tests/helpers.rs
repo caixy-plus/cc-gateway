@@ -11,6 +11,7 @@ pub(crate) struct TestEnv {
     _lock: MutexGuard<'static, ()>,
     previous_home: Option<String>,
     previous_userprofile: Option<String>,
+    previous_path: Option<String>,
     root: tempfile::TempDir,
 }
 
@@ -24,14 +25,23 @@ impl TestEnv {
             .expect("test temp dir should be created in workspace");
         let previous_home = std::env::var("HOME").ok();
         let previous_userprofile = std::env::var("USERPROFILE").ok();
+        let previous_path = std::env::var("PATH").ok();
         std::env::set_var("HOME", root.path());
         std::env::set_var("USERPROFILE", root.path());
+        // Prepend test home to PATH so resolve_cli_path can find fake binaries
+        let new_path = format!(
+            "{}:{}",
+            root.path().display(),
+            previous_path.as_deref().unwrap_or("")
+        );
+        std::env::set_var("PATH", &new_path);
         std::fs::create_dir_all(root.path().join(".cc-gateway")).unwrap();
         GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
         Self {
             _lock: lock,
             previous_home,
             previous_userprofile,
+            previous_path,
             root,
         }
     }
@@ -42,11 +52,7 @@ impl TestEnv {
 
     pub(crate) fn fake_agent_profiles(&self) -> AgentProfiles {
         let mut profiles = AgentProfiles::default();
-        profiles.claude.cli_path = Some(
-            create_fake_agent_cli(self.home())
-                .to_string_lossy()
-                .to_string(),
-        );
+        create_fake_agent_cli(self.home());
         profiles.claude.default_args = Some(String::new());
         profiles
     }
@@ -60,6 +66,11 @@ impl Drop for TestEnv {
         } else {
             std::env::remove_var("HOME");
         }
+        if let Some(path) = self.previous_path.as_deref() {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
         if let Some(userprofile) = self.previous_userprofile.as_deref() {
             std::env::set_var("USERPROFILE", userprofile);
         } else {
@@ -70,7 +81,7 @@ impl Drop for TestEnv {
 
 #[cfg(not(windows))]
 pub(crate) fn create_fake_agent_cli(home: &Path) -> PathBuf {
-    let script = home.join("fake-claude.sh");
+    let script = home.join("claude");
     std::fs::write(
         &script,
         r#"#!/bin/sh
@@ -100,7 +111,7 @@ done
 
 #[cfg(windows)]
 pub(crate) fn create_fake_agent_cli(home: &Path) -> PathBuf {
-    let ps1 = home.join("fake-claude.ps1");
+    let ps1 = home.join("claude.ps1");
     std::fs::write(
         &ps1,
         r#"$sessionId = "fake-session"
