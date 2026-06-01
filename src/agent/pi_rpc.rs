@@ -143,13 +143,13 @@ impl PiRpcSession {
     pub async fn stop(mut self) -> Result<()> {
         // Best-effort abort before killing
         let _ = self.write_json(&json!({"type": "abort"})).await;
-        let _ = self.child.kill().await;
+        crate::agent::acp_client::kill_child_process_tree(&mut self.child).await;
         info!("Pi RPC session stopped");
         Ok(())
     }
 
     pub async fn force_stop(mut self) -> Result<()> {
-        let _ = self.child.kill().await;
+        crate::agent::acp_client::kill_child_process_tree(&mut self.child).await;
         info!("Pi RPC session force-stopped");
         Ok(())
     }

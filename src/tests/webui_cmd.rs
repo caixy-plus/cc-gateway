@@ -1,9 +1,11 @@
+use std::path::PathBuf;
+
 use axum::extract::Json;
 use axum::http::StatusCode;
 
 use crate::db;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
-use crate::web::handlers::cmd::{handle_cd, handle_pwd, CdRequest, SessionCmdRequest};
+use crate::web::handlers::cmd::{handle_cd, handle_ll, handle_pwd, CdRequest, LlRequest, SessionCmdRequest};
 
 use super::helpers::TestEnv;
 
@@ -140,5 +142,50 @@ async fn webui_cd_uses_frontend_session_id_work_dir_for_inactive_session() {
             .unwrap()
             .work_dir,
         first.to_string_lossy()
+    );
+}
+
+#[tokio::test]
+async fn webui_ll_lists_nested_dir_via_absolute_path_without_changing_work_dir() {
+    let env = TestEnv::new();
+    db::init_schema().unwrap();
+    let root = env.home().join("webui-ll-browse-root");
+    let child = root.join("child");
+    let nested = child.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", root.to_str().unwrap())
+        .await
+        .unwrap();
+    let session = GLOBAL_CHANNEL_SESSIONS
+        .create_agent_session_only(
+            &runtime.channel_session.id,
+            "LL browse",
+            root.to_str().unwrap(),
+            "claude",
+        )
+        .unwrap();
+
+    let (status, body) = handle_ll(Json(LlRequest {
+        session_id: Some(session.id.clone()),
+        path: Some(nested.to_string_lossy().to_string()),
+        show_hidden: None,
+    }))
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let listed = PathBuf::from(json["dir"].as_str().unwrap());
+    assert_eq!(
+        listed.canonicalize().unwrap(),
+        nested.canonicalize().unwrap()
+    );
+    assert_eq!(
+        GLOBAL_CHANNEL_SESSIONS
+            .get_agent_session(&session.id)
+            .unwrap()
+            .work_dir,
+        root.to_string_lossy()
     );
 }

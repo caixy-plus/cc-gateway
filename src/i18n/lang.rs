@@ -6,22 +6,52 @@ pub enum Language {
 
 impl Language {
     pub fn detect() -> Self {
-        if let Ok(lang) = std::env::var("CC_GATEWAY_LANG") {
-            return Self::from_str(&lang);
+        Self::detect_from(
+            std::env::var("CC_GATEWAY_LANG").ok().as_deref(),
+            std::env::var("LC_ALL").ok().as_deref(),
+            std::env::var("LANG").ok().as_deref(),
+            detect_system_locale().as_deref(),
+            cfg!(windows),
+        )
+    }
+
+    /// Resolve language from explicit override, env vars, and optional OS locale.
+    ///
+    /// On Windows, `LANG`/`LC_ALL` are often set to `en_US.UTF-8` by Git or other dev
+    /// tools even when the UI locale is Chinese, so the OS locale is consulted first
+    /// (after `CC_GATEWAY_LANG`).
+    pub(crate) fn detect_from(
+        cc_gateway_lang: Option<&str>,
+        lc_all: Option<&str>,
+        lang: Option<&str>,
+        system_locale: Option<&str>,
+        prefer_system_before_lang: bool,
+    ) -> Self {
+        if let Some(s) = cc_gateway_lang {
+            return Self::from_str(s);
         }
-        if let Ok(lang) = std::env::var("LC_ALL") {
-            if let Some(lang) = Self::from_locale(&lang) {
+        if prefer_system_before_lang {
+            if let Some(locale) = system_locale {
+                if let Some(lang) = Self::from_locale(locale) {
+                    return lang;
+                }
+            }
+        }
+        if let Some(s) = lc_all {
+            if let Some(lang) = Self::from_locale(s) {
                 return lang;
             }
         }
-        if let Ok(lang) = std::env::var("LANG") {
-            if let Some(lang) = Self::from_locale(&lang) {
+        if let Some(s) = lang {
+            if let Some(lang) = Self::from_locale(s) {
                 return lang;
             }
         }
-        if let Some(lang) = detect_system_locale() {
-            if let Some(lang) = Self::from_locale(&lang) {
-                return lang;
+        if !prefer_system_before_lang {
+            if let Some(locale) = system_locale {
+                if let Some(lang) = Self::from_locale(locale) {
+                    return lang;
+                }
             }
         }
         Self::En

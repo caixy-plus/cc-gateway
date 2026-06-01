@@ -202,16 +202,45 @@ impl AcpClient {
     }
 
     pub async fn stop(mut self) -> Result<()> {
-        let _ = self.child.kill().await;
+        kill_child_process_tree(&mut self.child).await;
         info!("ACP session stopped");
         Ok(())
     }
 
     pub async fn force_stop(mut self) -> Result<()> {
-        let _ = self.child.kill().await;
+        kill_child_process_tree(&mut self.child).await;
         info!("ACP session force-stopped");
         Ok(())
     }
+}
+
+/// Kill a child process and, on Windows, its entire process tree.
+///
+/// On Windows, `.cmd` / `.bat` wrappers are spawned via `cmd /C`, which
+/// creates a two-level hierarchy (`cmd.exe` → real agent).  A plain
+/// `child.kill()` only terminates `cmd.exe`, leaving the agent orphaned
+/// with a visible console window.  `taskkill /T` terminates the whole tree.
+pub(crate) async fn kill_child_process_tree(child: &mut Child) {
+    let pid = child.id().unwrap_or(0);
+    if pid == 0 {
+        let _ = child.kill().await;
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+    }
+
+    // Still call kill() so the Child future is properly consumed / reaped
+    // on all platforms.
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
 
 /// Whether an ACP `session/update` marks the end of an assistant turn.

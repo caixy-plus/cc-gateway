@@ -41,15 +41,37 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     // global installs and zsh functions that `command -v` may prefer.
     if let Ok(path_env) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_env) {
-            let candidate = dir.join(config_path);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().to_string();
-            }
             #[cfg(windows)]
             {
-                let candidate_exe = dir.join(format!("{}.exe", config_path));
-                if candidate_exe.is_file() {
-                    return candidate_exe.to_string_lossy().to_string();
+                // On Windows, always try PATHEXT extensions.  npm global packages
+                // ship both an extensionless bash script (which CreateProcess
+                // cannot execute — os error 193) and a `.cmd` wrapper.  We must
+                // match the `.cmd` / `.exe` / etc. variant so spawning succeeds.
+                if let Ok(pathext) = std::env::var("PATHEXT") {
+                    for ext in pathext.split(';') {
+                        let ext = ext.trim();
+                        if ext.is_empty() {
+                            continue;
+                        }
+                        let candidate_ext = dir.join(format!("{}{}", config_path, ext));
+                        if candidate_ext.is_file() {
+                            return candidate_ext.to_string_lossy().to_string();
+                        }
+                    }
+                } else {
+                    for ext in &[".exe", ".cmd", ".bat"] {
+                        let candidate_ext = dir.join(format!("{}{}", config_path, ext));
+                        if candidate_ext.is_file() {
+                            return candidate_ext.to_string_lossy().to_string();
+                        }
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let candidate = dir.join(config_path);
+                if candidate.is_file() {
+                    return candidate.to_string_lossy().to_string();
                 }
             }
         }
@@ -58,9 +80,23 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     // On Windows, try resolving via `where` (handles .exe, .cmd, .bat, etc.)
     #[cfg(windows)]
     {
-        for search_name in [config_path, &format!("{}.exe", config_path)] {
+        // Try with and without explicit .exe extension.  Also try .cmd
+        // because npm global packages on Windows are .cmd wrappers.
+        let search_names: Vec<String> = if config_path.ends_with(".exe")
+            || config_path.ends_with(".cmd")
+            || config_path.ends_with(".bat")
+        {
+            vec![config_path.to_string()]
+        } else {
+            vec![
+                config_path.to_string(),
+                format!("{}.exe", config_path),
+                format!("{}.cmd", config_path),
+            ]
+        };
+        for search_name in &search_names {
             if let Ok(output) = std::process::Command::new("cmd")
-                .args(["/C", "where", search_name])
+                .args(["/C", "where", search_name.as_str()])
                 .output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -389,7 +425,7 @@ impl StreamJsonSession {
     }
 
     pub async fn stop(mut self) -> Result<()> {
-        let _ = self.child.kill().await;
+        crate::agent::acp_client::kill_child_process_tree(&mut self.child).await;
 
         // Clean up MCP config file
         if let Some(ref path) = self.mcp_config_path {
@@ -402,10 +438,10 @@ impl StreamJsonSession {
         Ok(())
     }
 
-    pub async fn force_stop(self) -> Result<()> {
-        // Same as stop() today: immediately kill the process.
-        // Kept separate so higher layers can explicitly choose "force".
-        self.stop().await
+    pub async fn force_stop(mut self) -> Result<()> {
+        crate::agent::acp_client::kill_child_process_tree(&mut self.child).await;
+        info!("Claude session force-stopped");
+        Ok(())
     }
 
     /// Check whether the child process is still running.
