@@ -68,6 +68,7 @@ fn session_history_resume_preserves_chat_and_receive_ids() {
 
     assert_eq!(value["cmd"].as_str(), Some("resume"));
     assert_eq!(value["session_id"].as_str(), Some("session-1"));
+    assert_eq!(value["work_dir"].as_str(), Some("/tmp/project"));
     assert_eq!(value["chat_id"].as_str(), Some("oc-chat"));
     assert_eq!(value["receive_id_type"].as_str(), Some("open_id"));
     assert_eq!(value["receive_id"].as_str(), Some("ou-user"));

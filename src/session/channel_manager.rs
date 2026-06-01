@@ -593,25 +593,25 @@ impl ChannelManager {
         let agent_settings = agent_settings.into();
         let existing = self
             .get_agent_session(session_id)
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
-        if let Some(ref override_dir) = work_dir_override {
-            if override_dir != &existing.work_dir {
-                tracing::info!(
-                    "Resume session {} switching work_dir from current {} to original {}",
-                    session_id,
-                    override_dir,
-                    existing.work_dir
-                );
-            }
-        }
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::t_fmt!("session.agent_not_found", ID = session_id)
+                )
+            })?;
+        let _ = work_dir_override;
         let work_dir = existing.work_dir.clone();
+        // Align channel cwd with the session record before spawning the provider.
+        self.update_channel_work_dir(&existing.channel_session_id, &work_dir);
         let stored_provider = existing.stored_provider();
 
         if !agent_settings.is_provider_enabled(&stored_provider) {
             return Err(anyhow::anyhow!(
-                "Provider '{}' is disabled in the current configuration. \
-                 Enable it to resume this session.",
-                stored_provider
+                "{}",
+                crate::t_fmt!(
+                    "session.provider_disabled",
+                    NAME = stored_provider.to_string()
+                )
             ));
         }
 
@@ -697,8 +697,14 @@ impl ChannelManager {
     ) -> Result<AgentSession> {
         let existing = self
             .get_agent_session(session_id)
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::t_fmt!("session.agent_not_found", ID = session_id)
+                )
+            })?;
         let work_dir = existing.work_dir.clone();
+        self.update_channel_work_dir(&existing.channel_session_id, &work_dir);
         let stored_provider = existing.stored_provider();
 
         {

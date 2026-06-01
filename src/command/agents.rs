@@ -89,11 +89,40 @@ pub fn session_stopped_message(provider: &AgentProvider) -> String {
     )
 }
 
+/// Map raw spawn/resume errors (often English `anyhow` text) to localized user messages.
+pub fn friendly_spawn_error(raw: &str) -> String {
+    if raw.contains("ACP did not return a session id") {
+        return t!("agent.acp_no_session_id").to_string();
+    }
+    if raw.contains("ACP request timed out") {
+        return t!("agent.acp_request_timeout").to_string();
+    }
+    if raw.contains("process exited immediately after spawn; no stderr") {
+        return t!("agent.process_exited_no_stderr").to_string();
+    }
+    if let Some(detail) = raw.strip_prefix("opencode process exited immediately after spawn:")
+        .or_else(|| raw.strip_prefix("cursor process exited immediately after spawn:"))
+        .or_else(|| raw.strip_prefix("claude process exited immediately after spawn:"))
+        .or_else(|| {
+            raw.split(" process exited immediately after spawn:")
+                .nth(1)
+                .map(str::trim)
+        })
+    {
+        return t_fmt!("agent.process_exited", DETAIL = detail);
+    }
+    if raw.contains("Failed to spawn") || raw.contains("Failed to open") {
+        return t_fmt!("agent.spawn_failed", DETAIL = raw);
+    }
+    raw.to_string()
+}
+
 pub fn failed_start_agent_message(provider: &AgentProvider, err: impl std::fmt::Display) -> String {
+    let raw = err.to_string();
     t_fmt!(
         "builtin.failed_start_agent",
         NAME = provider_display_name(provider),
-        ERR = err
+        ERR = friendly_spawn_error(&raw)
     )
 }
 
@@ -217,6 +246,23 @@ mod tests {
         assert_eq!(available.len(), 4);
         assert!(available.contains(&AgentProvider::Claude));
         assert!(available.contains(&AgentProvider::Cursor));
+    }
+
+    #[test]
+    fn friendly_spawn_error_maps_known_failures() {
+        let raw = "ACP did not return a session id";
+        let mapped = crate::command::agents::friendly_spawn_error(raw);
+        assert_ne!(mapped, raw);
+
+        let timeout = crate::command::agents::friendly_spawn_error(
+            "ACP request timed out after 60s (method: session/load)",
+        );
+        assert!(!timeout.contains("method: session/load"));
+
+        let exited = crate::command::agents::friendly_spawn_error(
+            "claude process exited immediately after spawn: bad flag",
+        );
+        assert!(exited.contains("bad flag"));
     }
 
     #[test]

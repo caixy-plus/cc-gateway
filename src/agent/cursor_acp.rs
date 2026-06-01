@@ -8,7 +8,8 @@ use tracing::{debug, info};
 use std::sync::atomic::AtomicBool;
 
 use crate::agent::acp_client::{
-    emit_acp_turn_done, is_acp_turn_complete_update, reset_acp_turn_done, AcpClient,
+    emit_acp_turn_done, extract_acp_session_id, is_acp_turn_complete_update,
+    resolve_acp_spawn_session_id, reset_acp_turn_done, AcpClient,
 };
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
 use crate::agent::mcp_attach::build_acp_mcp_servers;
@@ -208,7 +209,7 @@ impl CursorAcpSession {
                 crate::t!("cursor.resume_may_ignore_flags").to_string(),
             ));
         }
-        let result = if let Some(ref sid) = resume_session_id {
+        let (result, loaded_session_id) = if let Some(ref sid) = resume_session_id {
             match session
                 .send_request(
                     "session/load",
@@ -221,7 +222,7 @@ impl CursorAcpSession {
                 )
                 .await
             {
-                Ok(v) => v,
+                Ok(v) => (v, Some(sid.clone())),
                 Err(e) => {
                     let err = e.to_string();
                     if is_cursor_session_not_found_error(&err) {
@@ -229,7 +230,7 @@ impl CursorAcpSession {
                             "cursor.session_not_found_new_session",
                             ID = sid
                         )));
-                        session
+                        let v = session
                             .send_request(
                                 "session/new",
                                 json!({
@@ -238,14 +239,15 @@ impl CursorAcpSession {
                                     "mcpServers": session.mcp_servers
                                 }),
                             )
-                            .await?
+                            .await?;
+                        (v, None)
                     } else {
                         return Err(e);
                     }
                 }
             }
         } else {
-            session
+            let v = session
                 .send_request(
                     "session/new",
                     json!({
@@ -254,11 +256,11 @@ impl CursorAcpSession {
                         "mcpServers": session.mcp_servers
                     }),
                 )
-                .await?
+                .await?;
+            (v, None)
         };
 
-        let session_id = extract_session_id(&result)
-            .ok_or_else(|| anyhow::anyhow!("Cursor ACP did not return a session id"))?;
+        let session_id = resolve_acp_spawn_session_id(&result, loaded_session_id.as_deref())?;
         let mut session = session;
         session.session_id = session_id.clone();
         let _ = event_tx.send(AgentEvent::SessionId(session_id.clone()));
@@ -334,8 +336,7 @@ impl CursorAcpSession {
                 }),
             )
             .await?;
-        let session_id = extract_session_id(&result)
-            .ok_or_else(|| anyhow::anyhow!("Cursor ACP did not return a session id"))?;
+        let session_id = resolve_acp_spawn_session_id(&result, None)?;
         self.session_id = session_id.clone();
         let _ = self
             .event_tx
@@ -410,14 +411,6 @@ fn cursor_command(cli_path: &str, args: &[String]) -> Command {
     let mut command = Command::new(cli_path);
     command.args(args);
     command
-}
-
-fn extract_session_id(value: &Value) -> Option<String> {
-    value
-        .get("sessionId")
-        .or_else(|| value.get("session_id"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
 }
 
 fn rpc_id_key(id: &Value) -> String {
@@ -560,11 +553,11 @@ mod tests {
     #[test]
     fn extracts_cursor_session_id_shapes() {
         assert_eq!(
-            extract_session_id(&json!({ "sessionId": "abc" })),
+            extract_acp_session_id(&json!({ "sessionId": "abc" })),
             Some("abc".to_string())
         );
         assert_eq!(
-            extract_session_id(&json!({ "session_id": "def" })),
+            extract_acp_session_id(&json!({ "session_id": "def" })),
             Some("def".to_string())
         );
     }

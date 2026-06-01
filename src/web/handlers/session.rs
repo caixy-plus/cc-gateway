@@ -266,9 +266,13 @@ pub async fn handle_start_session(
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
+            let provider = GLOBAL_CHANNEL_SESSIONS
+                .get_agent_session(&session_id)
+                .map(|s| s.stored_provider())
+                .unwrap_or(state.agent_settings.default.clone());
             let body = json_error(
-                "webui.runtime_not_found",
-                format!("Failed to start session: {}", e),
+                "webui.resume_failed",
+                crate::command::agents::failed_start_agent_message(&provider, e),
             );
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
@@ -337,9 +341,13 @@ pub async fn handle_send_message(
                     active
                 }
                 Err(e) => {
+                    let provider = GLOBAL_CHANNEL_SESSIONS
+                        .get_agent_session(&session_id)
+                        .map(|s| s.stored_provider())
+                        .unwrap_or(state.agent_settings.default.clone());
                     let body = json_error(
-                        "webui.session_not_found",
-                        format!("Session not active and could not be resumed: {}", e),
+                        "webui.resume_failed",
+                        crate::command::agents::failed_start_agent_message(&provider, e),
                     );
                     return (StatusCode::NOT_FOUND, body.to_string());
                 }
@@ -389,9 +397,13 @@ pub async fn handle_send_message(
                     }
                 }
                 Err(e) => {
+                    let provider = GLOBAL_CHANNEL_SESSIONS
+                        .get_agent_session(&session_id)
+                        .map(|s| s.stored_provider())
+                        .unwrap_or(state.agent_settings.default.clone());
                     let body = json_error(
-                        "webui.failed_restart_session",
-                        format!("Session died and could not be restarted: {}", e),
+                        "webui.resume_failed",
+                        crate::command::agents::failed_start_agent_message(&provider, e),
                     );
                     return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
                 }

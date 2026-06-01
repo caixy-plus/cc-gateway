@@ -260,6 +260,7 @@ pub fn build_session_history_card(
                     "value": {
                         "cmd": "resume",
                         "session_id": session.id,
+                        "work_dir": session.work_dir,
                         "chat_id": chat_id,
                         "receive_id_type": receive_id_type,
                         "receive_id": receive_id

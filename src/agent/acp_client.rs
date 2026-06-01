@@ -243,10 +243,42 @@ pub fn reset_acp_turn_done(done_sent: &std::sync::atomic::AtomicBool) {
     done_sent.store(false, Ordering::SeqCst);
 }
 
+pub fn extract_acp_session_id(value: &Value) -> Option<String> {
+    value
+        .get("sessionId")
+        .or_else(|| value.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Some ACP agents omit `sessionId` in `session/load` results; reuse the load request id.
+pub fn resolve_acp_spawn_session_id(
+    result: &Value,
+    loaded_session_id: Option<&str>,
+) -> Result<String> {
+    if let Some(id) = extract_acp_session_id(result) {
+        return Ok(id);
+    }
+    if let Some(sid) = loaded_session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(sid.to_string());
+    }
+    anyhow::bail!("ACP did not return a session id")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn resolve_acp_spawn_session_id_uses_loaded_id_when_load_omits_session_id() {
+        let id = resolve_acp_spawn_session_id(
+            &json!({ "configOptions": [] }),
+            Some("ses_load_abc"),
+        )
+        .expect("load responses without sessionId should reuse request id");
+        assert_eq!(id, "ses_load_abc");
+    }
 
     #[test]
     fn parse_response_id_accepts_numeric_and_string_ids() {

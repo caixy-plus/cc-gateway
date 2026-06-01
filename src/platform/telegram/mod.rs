@@ -870,25 +870,42 @@ impl TelegramPlatform {
                     return Ok(());
                 }
 
-                let runtime = self.get_channel(&chat_id_str).await;
-                let active = GLOBAL_CHANNEL_SESSIONS
+                let _runtime = self.get_channel(&chat_id_str).await;
+                match GLOBAL_CHANNEL_SESSIONS
                     .resume_agent_session_for_platform(
                         &session_id,
                         &self.default_dir,
                         self.agent_settings.clone(),
                         self.show_thinking,
-                        Some(runtime.channel_session.work_dir.clone()),
+                        None,
                         Some(self.mcp_context_for_chat(&chat_id_str)),
                     )
-                    .await?;
-                let provider = active.agent_session.stored_provider();
-                let work_dir = active.agent_session.work_dir.clone();
-                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                    rt.channel_session.work_dir = work_dir.clone();
-                    rt.active_agent = Some(active);
+                    .await
+                {
+                    Ok(active) => {
+                        let provider = active.agent_session.stored_provider();
+                        let work_dir = active.agent_session.work_dir.clone();
+                        if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
+                            rt.channel_session.work_dir = work_dir.clone();
+                            rt.active_agent = Some(active);
+                        }
+                        let text =
+                            crate::command::agents::session_restarted_message(&provider, &work_dir);
+                        let _ = self.edit_message_text(chat_id, message_id, &text).await;
+                    }
+                    Err(e) => {
+                        let provider = GLOBAL_CHANNEL_SESSIONS
+                            .get_agent_session(&session_id)
+                            .map(|s| s.stored_provider())
+                            .unwrap_or(self.agent_settings.default.clone());
+                        let text =
+                            crate::command::agents::failed_start_agent_message(&provider, e);
+                        let _ = self
+                            .answer_callback_query(&callback_query.id, Some(&text))
+                            .await;
+                        let _ = self.edit_message_text(chat_id, message_id, &text).await;
+                    }
                 }
-                let text = crate::command::agents::session_restarted_message(&provider, &work_dir);
-                let _ = self.edit_message_text(chat_id, message_id, &text).await;
             }
             TelegramCallbackAction::StartNewSession {
                 chat_id: action_chat_id,

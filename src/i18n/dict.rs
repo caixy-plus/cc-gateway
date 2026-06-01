@@ -732,6 +732,34 @@ pub fn t(key: &str) -> &str {
             Language::En => "Failed to start {NAME}: {ERR}",
             Language::ZhCN => "启动 {NAME} 失败: {ERR}",
         },
+        "agent.acp_no_session_id" => match lang {
+            Language::En => "The agent did not return a session id after connect. Try starting a new session, or update the agent CLI.",
+            Language::ZhCN => "智能体连接后未返回会话 ID。请尝试新建会话，或更新智能体 CLI。",
+        },
+        "agent.acp_request_timeout" => match lang {
+            Language::En => "Agent connection timed out (often during session load with long history). Try again or start a new session.",
+            Language::ZhCN => "连接智能体超时（恢复长会话历史时较常见）。请重试或新建会话。",
+        },
+        "agent.process_exited_no_stderr" => match lang {
+            Language::En => "The agent process exited immediately after start; no error output was captured. Check that the CLI is installed and on PATH.",
+            Language::ZhCN => "智能体进程启动后立刻退出，且未捕获错误输出。请确认 CLI 已安装并在 PATH 中。",
+        },
+        "agent.process_exited" => match lang {
+            Language::En => "The agent process exited immediately after start: {DETAIL}",
+            Language::ZhCN => "智能体进程启动后立刻退出: {DETAIL}",
+        },
+        "agent.spawn_failed" => match lang {
+            Language::En => "Failed to start the agent process: {DETAIL}",
+            Language::ZhCN => "无法启动智能体进程: {DETAIL}",
+        },
+        "session.agent_not_found" => match lang {
+            Language::En => "Session not found: {ID}",
+            Language::ZhCN => "未找到会话: {ID}",
+        },
+        "session.provider_disabled" => match lang {
+            Language::En => "Provider \"{NAME}\" is disabled in settings. Enable it to resume this session.",
+            Language::ZhCN => "配置中已禁用智能体「{NAME}」。请在设置中启用后再恢复此会话。",
+        },
         "builtin.current_dir" => match lang {
             Language::En => "Current directory: {DIR}",
             Language::ZhCN => "当前目录: {DIR}",
