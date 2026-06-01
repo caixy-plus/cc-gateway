@@ -230,9 +230,7 @@ impl PiRpcSession {
                 }
 
                 "message_update" => {
-                    if let Some(assistant_event) =
-                        msg.get("assistantMessageEvent")
-                    {
+                    if let Some(assistant_event) = msg.get("assistantMessageEvent") {
                         let delta_type = assistant_event
                             .get("type")
                             .and_then(|v| v.as_str())
@@ -253,20 +251,15 @@ impl PiRpcSession {
                                 }
                             }
                             "toolcall_end" => {
-                                if let Some(tool_call) =
-                                    assistant_event.get("toolCall")
-                                {
+                                if let Some(tool_call) = assistant_event.get("toolCall") {
                                     let name = tool_call
                                         .get("name")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("unknown")
                                         .to_string();
-                                    let args = tool_call
-                                        .get("arguments")
-                                        .cloned()
-                                        .unwrap_or(Value::Null);
-                                    let args_str =
-                                        serde_json::to_string(&args).unwrap_or_default();
+                                    let args =
+                                        tool_call.get("arguments").cloned().unwrap_or(Value::Null);
+                                    let args_str = serde_json::to_string(&args).unwrap_or_default();
                                     let _ = tx.send(AgentEvent::ToolUse(name, args_str));
                                 }
                             }
@@ -275,14 +268,11 @@ impl PiRpcSession {
                                     .get("reason")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("unknown error");
-                                let _ = tx
-                                    .send(AgentEvent::Error(format!("Pi error: {}", error_msg)));
+                                let _ =
+                                    tx.send(AgentEvent::Error(format!("Pi error: {}", error_msg)));
                             }
                             _ => {
-                                debug!(
-                                    "Unhandled Pi assistantMessageEvent type: {}",
-                                    delta_type
-                                );
+                                debug!("Unhandled Pi assistantMessageEvent type: {}", delta_type);
                             }
                         }
                     }
@@ -291,9 +281,7 @@ impl PiRpcSession {
                 "tool_execution_start" => {
                     debug!(
                         "Pi tool start: {}",
-                        msg.get("toolName")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?")
+                        msg.get("toolName").and_then(|v| v.as_str()).unwrap_or("?")
                     );
                 }
 
@@ -408,8 +396,8 @@ impl PiRpcSession {
                     debug!("Pi event: {}", event_type);
                 }
 
-                "compaction_start" | "compaction_end" | "auto_retry_start"
-                | "auto_retry_end" | "queue_update" => {
+                "compaction_start" | "compaction_end" | "auto_retry_start" | "auto_retry_end"
+                | "queue_update" => {
                     debug!("Pi event (ignored): {}", event_type);
                 }
 
@@ -418,7 +406,10 @@ impl PiRpcSession {
                         .get("error")
                         .and_then(|v| v.as_str())
                         .unwrap_or("extension error");
-                    let _ = tx.send(AgentEvent::Error(format!("Pi extension error: {}", error_msg)));
+                    let _ = tx.send(AgentEvent::Error(format!(
+                        "Pi extension error: {}",
+                        error_msg
+                    )));
                 }
 
                 "" => {

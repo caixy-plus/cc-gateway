@@ -68,14 +68,9 @@ impl AgentRuntime {
                 Ok((Self::Cursor(session), session_id))
             }
             AgentProvider::Pi => {
-                let (session, session_id) = PiRpcSession::spawn(
-                    work_dir,
-                    extra_args,
-                    config,
-                    event_tx,
-                    resume_session_id,
-                )
-                .await?;
+                let (session, session_id) =
+                    PiRpcSession::spawn(work_dir, extra_args, config, event_tx, resume_session_id)
+                        .await?;
                 Ok((Self::Pi(session), session_id))
             }
             AgentProvider::CodeWhale => {
@@ -102,6 +97,12 @@ impl AgentRuntime {
             AgentRuntime::Cursor(session) => session.send_user_message(text).await,
             AgentRuntime::Pi(session) => session.send_user_message(text).await,
             AgentRuntime::CodeWhale(session) => session.send_message(text).await,
+        }
+    }
+
+    pub fn set_gateway_history_id(&mut self, id: String) {
+        if let AgentRuntime::CodeWhale(session) = self {
+            session.set_gateway_history_id(id);
         }
     }
 
@@ -190,7 +191,9 @@ impl AgentRuntime {
             AgentRuntime::CodeWhale(session) => match msg {
                 InputMessage::ControlResponse { response } => {
                     let allow = response.response.behavior == "allow";
-                    session.send_control_response(&response.request_id, allow).await
+                    session
+                        .send_control_response(&response.request_id, allow)
+                        .await
                 }
                 InputMessage::User { message } => {
                     let text = message

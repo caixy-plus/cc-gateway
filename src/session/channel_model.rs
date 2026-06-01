@@ -100,6 +100,10 @@ impl AgentSession {
         self.provider_session_id.clone()
     }
 
+    pub fn display_session_id(&self) -> &str {
+        self.provider_session_id.as_deref().unwrap_or(&self.id)
+    }
+
     #[cfg(test)]
     pub fn new(channel_session_id: &str, title: &str, work_dir: &str) -> Self {
         let now = Utc::now();

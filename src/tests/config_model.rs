@@ -6,6 +6,13 @@ use crate::config::model::{
 };
 
 #[test]
+fn runtime_defaults_disables_integrations_until_init() {
+    let cfg = GatewayConfig::runtime_defaults();
+    assert!(!cfg.agent.claude.enabled);
+    assert!(!cfg.feishu.enabled);
+}
+
+#[test]
 fn test_gateway_config_default() {
     let cfg = GatewayConfig::default();
     assert_eq!(cfg.log.level, "info");
@@ -62,7 +69,10 @@ fn test_gateway_config_serde_roundtrip() {
     let deserialized: GatewayConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(original.log.level, deserialized.log.level);
     assert_eq!(original.agent.default, deserialized.agent.default);
-    assert_eq!(original.feishu.require_pairing, deserialized.feishu.require_pairing);
+    assert_eq!(
+        original.feishu.require_pairing,
+        deserialized.feishu.require_pairing
+    );
     assert_eq!(original.default_dir, deserialized.default_dir);
 }
 
@@ -188,6 +198,38 @@ fn agent_config_serde_roundtrip() {
     assert_eq!(deserialized.provider, AgentProvider::Cursor);
     assert_eq!(deserialized.cli_path, "agent");
     assert_eq!(deserialized.default_args, "--force");
+}
+
+#[test]
+fn codewhale_yolo_in_default_args_maps_to_allow_and_is_not_passed_to_cli() {
+    let mut profiles = AgentProfiles::default();
+    profiles.codewhale.enabled = true;
+    profiles.codewhale.default_args = Some("--yolo".to_string());
+
+    let cfg = profiles.config_for_provider(Some(AgentProvider::CodeWhale));
+    assert_eq!(cfg.default_args, "");
+    assert_eq!(cfg.permission, "allow");
+}
+
+#[test]
+fn codewhale_explicit_permission_overrides_yolo_semantics() {
+    let mut profiles = AgentProfiles::default();
+    profiles.codewhale.enabled = true;
+    profiles.codewhale.default_args = Some("--yolo".to_string());
+    profiles.codewhale.permission = Some("prompt".to_string());
+
+    let cfg = profiles.config_for_provider(Some(AgentProvider::CodeWhale));
+    assert_eq!(cfg.permission, "prompt");
+}
+
+#[test]
+fn codewhale_normalization_strips_other_cursor_only_default_args() {
+    let mut profiles = AgentProfiles::default();
+    profiles.codewhale.enabled = true;
+    profiles.codewhale.default_args = Some("--force --print".to_string());
+
+    let cfg = profiles.config_for_provider(Some(AgentProvider::CodeWhale));
+    assert_eq!(cfg.default_args, "");
 }
 
 #[test]

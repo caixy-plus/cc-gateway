@@ -237,9 +237,7 @@ pub fn build_session_history_card(
             format!("\u{1F4C1} {}", session.work_dir),
             format!("\u{1F552} {}", time),
         ];
-        if let Some(ref csid) = session.provider_session_id {
-            info_parts.push(format!("\u{1F511} `{}`", csid));
-        }
+        info_parts.push(format!("\u{1F511} `{}`", session.display_session_id()));
         let info_text = info_parts.join("\n");
 
         elements.push(json!({
@@ -527,9 +525,7 @@ pub fn disable_card_buttons(card: &Value) -> Value {
                 )
             }
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| disable_card_buttons(v)).collect())
-        }
+        Value::Array(arr) => Value::Array(arr.iter().map(|v| disable_card_buttons(v)).collect()),
         other => other.clone(),
     }
 }

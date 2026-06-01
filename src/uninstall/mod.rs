@@ -90,7 +90,10 @@ fn run_platform(keep_data: bool) -> Result<()> {
     let self_pid = std::process::id();
 
     let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| ".".to_string());
-    let temp_file = format!(r"{}\cc-gateway-uninstall.ps1", temp_dir.trim_end_matches('\\'));
+    let temp_file = format!(
+        r"{}\cc-gateway-uninstall.ps1",
+        temp_dir.trim_end_matches('\\')
+    );
     std::fs::write(&temp_file, include_str!("../../uninstall.ps1"))
         .context("failed to write uninstall script to temp")?;
 
@@ -118,4 +121,3 @@ fn run_platform(keep_data: bool) -> Result<()> {
 
     std::process::exit(0);
 }
-

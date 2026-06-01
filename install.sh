@@ -3,7 +3,8 @@ set -e
 
 REPO="caixy-plus/cc-gateway"
 BINARY="cc-gateway"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 DEFAULT_PORT=17534
 
 # Language detection
@@ -113,25 +114,33 @@ mkdir -p "$CONFIG_DIR/logs"
 
 # Config file creation and initialization are handled by `cc-gateway init`.
 
-# Setup PATH
-SHELL_CONFIG=""
-if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
-    SHELL_CONFIG="$HOME/.zshrc"
-elif [ "$SHELL" = "/bin/bash" ]; then
-    SHELL_CONFIG="$HOME/.bashrc"
-fi
-
-if [ -n "$SHELL_CONFIG" ] && [ -f "$SHELL_CONFIG" ]; then
-    if ! grep -q "$INSTALL_DIR" "$SHELL_CONFIG"; then
-        echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
-        msg "Added $INSTALL_DIR to PATH in $SHELL_CONFIG" "已将 $INSTALL_DIR 添加到 PATH ($SHELL_CONFIG)"
+# Setup PATH. The default user bin directory is a standard location on macOS/Linux,
+# so leave shell startup files untouched unless the user selected a custom install dir.
+if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
+    msg "$INSTALL_DIR is the standard user bin path; leaving shell PATH config unchanged." "$INSTALL_DIR 是标准用户 bin 路径；不修改 shell PATH 配置。"
+else
+    SHELL_CONFIG=""
+    if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
+        SHELL_CONFIG="$HOME/.zshrc"
+    elif [ "$SHELL" = "/bin/bash" ]; then
+        SHELL_CONFIG="$HOME/.bashrc"
     fi
-    # Apply shell config in this install session (init/start need cc-gateway on PATH).
-    # shellcheck disable=SC1090
-    . "$SHELL_CONFIG" 2>/dev/null || true
+
+    if [ -n "$SHELL_CONFIG" ] && [ -f "$SHELL_CONFIG" ]; then
+        if ! grep -q "$INSTALL_DIR" "$SHELL_CONFIG"; then
+            echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
+            msg "Added $INSTALL_DIR to PATH in $SHELL_CONFIG" "已将 $INSTALL_DIR 添加到 PATH ($SHELL_CONFIG)"
+        fi
+        # Apply shell config in this install session (init/start need cc-gateway on PATH).
+        # shellcheck disable=SC1090
+        . "$SHELL_CONFIG" 2>/dev/null || true
+    fi
 fi
-# Ensure install dir is on PATH for the rest of this install run.
-export PATH="$INSTALL_DIR:$PATH"
+# Ensure install dir is on PATH for the rest of this install run without duplicating it.
+case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) export PATH="$INSTALL_DIR:$PATH" ;;
+esac
 
 # macOS: setup launchd plist
 if [ "$OS" = "darwin" ]; then

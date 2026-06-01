@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GatewayConfig {
     pub log: LogConfig,
@@ -30,7 +30,7 @@ pub struct GatewayConfig {
     pub webui_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LogConfig {
     pub level: String,
@@ -59,7 +59,7 @@ pub struct AgentConfig {
     pub permission: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentProfiles {
     pub default: AgentProvider,
@@ -69,7 +69,7 @@ pub struct AgentProfiles {
     pub codewhale: AgentProviderConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentProviderConfig {
     /// Whether this provider appears in /agents pickers and can be started.
@@ -98,7 +98,7 @@ impl Default for AgentProviderConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeishuConfig {
     pub enabled: bool,
@@ -108,7 +108,7 @@ pub struct FeishuConfig {
     pub require_pairing: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
     pub enabled: bool,
@@ -252,8 +252,28 @@ impl AgentConfig {
                 self.default_args.clear();
             }
         }
+        if matches!(self.provider, AgentProvider::CodeWhale | AgentProvider::Pi) {
+            self.default_args = strip_unsupported_default_args(&self.default_args);
+        }
         self
     }
+}
+
+/// Flags meant for Cursor/Claude CLIs that break other providers (e.g. `codewhale serve --acp`).
+fn strip_unsupported_default_args(args: &str) -> String {
+    const UNSUPPORTED: &[&str] = &[
+        "--yolo",
+        "--print",
+        "--force",
+        "--permission-mode",
+        "bypassPermissions",
+        "--dangerously-skip-permissions",
+    ];
+    let kept: Vec<&str> = args
+        .split_whitespace()
+        .filter(|token| !UNSUPPORTED.iter().any(|bad| *bad == *token))
+        .collect();
+    kept.join(" ")
 }
 
 impl AgentProfiles {
@@ -280,17 +300,42 @@ impl AgentProfiles {
             AgentProvider::Pi => &self.pi,
             AgentProvider::CodeWhale => &self.codewhale,
         };
+        let explicit_permission = profile.permission.clone();
         if let Some(ref default_args) = profile.default_args {
-            config.default_args = default_args.clone();
+            let (cli_args, semantics) = parse_gateway_default_args(default_args);
+            config.default_args = cli_args;
+            if explicit_permission.is_none() && semantics.yolo {
+                config.permission = "allow".to_string();
+            }
         }
         if let Some(ref mode) = profile.mode {
             config.mode = mode.clone();
         }
-        if let Some(ref permission) = profile.permission {
+        if let Some(ref permission) = explicit_permission {
             config.permission = permission.clone();
         }
         config.normalized()
     }
+}
+
+/// Gateway-level aliases in `default_args` that must not be forwarded to provider CLIs.
+struct GatewayDefaultArgsSemantics {
+    yolo: bool,
+}
+
+fn parse_gateway_default_args(args: &str) -> (String, GatewayDefaultArgsSemantics) {
+    let mut yolo = false;
+    let kept: Vec<&str> = args
+        .split_whitespace()
+        .filter(|token| match *token {
+            "--yolo" => {
+                yolo = true;
+                false
+            }
+            _ => true,
+        })
+        .collect();
+    (kept.join(" "), GatewayDefaultArgsSemantics { yolo })
 }
 
 impl GatewayConfig {
@@ -301,6 +346,22 @@ impl GatewayConfig {
     #[cfg(test)]
     pub fn effective_agent_config(&self) -> AgentConfig {
         self.agent.effective_config()
+    }
+
+    /// In-memory defaults used by daemon / TUI / WebUI when `config.json` does not
+    /// exist yet. Integrations stay disabled until `cc-gateway init` writes the file.
+    pub fn runtime_defaults() -> Self {
+        let mut config = Self::default();
+        config.agent.claude.enabled = false;
+        config.agent.cursor.enabled = false;
+        config.agent.pi.enabled = false;
+        config.agent.codewhale.enabled = false;
+        config.feishu.enabled = false;
+        config.feishu.app_id.clear();
+        config.feishu.app_secret.clear();
+        config.telegram.enabled = false;
+        config.telegram.bot_token.clear();
+        config
     }
 }
 

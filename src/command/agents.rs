@@ -87,7 +87,11 @@ pub fn session_resumed_message(provider: &AgentProvider, dir: &str) -> String {
 pub fn session_restarted_message(provider: &AgentProvider, dir: &str) -> String {
     let base = session_resumed_message(provider, dir);
     if matches!(provider, AgentProvider::Pi) {
-        format!("{}\n{}", base, crate::t!("builtin.session_restarted_pi_hint"))
+        format!(
+            "{}\n{}",
+            base,
+            crate::t!("builtin.session_restarted_pi_hint")
+        )
     } else {
         base
     }
@@ -250,10 +254,22 @@ mod tests {
     #[test]
     fn available_providers_returns_empty_when_none_configured() {
         let profiles = AgentProfiles {
-            claude: AgentProviderConfig { enabled: false, ..Default::default() },
-            cursor: AgentProviderConfig { enabled: false, ..Default::default() },
-            pi: AgentProviderConfig { enabled: false, ..Default::default() },
-            codewhale: AgentProviderConfig { enabled: false, ..Default::default() },
+            claude: AgentProviderConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            cursor: AgentProviderConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            pi: AgentProviderConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            codewhale: AgentProviderConfig {
+                enabled: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let available = available_providers(&profiles);

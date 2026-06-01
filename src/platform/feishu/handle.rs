@@ -109,7 +109,10 @@ impl FeishuPlatform {
 
     pub async fn run(&self) -> Result<()> {
         info!("Starting Feishu platform...");
-        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Connecting);
+        crate::platform::status::set_state(
+            "feishu",
+            crate::platform::status::ConnectionState::Connecting,
+        );
         self.spawn_deliver_listener();
 
         // Spawn periodic cleanup for interaction store and pending permissions
@@ -354,13 +357,17 @@ impl FeishuPlatform {
             .await
         {
             Ok(message_id) => {
-                self.sent_cards.insert(message_id.clone(), card_json.clone());
+                self.sent_cards
+                    .insert(message_id.clone(), card_json.clone());
                 Ok(message_id)
             }
             Err(e) if auth_middleware::TokenManager::is_auth_error(&e) => {
                 self.token_manager.invalidate_token_cache().await;
-                let message_id = self.send_interactive_card_inner(receive_id_type, receive_id, card_json).await?;
-                self.sent_cards.insert(message_id.clone(), card_json.clone());
+                let message_id = self
+                    .send_interactive_card_inner(receive_id_type, receive_id, card_json)
+                    .await?;
+                self.sent_cards
+                    .insert(message_id.clone(), card_json.clone());
                 Ok(message_id)
             }
             Err(e) => Err(e),
@@ -412,8 +419,7 @@ impl FeishuPlatform {
             anyhow::bail!("Feishu API error (send card): code={}, msg={}", code, msg);
         }
 
-        body
-            .get("data")
+        body.get("data")
             .and_then(|d| d.get("message_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
@@ -422,11 +428,7 @@ impl FeishuPlatform {
 
     /// Update an existing interactive card message in-place via PATCH.
     /// Falls back to `send_interactive_card` if `message_id` is empty.
-    pub async fn update_interactive_card(
-        &self,
-        message_id: &str,
-        card_json: &Value,
-    ) -> Result<()> {
+    pub async fn update_interactive_card(&self, message_id: &str, card_json: &Value) -> Result<()> {
         if message_id.is_empty() {
             anyhow::bail!("Cannot update card: message_id is empty");
         }
@@ -486,11 +488,7 @@ impl FeishuPlatform {
                 .get("msg")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            anyhow::bail!(
-                "Feishu API error (update card): code={}, msg={}",
-                code,
-                msg
-            );
+            anyhow::bail!("Feishu API error (update card): code={}, msg={}", code, msg);
         }
 
         Ok(())

@@ -32,7 +32,8 @@ impl CursorAcpSession {
         let mut args: Vec<String> = Vec::new();
         if !config.default_args.is_empty() {
             args.extend(
-                config.default_args
+                config
+                    .default_args
                     .split_whitespace()
                     .map(|s| s.to_string()),
             );
@@ -58,9 +59,18 @@ impl CursorAcpSession {
                 )
             })?;
 
-        let stdin = child.stdin.take().context("Failed to open Cursor ACP stdin")?;
-        let stdout = child.stdout.take().context("Failed to open Cursor ACP stdout")?;
-        let stderr = child.stderr.take().context("Failed to open Cursor ACP stderr")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("Failed to open Cursor ACP stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("Failed to open Cursor ACP stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("Failed to open Cursor ACP stderr")?;
 
         let client = AcpClient::new(child, stdin);
         let pending = client.pending();
@@ -115,9 +125,13 @@ impl CursorAcpSession {
                                 });
                             }
                         }
-                        respond_extension(&si, msg, json!({
-                            "outcome": { "outcome": "skipped", "reason": "cc-gateway does not yet collect Cursor ACP question answers" }
-                        }));
+                        respond_extension(
+                            &si,
+                            msg,
+                            json!({
+                                "outcome": { "outcome": "skipped", "reason": "cc-gateway does not yet collect Cursor ACP question answers" }
+                            }),
+                        );
                     }
                     "cursor/create_plan" => {
                         if let Some(plan) = msg
@@ -128,9 +142,13 @@ impl CursorAcpSession {
                             let _ = tx
                                 .send(AgentEvent::Text(format!("\n[Plan requested]\n{}\n", plan)));
                         }
-                        respond_extension(&si, msg, json!({
-                            "outcome": { "outcome": "rejected", "reason": "Plan approval is not available through cc-gateway yet" }
-                        }));
+                        respond_extension(
+                            &si,
+                            msg,
+                            json!({
+                                "outcome": { "outcome": "rejected", "reason": "Plan approval is not available through cc-gateway yet" }
+                            }),
+                        );
                     }
                     "cursor/update_todos" | "cursor/task" | "cursor/generate_image" => {
                         debug!("Cursor ACP extension notification: {}", method);
@@ -280,11 +298,13 @@ impl CursorAcpSession {
     }
 
     pub async fn send_cancel(&self) -> Result<()> {
-        self.client.write_json(json!({
-            "jsonrpc": "2.0",
-            "method": "session/cancel",
-            "params": { "sessionId": self.session_id.clone() }
-        })).await
+        self.client
+            .write_json(json!({
+                "jsonrpc": "2.0",
+                "method": "session/cancel",
+                "params": { "sessionId": self.session_id.clone() }
+            }))
+            .await
     }
 
     /// Create a new ACP session in the same process and return its id.
@@ -311,7 +331,9 @@ impl CursorAcpSession {
         let session_id = extract_session_id(&result)
             .ok_or_else(|| anyhow::anyhow!("Cursor ACP did not return a session id"))?;
         self.session_id = session_id.clone();
-        let _ = self.event_tx.send(AgentEvent::SessionId(session_id.clone()));
+        let _ = self
+            .event_tx
+            .send(AgentEvent::SessionId(session_id.clone()));
         Ok(Some(session_id))
     }
 
@@ -325,19 +347,24 @@ impl CursorAcpSession {
             .unwrap_or_else(|| Value::String(request_id.to_string()));
         let option_id = if allow { "allow-once" } else { "reject-once" };
         let id = id_value.as_u64().unwrap_or(0);
-        self.client.write_json(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": { "outcome": { "outcome": "selected", "optionId": option_id } }
-        })).await
+        self.client
+            .write_json(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "outcome": { "outcome": "selected", "optionId": option_id } }
+            }))
+            .await
     }
 
     pub async fn stop(self) -> Result<()> {
-        let _ = self.client.write_json(json!({
-            "jsonrpc": "2.0",
-            "method": "session/cancel",
-            "params": { "sessionId": self.session_id.clone() }
-        })).await;
+        let _ = self
+            .client
+            .write_json(json!({
+                "jsonrpc": "2.0",
+                "method": "session/cancel",
+                "params": { "sessionId": self.session_id.clone() }
+            }))
+            .await;
         self.client.stop().await
     }
 

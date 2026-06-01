@@ -63,9 +63,7 @@ pub async fn handle_approve(
     (StatusCode::OK, body.to_string())
 }
 
-pub async fn handle_reject(
-    Json(req): Json<PairingCodeRequest>,
-) -> (StatusCode, String) {
+pub async fn handle_reject(Json(req): Json<PairingCodeRequest>) -> (StatusCode, String) {
     if GLOBAL_PAIRING_MANAGER.reject(&req.pairing_code) {
         let body = json!({ "status": "rejected" });
         (StatusCode::OK, body.to_string())
@@ -107,9 +105,7 @@ pub async fn handle_set_approval_enabled(
 
 /// Permanently delete an approval record. The chat must pair again to regain
 /// access.
-pub async fn handle_delete_approval(
-    Json(req): Json<ApprovedChatRequest>,
-) -> (StatusCode, String) {
+pub async fn handle_delete_approval(Json(req): Json<ApprovedChatRequest>) -> (StatusCode, String) {
     if GLOBAL_PAIRING_MANAGER.delete_approval(&req.platform, &req.chat_id) {
         let body = json!({ "status": "deleted" });
         (StatusCode::OK, body.to_string())

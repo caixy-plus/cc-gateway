@@ -210,7 +210,10 @@ async fn routes_deny_in_active_session() {
 
     assert!(matches!(
         router.route("/deny").await,
-        CommandAction::PermissionDeny { request_id: None, reason: None }
+        CommandAction::PermissionDeny {
+            request_id: None,
+            reason: None
+        }
     ));
     assert!(matches!(
         router.route("/deny abc123").await,

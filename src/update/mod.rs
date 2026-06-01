@@ -263,7 +263,7 @@ fn update_tmp_path(target: &Path) -> PathBuf {
     target.with_file_name(format!(".{}.update-tmp", file_name))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -518,24 +518,14 @@ fn schedule_install_script_and_exit(
     // Windows cannot replace the running executable; keep the detached updater
     // style, but DO NOT hide/redirect output so the user sees progress.
     let updater_pid = std::process::id();
-    let restart = if restart_daemon { "$true" } else { "$false" };
     let gateway = format!(r"{}\cc-gateway.exe", default_install_dir());
-    let gateway_quoted = powershell_quote(&gateway);
-    let restart_args = match config_path {
-        Some(path) => format!(
-            "@('restart','--config',{})",
-            powershell_quote(&path.to_string_lossy())
-        ),
-        None => "@('restart')".to_string(),
-    };
-    let script = format!(
-        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $restart = {restart}; $gateway = {gateway}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; $env:{skip_env} = '1'; iwr -UseBasicParsing '{install_url}' | iex; if ($restart) {{ & $gateway @restartArgs }}"#,
-        updater_pid = updater_pid,
-        restart = restart,
-        gateway = gateway_quoted,
-        restart_args = restart_args,
-        skip_env = SKIP_SETUP_ENV,
-        install_url = INSTALL_PS1_URL,
+    let installer_path = std::env::temp_dir().join("cc-gateway-install.ps1");
+    let script = build_windows_update_install_script(
+        updater_pid,
+        restart_daemon,
+        config_path,
+        &gateway,
+        &installer_path.to_string_lossy(),
     );
 
     std::process::Command::new("powershell")
@@ -554,6 +544,34 @@ fn schedule_install_script_and_exit(
 
     println!("Updater will exit; installation continues in the background.");
     Ok(())
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn build_windows_update_install_script(
+    updater_pid: u32,
+    restart_daemon: bool,
+    config_path: Option<&Path>,
+    gateway: &str,
+    installer_path: &str,
+) -> String {
+    let restart = if restart_daemon { "$true" } else { "$false" };
+    let restart_args = match config_path {
+        Some(path) => format!(
+            "@('restart','--config',{})",
+            powershell_quote(&path.to_string_lossy())
+        ),
+        None => "@('restart')".to_string(),
+    };
+    format!(
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $restart = {restart}; $gateway = {gateway}; $installer = {installer}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; try {{ $env:{skip_env} = '1'; Invoke-WebRequest -UseBasicParsing -Uri {install_url} -OutFile $installer; & $installer; if (-not $?) {{ throw "install script failed" }}; if ($restart) {{ & $gateway @restartArgs }} }} finally {{ Remove-Item -LiteralPath $installer -ErrorAction SilentlyContinue; Remove-Item Env:\{skip_env} -ErrorAction SilentlyContinue }}"#,
+        updater_pid = updater_pid,
+        restart = restart,
+        gateway = powershell_quote(gateway),
+        installer = powershell_quote(installer_path),
+        restart_args = restart_args,
+        skip_env = SKIP_SETUP_ENV,
+        install_url = powershell_quote(INSTALL_PS1_URL),
+    )
 }
 
 /// CLI entry point for `cc-gateway update`.

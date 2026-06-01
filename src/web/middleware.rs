@@ -74,8 +74,7 @@ pub async fn ip_allowlist(
             );
             return Err((
                 StatusCode::FORBIDDEN,
-                r#"{"code":403,"msg":"access denied by IP allowlist"}"#
-                    .to_string(),
+                r#"{"code":403,"msg":"access denied by IP allowlist"}"#.to_string(),
             ));
         }
     }
@@ -91,15 +90,11 @@ pub fn generate_webui_token() -> String {
 /// then `Authorization: Bearer xxx` header.
 fn extract_token(request: &Request) -> Option<String> {
     // Check query param first
-    if let Some(token) = request
-        .uri()
-        .query()
-        .and_then(|q| {
-            q.split('&')
-                .find(|p| p.starts_with("token="))
-                .map(|p| &p[6..])
-        })
-    {
+    if let Some(token) = request.uri().query().and_then(|q| {
+        q.split('&')
+            .find(|p| p.starts_with("token="))
+            .map(|p| &p[6..])
+    }) {
         if !token.is_empty() {
             return Some(token.to_string());
         }
@@ -107,10 +102,7 @@ fn extract_token(request: &Request) -> Option<String> {
 
     // Then check Authorization: Bearer header
     let headers = request.headers();
-    if let Some(auth) = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(token) = auth.strip_prefix("Bearer ") {
             if !token.is_empty() {
                 return Some(token.to_string());

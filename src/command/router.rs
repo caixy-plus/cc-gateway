@@ -140,13 +140,19 @@ impl CommandRouter {
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
                 "/allow" => {
-                    let request_id =
-                        if arg.is_empty() { None } else { Some(arg.to_string()) };
+                    let request_id = if arg.is_empty() {
+                        None
+                    } else {
+                        Some(arg.to_string())
+                    };
                     CommandAction::PermissionAllow { request_id }
                 }
                 "/deny" => {
                     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
-                    let request_id = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    let request_id = parts
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
                     let reason = parts.get(2).map(|s| s.to_string());
                     CommandAction::PermissionDeny { request_id, reason }
                 }

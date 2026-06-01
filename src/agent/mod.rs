@@ -1,5 +1,6 @@
 pub mod acp_client;
 pub mod codewhale_acp;
+pub mod codewhale_context;
 pub mod cursor_acp;
 pub mod event;
 pub mod pi_rpc;

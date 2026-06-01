@@ -152,6 +152,71 @@ done
     script
 }
 
+fn create_history_logging_fake_codewhale(home: &Path) -> PathBuf {
+    let script = home.join("codewhale");
+    std::fs::write(
+        &script,
+        r#"#!/usr/bin/env python3
+import json
+import os
+import sys
+
+home = os.environ["HOME"]
+if sys.argv[1:] == ["doctor", "--json"]:
+    print(json.dumps({
+        "capability": {
+            "resolved_model": "fake-codewhale",
+            "context_window": 128000,
+            "max_output": 4096,
+        }
+    }))
+    sys.exit(0)
+
+session_id = "fake-codewhale-acp-session"
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
+    elif method == "session/new":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": msg["id"],
+            "result": {"sessionId": session_id},
+        }), flush=True)
+    elif method == "session/prompt":
+        prompt = msg["params"]["prompt"][0]["text"]
+        with open(os.path.join(home, "codewhale-prompt.txt"), "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "codewhale reply"},
+                },
+            },
+        }), flush=True)
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": msg["id"],
+            "result": {},
+        }), flush=True)
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+    }
+    script
+}
+
 async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
     let env = TestEnv::new();
     db::init_schema()?;
@@ -161,7 +226,7 @@ async fn collect_thinking_flow(show_thinking: bool) -> Result<Vec<String>> {
         "thinking-hidden"
     });
     std::fs::create_dir_all(&work_dir)?;
-    let mut config = env.fake_agent_profiles();
+    let config = env.fake_agent_profiles();
     create_thinking_fake_claude(env.home());
 
     let channel = GLOBAL_CHANNEL_SESSIONS
@@ -301,7 +366,7 @@ async fn start_session_uses_work_dir_override_as_process_cwd_and_persisted_work_
     let root = env.home().join("override-root");
     let child = root.join("child");
     std::fs::create_dir_all(&child)?;
-    let mut config = env.fake_agent_profiles();
+    let config = env.fake_agent_profiles();
     create_cwd_fake_claude(env.home());
 
     let channel = GLOBAL_CHANNEL_SESSIONS
@@ -354,7 +419,7 @@ async fn resume_session_uses_original_session_work_dir_even_if_channel_dir_chang
     let current = env.home().join("resume-current");
     std::fs::create_dir_all(&original)?;
     std::fs::create_dir_all(&current)?;
-    let mut config = env.fake_agent_profiles();
+    let config = env.fake_agent_profiles();
     create_cwd_fake_claude(env.home());
 
     let channel = GLOBAL_CHANNEL_SESSIONS
@@ -462,8 +527,8 @@ async fn controller_start_session_with_explicit_claude_provider() -> Result<()> 
     let env = TestEnv::new();
     let work_dir = env.home().join("controller-claude");
     std::fs::create_dir_all(&work_dir)?;
-    let claude_cli = create_tagged_fake_cli(env.home(), "claude");
-    let cursor_cli = create_tagged_fake_cli(env.home(), "cursor");
+    let _claude_cli = create_tagged_fake_cli(env.home(), "claude");
+    let _cursor_cli = create_tagged_fake_cli(env.home(), "cursor");
     let settings = AgentProfiles {
         default: AgentProvider::Cursor,
         claude: AgentProviderConfig {
@@ -501,7 +566,7 @@ async fn controller_start_session_with_explicit_claude_provider() -> Result<()> 
 
 #[tokio::test]
 async fn resume_session_uses_stored_provider_not_agent_default() -> Result<()> {
-    use crate::config::model::{AgentProfiles, AgentProvider, AgentProviderConfig};
+    use crate::config::model::{AgentProfiles, AgentProvider};
     use crate::session::channel_model::{AgentSession, AgentSessionState};
 
     let env = TestEnv::new();
@@ -557,6 +622,85 @@ async fn resume_session_uses_stored_provider_not_agent_default() -> Result<()> {
     assert_eq!(tag.trim(), "claude");
     assert_eq!(resumed.agent_session.provider, "claude");
 
+    {
+        let ctrl = resumed.controller.lock().await;
+        ctrl.stop_session().await?;
+    }
+    GLOBAL_CHANNEL_SESSIONS
+        .stop_channel_session(&channel.id)
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn codewhale_resume_replays_history_by_gateway_session_id() -> Result<()> {
+    use crate::config::model::{AgentProvider, AgentProviderConfig};
+    use crate::session::channel_model::{AgentSession, AgentSessionState};
+
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("codewhale-resume");
+    std::fs::create_dir_all(&work_dir)?;
+    create_history_logging_fake_codewhale(env.home());
+
+    let mut agent_settings = env.fake_agent_profiles();
+    agent_settings.codewhale = AgentProviderConfig {
+        enabled: true,
+        default_args: Some(String::new()),
+        ..Default::default()
+    };
+
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel("feishu", "codewhale-resume", work_dir.to_str().unwrap())
+        .await;
+    let mut session =
+        AgentSession::new(&channel.id, "CodeWhale Resume", work_dir.to_str().unwrap());
+    session.provider = AgentProvider::CodeWhale.to_string();
+    session.state = AgentSessionState::Stopped;
+    session.provider_session_id = Some("fake-codewhale-acp-session".to_string());
+    let session_id = session.id.clone();
+    db::insert_agent_session(&session);
+
+    let history_dir = env.home().join(".cc-gateway").join("history");
+    std::fs::create_dir_all(&history_dir)?;
+    std::fs::write(
+        history_dir.join(format!("{session_id}.jsonl")),
+        r#"{"timestamp":"t","role":"user","content":"remember gateway history"}
+{"timestamp":"t","role":"assistant","content":"history acknowledged"}
+"#,
+    )?;
+
+    GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+    GLOBAL_CHANNEL_SESSIONS.load_from_db();
+    let resumed = GLOBAL_CHANNEL_SESSIONS
+        .resume_agent_session_for_platform(
+            &session_id,
+            work_dir.to_str().unwrap(),
+            agent_settings,
+            false,
+            None,
+            None,
+        )
+        .await?;
+
+    let mut sink = BufferedSink::new(
+        CollectSink {
+            text: String::new(),
+        },
+        std::time::Duration::from_millis(10),
+        2000,
+    );
+    GLOBAL_CHANNEL_SESSIONS
+        .send_and_poll_active_runtime_buffered(&resumed, "continue", &mut sink)
+        .await?;
+
+    let prompt = std::fs::read_to_string(env.home().join("codewhale-prompt.txt"))?;
+    assert!(prompt.contains("[Conversation history]"));
+    assert!(prompt.contains("remember gateway history"));
+    assert!(prompt.contains("history acknowledged"));
+
+    assert_eq!(resumed.agent_session.provider_session_id, None);
     {
         let ctrl = resumed.controller.lock().await;
         ctrl.stop_session().await?;

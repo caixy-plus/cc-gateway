@@ -42,7 +42,8 @@ if (Test-Path $InstallDir) {
 # 3. Remove the install dir from the User PATH (leave everything else intact).
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath) {
-    $parts = $userPath.Split(';') | Where-Object { $_ -and ($_ -ne $InstallDir) }
+    $installDirNorm = $InstallDir.TrimEnd('\')
+    $parts = $userPath.Split(';') | Where-Object { $_ -and ($_.TrimEnd('\') -ine $installDirNorm) }
     [Environment]::SetEnvironmentVariable("Path", ($parts -join ';'), "User")
     Write-Msg "  - cleaned PATH entry" "  - 已清理 PATH 配置"
 }

@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::config::model::AgentProvider;
 use crate::runtime::controller::AgentController;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
@@ -48,20 +49,15 @@ impl BuiltinCommands {
             let target = sorted[idx - 1].clone();
             let target_sid = target.session_id.clone();
             let resume_provider = target.stored_provider();
+            let resume_sid = resume_session_id_for_history(&target);
             let ctrl = self.controller.lock().await;
             ctrl.init_work_dir(target.project).await;
             ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
                 .await;
-            ctrl.set_pending_resume_provider(Some(resume_provider))
+            ctrl.set_pending_resume_provider(Some(resume_provider.clone()))
                 .await;
-            ctrl.set_pending_resume_session_id(
-                target
-                    .resume_session_id
-                    .clone()
-                    .or_else(|| Some(String::new())),
-            )
-            .await;
-            if target.resume_session_id.is_none() {
+            ctrl.set_pending_resume_session_id(resume_sid).await;
+            if target.resume_session_id.is_none() && resume_provider != AgentProvider::CodeWhale {
                 return t_fmt!(
                     "builtin.resume_session_missing_id",
                     SID = &target_sid[..target_sid.len().min(8)]
@@ -118,20 +114,17 @@ impl BuiltinCommands {
                     let target = sorted[idx].clone();
                     let target_sid = target.session_id.clone();
                     let resume_provider = target.stored_provider();
+                    let resume_sid = resume_session_id_for_history(&target);
                     let ctrl = self.controller.lock().await;
                     ctrl.init_work_dir(target.project).await;
                     ctrl.set_pending_resume_record_id(target.cc_gateway_id.clone())
                         .await;
-                    ctrl.set_pending_resume_provider(Some(resume_provider))
+                    ctrl.set_pending_resume_provider(Some(resume_provider.clone()))
                         .await;
-                    ctrl.set_pending_resume_session_id(
-                        target
-                            .resume_session_id
-                            .clone()
-                            .or_else(|| Some(String::new())),
-                    )
-                    .await;
-                    if target.resume_session_id.is_none() {
+                    ctrl.set_pending_resume_session_id(resume_sid).await;
+                    if target.resume_session_id.is_none()
+                        && resume_provider != AgentProvider::CodeWhale
+                    {
                         return t_fmt!(
                             "builtin.resume_session_missing_id",
                             SID = &target_sid[..target_sid.len().min(8)]
@@ -368,6 +361,16 @@ impl HistorySessionInfo {
     }
 }
 
+fn resume_session_id_for_history(target: &HistorySessionInfo) -> Option<String> {
+    match target.stored_provider() {
+        AgentProvider::CodeWhale => target
+            .resume_session_id
+            .clone()
+            .or_else(|| target.cc_gateway_id.clone()),
+        _ => target.resume_session_id.clone(),
+    }
+}
+
 /// Load TUI-created Claude sessions from the cc-gateway database.
 fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
     let channels = crate::db::load_all_channel_sessions();
@@ -381,7 +384,7 @@ fn load_tui_db_sessions() -> Vec<HistorySessionInfo> {
         for s in sessions {
             let resume_session_id = s.provider_session_id.clone();
             result.push(HistorySessionInfo {
-                session_id: resume_session_id.clone().unwrap_or_else(|| s.id.clone()),
+                session_id: s.display_session_id().to_string(),
                 resume_session_id,
                 cc_gateway_id: Some(s.id),
                 provider: s.provider.clone(),

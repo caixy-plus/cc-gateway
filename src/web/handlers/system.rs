@@ -71,19 +71,11 @@ fn is_auto_changelog(body: &str) -> bool {
 }
 
 /// Fetch commit log from compare API and format it as release notes.
-async fn fetch_changelog(
-    client: &reqwest::Client,
-    current: &str,
-    latest: &str,
-) -> Option<String> {
-    let commits = crate::update::fetch_compare_commits(
-        client,
-        UPDATE_REPO,
-        &format!("v{}", current),
-        latest,
-    )
-    .await
-    .ok()?;
+async fn fetch_changelog(client: &reqwest::Client, current: &str, latest: &str) -> Option<String> {
+    let commits =
+        crate::update::fetch_compare_commits(client, UPDATE_REPO, &format!("v{}", current), latest)
+            .await
+            .ok()?;
     if commits.is_empty() {
         return None;
     }

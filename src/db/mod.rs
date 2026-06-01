@@ -407,12 +407,7 @@ fn str_to_source(s: &str) -> SessionSource {
 // PendingPairing CRUD (works with raw fields; the pairing module owns the struct)
 // ------------------------------------------------------------------
 
-pub fn insert_pending_pairing(
-    pairing_code: &str,
-    platform: &str,
-    chat_id: &str,
-    created_at: &str,
-) {
+pub fn insert_pending_pairing(pairing_code: &str, platform: &str, chat_id: &str, created_at: &str) {
     if let Err(e) = try_insert_pending_pairing(pairing_code, platform, chat_id, created_at) {
         warn!("Failed to persist pending pairing {}: {}", pairing_code, e);
     }
@@ -460,9 +455,8 @@ pub fn load_all_pending_pairings() -> Vec<(String, String, String, String)> {
 
 fn try_load_all_pending_pairings() -> Result<Vec<(String, String, String, String)>> {
     let conn = open_conn()?;
-    let mut stmt = conn.prepare(
-        "SELECT pairing_code, platform, chat_id, created_at FROM pending_pairings",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT pairing_code, platform, chat_id, created_at FROM pending_pairings")?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

@@ -214,7 +214,8 @@ impl PairingManager {
     pub fn approve(&self, pairing_code: &str) -> Option<(String, String)> {
         let entry = self.pending.remove(pairing_code)?;
         let p = entry.1;
-        self.by_chat.remove(&(p.platform.clone(), p.chat_id.clone()));
+        self.by_chat
+            .remove(&(p.platform.clone(), p.chat_id.clone()));
         db::delete_pending_pairing(&p.pairing_code);
         self.mark_approved(&p.platform, &p.chat_id);
         let result = (p.platform, p.chat_id);

@@ -681,10 +681,7 @@ pub async fn handle_permission(
             build_permission_deny(&req.request_id, reason)
         }
         _ => {
-            let body = json_error(
-                "webui.invalid_action",
-                "Action must be 'allow' or 'deny'",
-            );
+            let body = json_error("webui.invalid_action", "Action must be 'allow' or 'deny'");
             return (StatusCode::BAD_REQUEST, body.to_string());
         }
     };
@@ -692,14 +689,12 @@ pub async fn handle_permission(
     let ctrl = active.controller.lock().await;
     match ctrl.send_input(msg).await {
         Ok(()) => {
-            let body = json!({ "status": "ok", "request_id": req.request_id, "action": req.action });
+            let body =
+                json!({ "status": "ok", "request_id": req.request_id, "action": req.action });
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
-            let body = json_error(
-                "webui.failed_permission",
-                format!("Failed: {}", e),
-            );
+            let body = json_error("webui.failed_permission", format!("Failed: {}", e));
             (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
         }
     }
@@ -751,7 +746,13 @@ impl EventPollSink for WebUIEventSink {
         }
         // Structured format: first line = request_id, rest = display text.
         let content = format!("{}\n{}", request_id, body);
-        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
+        broadcast_event(
+            &self.session_id,
+            "webui",
+            &self.session_id,
+            "permission_request",
+            &content,
+        );
         Ok(())
     }
 
@@ -768,7 +769,13 @@ impl EventPollSink for WebUIEventSink {
             OPTIONS = format!("{:?}", options)
         );
         let content = format!("{}\n{}", request_id, text);
-        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
+        broadcast_event(
+            &self.session_id,
+            "webui",
+            &self.session_id,
+            "permission_request",
+            &content,
+        );
         Ok(())
     }
 
@@ -785,7 +792,13 @@ impl EventPollSink for WebUIEventSink {
             OPTIONS = format!("{:?}", options)
         );
         let content = format!("{}\n{}", request_id, text);
-        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
+        broadcast_event(
+            &self.session_id,
+            "webui",
+            &self.session_id,
+            "permission_request",
+            &content,
+        );
         Ok(())
     }
 
@@ -810,7 +823,13 @@ impl EventPollSink for WebUIEventSink {
             }
         }
         let content = format!("{}\n{}", request_id, text);
-        broadcast_event(&self.session_id, "webui", &self.session_id, "permission_request", &content);
+        broadcast_event(
+            &self.session_id,
+            "webui",
+            &self.session_id,
+            "permission_request",
+            &content,
+        );
         Ok(())
     }
 }

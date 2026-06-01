@@ -1,4 +1,4 @@
-use axum::{extract::Json, http::StatusCode};
+use axum::{extract::Json, extract::State, http::StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -157,8 +157,11 @@ pub async fn handle_cd(Json(req): Json<CdRequest>) -> (StatusCode, String) {
     (StatusCode::OK, body.to_string())
 }
 
-pub async fn handle_cd_default(Json(req): Json<SessionCmdRequest>) -> (StatusCode, String) {
-    let default_dir = shellexpand::tilde("~").to_string();
+pub async fn handle_cd_default(
+    State(state): State<super::session::AppState>,
+    Json(req): Json<SessionCmdRequest>,
+) -> (StatusCode, String) {
+    let default_dir = shellexpand::tilde(&state.default_dir).to_string();
     set_session_work_dir(req.session_id.as_deref(), default_dir.clone()).await;
     let body = json!({ "dir": default_dir });
     (StatusCode::OK, body.to_string())

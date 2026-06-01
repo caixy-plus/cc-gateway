@@ -40,11 +40,26 @@ pub(crate) struct TelegramChannelRuntime {
 
 #[derive(Clone)]
 enum TelegramCallbackAction {
-    ChangeDir { chat_id: String, path: String },
-    SetChannelAgent { chat_id: String, provider: String },
-    ResumeSession { chat_id: String, session_id: String },
-    StartNewSession { chat_id: String, work_dir: String },
-    DeleteSession { chat_id: String, session_id: String },
+    ChangeDir {
+        chat_id: String,
+        path: String,
+    },
+    SetChannelAgent {
+        chat_id: String,
+        provider: String,
+    },
+    ResumeSession {
+        chat_id: String,
+        session_id: String,
+    },
+    StartNewSession {
+        chat_id: String,
+        work_dir: String,
+    },
+    DeleteSession {
+        chat_id: String,
+        session_id: String,
+    },
     PermissionResponse {
         chat_id: String,
         request_id: String,
@@ -101,8 +116,11 @@ impl<'a> EventPollSink for TelegramEventSink<'a> {
         let markup = self
             .platform
             .permission_reply_markup(&self.chat_id_str, request_id);
-        let text =
-            crate::t_fmt!("telegram.permission_request", NAME = tool_name, ID = request_id);
+        let text = crate::t_fmt!(
+            "telegram.permission_request",
+            NAME = tool_name,
+            ID = request_id
+        );
         self.platform
             .send_message_with_markup(self.chat_id, &text, markup)
             .await?;
@@ -305,10 +323,7 @@ impl TelegramPlatform {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let error_code = body
-                .get("error_code")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+            let error_code = body.get("error_code").and_then(|v| v.as_i64()).unwrap_or(0);
             error!(
                 "[Telegram] getUpdates failed: HTTP {} error_code={} description={}",
                 status, error_code, desc
@@ -367,12 +382,7 @@ impl TelegramPlatform {
         Ok(())
     }
 
-    async fn edit_message_text(
-        &self,
-        chat_id: i64,
-        message_id: i64,
-        text: &str,
-    ) -> Result<()> {
+    async fn edit_message_text(&self, chat_id: i64, message_id: i64, text: &str) -> Result<()> {
         let url = self.api_url("editMessageText");
         let payload = json!({
             "chat_id": chat_id,
@@ -518,23 +528,17 @@ impl TelegramPlatform {
         json!({ "inline_keyboard": rows })
     }
 
-    pub(crate) fn permission_reply_markup(
-        &self,
-        chat_id: &str,
-        request_id: &str,
-    ) -> Value {
-        let allow_callback =
-            self.register_callback(TelegramCallbackAction::PermissionResponse {
-                chat_id: chat_id.to_string(),
-                request_id: request_id.to_string(),
-                allow: true,
-            });
-        let deny_callback =
-            self.register_callback(TelegramCallbackAction::PermissionResponse {
-                chat_id: chat_id.to_string(),
-                request_id: request_id.to_string(),
-                allow: false,
-            });
+    pub(crate) fn permission_reply_markup(&self, chat_id: &str, request_id: &str) -> Value {
+        let allow_callback = self.register_callback(TelegramCallbackAction::PermissionResponse {
+            chat_id: chat_id.to_string(),
+            request_id: request_id.to_string(),
+            allow: true,
+        });
+        let deny_callback = self.register_callback(TelegramCallbackAction::PermissionResponse {
+            chat_id: chat_id.to_string(),
+            request_id: request_id.to_string(),
+            allow: false,
+        });
         json!({
             "inline_keyboard": [[
                 {
@@ -571,9 +575,7 @@ impl TelegramPlatform {
             lines.push(format!("\u{1F916} {}", session.provider));
             lines.push(format!("\u{1F4C1} {}", session.work_dir));
             lines.push(format!("\u{1F552} {}", time));
-            if let Some(ref session_id) = session.provider_session_id {
-                lines.push(format!("\u{1F511} {}", session_id));
-            }
+            lines.push(format!("\u{1F511} {}", session.display_session_id()));
         }
 
         lines.join("\n")
@@ -629,15 +631,22 @@ impl TelegramPlatform {
             crate::session::pairing::GLOBAL_PAIRING_MANAGER.is_approved("telegram", &chat_id_str);
         if !approved {
             if crate::session::pairing::GLOBAL_PAIRING_MANAGER.require_pairing("telegram") {
-                let code =
-                    crate::session::pairing::GLOBAL_PAIRING_MANAGER
-                        .get_or_create_pending("telegram", &chat_id_str);
+                let code = crate::session::pairing::GLOBAL_PAIRING_MANAGER
+                    .get_or_create_pending("telegram", &chat_id_str);
                 let msg = crate::t_fmt!("pairing.wait_message", CODE = code);
                 self.send_message(chat_id, &msg).await?;
             }
             // When require_pairing is false: silently ignore unapproved chats.
             return Ok(());
         }
+
+        crate::web::state::broadcast_event(
+            &chat_id_str,
+            "telegram",
+            &chat_id_str,
+            "user",
+            &content,
+        );
 
         let runtime = self.get_channel(&chat_id_str).await;
 
@@ -877,8 +886,7 @@ impl TelegramPlatform {
                     rt.channel_session.work_dir = work_dir.clone();
                     rt.active_agent = Some(active);
                 }
-                let text =
-                    crate::command::agents::session_restarted_message(&provider, &work_dir);
+                let text = crate::command::agents::session_restarted_message(&provider, &work_dir);
                 let _ = self.edit_message_text(chat_id, message_id, &text).await;
             }
             TelegramCallbackAction::StartNewSession {
@@ -1090,7 +1098,10 @@ impl Platform for TelegramPlatform {
             self.config.bot_token.clone()
         };
         info!("[Telegram] Starting platform (token: {})", masked_token);
-        crate::platform::status::set_state("telegram", crate::platform::status::ConnectionState::Connecting);
+        crate::platform::status::set_state(
+            "telegram",
+            crate::platform::status::ConnectionState::Connecting,
+        );
         self.spawn_deliver_listener();
 
         // set_bot_commands is best-effort; failure doesn't block the bot.
@@ -1102,7 +1113,10 @@ impl Platform for TelegramPlatform {
         loop {
             match self.get_updates().await {
                 Ok(updates) => {
-                    crate::platform::status::set_state("telegram", crate::platform::status::ConnectionState::Connected);
+                    crate::platform::status::set_state(
+                        "telegram",
+                        crate::platform::status::ConnectionState::Connected,
+                    );
                     if !connected_logged {
                         info!("[Telegram] Connected, polling for updates");
                         connected_logged = true;
@@ -1119,7 +1133,10 @@ impl Platform for TelegramPlatform {
                     }
                 }
                 Err(e) => {
-                    crate::platform::status::set_state("telegram", crate::platform::status::ConnectionState::Disconnected);
+                    crate::platform::status::set_state(
+                        "telegram",
+                        crate::platform::status::ConnectionState::Disconnected,
+                    );
                     connected_logged = false;
                     error!("[Telegram] getUpdates error: {}", e);
                     sleep(Duration::from_secs(5)).await;

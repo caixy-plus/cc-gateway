@@ -647,6 +647,14 @@ impl AgentController {
         self.pending_resume_session_id.read().await.is_some()
     }
 
+    /// Bind the gateway agent session id used for CodeWhale JSONL history replay.
+    pub async fn set_gateway_history_id(&self, id: &str) {
+        let mut s = self.session.write().await;
+        if let Some(ref mut session) = *s {
+            session.set_gateway_history_id(id.to_string());
+        }
+    }
+
     pub async fn set_mcp_context(&self, ctx: McpContext) {
         let mut c = self.mcp_context.write().await;
         *c = Some(ctx);

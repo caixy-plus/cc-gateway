@@ -36,7 +36,8 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
             "show_thinking": state.show_thinking,
             "default_dir": state.default_dir,
             "agent_settings": state.agent_settings,
-        }
+        },
+        "restart_policy": crate::config::restart_policy::restart_policy_metadata(),
     }))
 }
 
@@ -49,9 +50,9 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     };
 
-    let existing = ConfigLoader::load_from(&path).unwrap_or_default();
+    let before = ConfigLoader::load_from(&path).unwrap_or_default();
 
-    let mut config = existing;
+    let mut config = before.clone();
 
     if let Some(v) = body.get("show_thinking").and_then(|v| v.as_bool()) {
         config.show_thinking = v;
@@ -133,6 +134,8 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     }
 
+    let assessment = crate::config::restart_policy::assess_config_changes(&before, &config);
+
     match ConfigLoader::save(&config) {
         Ok(()) => {
             // Apply the pairing flags live so the toggle takes effect without
@@ -141,7 +144,12 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
                 .set_require_pairing("feishu", config.feishu.require_pairing);
             crate::session::pairing::GLOBAL_PAIRING_MANAGER
                 .set_require_pairing("telegram", config.telegram.require_pairing);
-            let body = json!({ "status": "saved" });
+            let body = json!({
+                "status": "saved",
+                "requires_restart": assessment.requires_restart,
+                "restart_fields": assessment.restart_fields,
+                "live_fields": assessment.live_fields,
+            });
             (StatusCode::OK, body.to_string())
         }
         Err(e) => {
@@ -177,7 +185,9 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
 
 /// Quick toggle for a platform's `require_pairing` flag. Applies live (no
 /// restart) and persists to config.json so it survives the next restart.
-pub async fn handle_set_require_pairing(Json(body): Json<serde_json::Value>) -> (StatusCode, String) {
+pub async fn handle_set_require_pairing(
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, String) {
     let platform = body.get("platform").and_then(|v| v.as_str()).unwrap_or("");
     let required = match body.get("require_pairing").and_then(|v| v.as_bool()) {
         Some(v) => v,

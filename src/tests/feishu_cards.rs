@@ -72,3 +72,28 @@ fn session_history_resume_preserves_chat_and_receive_ids() {
     assert_eq!(value["receive_id_type"].as_str(), Some("open_id"));
     assert_eq!(value["receive_id"].as_str(), Some("ou-user"));
 }
+
+#[test]
+fn session_history_card_shows_gateway_session_id_when_provider_id_missing() {
+    let now = chrono::Utc::now();
+    let session = AgentSession {
+        id: "codewhale-session-1".to_string(),
+        channel_session_id: "channel-internal-id".to_string(),
+        provider: "codew".to_string(),
+        title: "CodeWhale work".to_string(),
+        work_dir: "/tmp/project".to_string(),
+        active: false,
+        state: AgentSessionState::Stopped,
+        provider_session_id: None,
+        created_at: now,
+        stopped_at: Some(now),
+        updated_at: Some(now),
+    };
+
+    let card = build_session_history_card(&[session], "oc-chat", "open_id", "ou-user");
+    let content = card["body"]["elements"][1]["text"]["content"]
+        .as_str()
+        .expect("history card content");
+
+    assert!(content.contains("🔑 `codewhale-session-1`"));
+}

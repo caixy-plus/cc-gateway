@@ -168,6 +168,30 @@ fn telegram_history_message_includes_feishu_level_session_details() {
     assert!(text.contains("🔑 claude-1"));
 }
 
+#[test]
+fn telegram_history_message_shows_gateway_session_id_when_provider_id_missing() {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-05-27T01:30:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let sessions = vec![AgentSession {
+        id: "codewhale-session-1".to_string(),
+        channel_session_id: "channel-1".to_string(),
+        provider: "codew".to_string(),
+        title: "CodeWhale work".to_string(),
+        work_dir: "/home/me/project".to_string(),
+        active: false,
+        state: AgentSessionState::Stopped,
+        provider_session_id: None,
+        created_at: now,
+        stopped_at: Some(now),
+        updated_at: Some(now),
+    }];
+
+    let text = TelegramPlatform::history_message_text(&sessions);
+
+    assert!(text.contains("🔑 codewhale-session-1"));
+}
+
 #[tokio::test]
 async fn telegram_get_channel_reuses_runtime_and_persists_channel() {
     let env = TestEnv::new();

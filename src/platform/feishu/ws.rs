@@ -37,13 +37,19 @@ type WsWrite = std::sync::Arc<
 impl FeishuPlatform {
     pub async fn run_websocket(&self, ws_url: &str, client_config: WsClientConfig) -> Result<()> {
         info!("Connecting to Feishu WebSocket: {}", ws_url);
-        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Connecting);
+        crate::platform::status::set_state(
+            "feishu",
+            crate::platform::status::ConnectionState::Connecting,
+        );
 
         let (ws_stream, _) = connect_async(ws_url)
             .await
             .context("Failed to connect to Feishu WebSocket")?;
         info!("Feishu WebSocket connected successfully");
-        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Connected);
+        crate::platform::status::set_state(
+            "feishu",
+            crate::platform::status::ConnectionState::Connected,
+        );
 
         let (write, mut read) = ws_stream.split();
         let write = std::sync::Arc::new(tokio::sync::Mutex::new(write));
@@ -134,7 +140,10 @@ impl FeishuPlatform {
         .await;
 
         heartbeat_handle.abort();
-        crate::platform::status::set_state("feishu", crate::platform::status::ConnectionState::Disconnected);
+        crate::platform::status::set_state(
+            "feishu",
+            crate::platform::status::ConnectionState::Disconnected,
+        );
         read_result
     }
 
@@ -416,6 +425,8 @@ impl FeishuPlatform {
             "Feishu processing message in chat {} content: {}",
             chat_id, content
         );
+
+        crate::web::state::broadcast_event(&chat_id, "feishu", &chat_id, "user", &content);
 
         // Add typing reaction
         self.on_processing_start(&message_id).await;
@@ -864,18 +875,13 @@ impl FeishuPlatform {
                     Ok(()) => {
                         let title = crate::t!("feishu.card_agent_set_title");
                         let text = crate::t_fmt!("builtin.channel_agent_set", NAME = name);
-                        let card = crate::platform::feishu::cards::build_result_card(
-                            title, &text, true,
-                        );
+                        let card =
+                            crate::platform::feishu::cards::build_result_card(title, &text, true);
                         if let Some(mid) = open_message_id {
                             let _ = self.update_interactive_card(mid, &card).await;
                         } else {
                             let _ = self
-                                .send_text_message(
-                                    &receive_id_type,
-                                    &receive_id,
-                                    &text,
-                                )
+                                .send_text_message(&receive_id_type, &receive_id, &text)
                                 .await;
                         }
                     }
@@ -889,11 +895,7 @@ impl FeishuPlatform {
                             let _ = self.update_interactive_card(mid, &card).await;
                         } else {
                             let _ = self
-                                .send_text_message(
-                                    &receive_id_type,
-                                    &receive_id,
-                                    &err_text,
-                                )
+                                .send_text_message(&receive_id_type, &receive_id, &err_text)
                                 .await;
                         }
                     }
@@ -943,11 +945,7 @@ impl FeishuPlatform {
                                 let _ = self.update_interactive_card(mid, &card).await;
                             } else {
                                 let _ = self
-                                    .send_text_message(
-                                        &receive_id_type,
-                                        &receive_id,
-                                        &text,
-                                    )
+                                    .send_text_message(&receive_id_type, &receive_id, &text)
                                     .await;
                             }
                         }
@@ -979,9 +977,7 @@ impl FeishuPlatform {
                     // Start new session — update card first to acknowledge
                     let title = crate::t!("feishu.card_starting_title");
                     let text = crate::t!("feishu.card_starting");
-                    let card = crate::platform::feishu::cards::build_result_card(
-                        title, text, true,
-                    );
+                    let card = crate::platform::feishu::cards::build_result_card(title, text, true);
                     if let Some(mid) = open_message_id {
                         let _ = self.update_interactive_card(mid, &card).await;
                     } else {
@@ -1054,20 +1050,14 @@ impl FeishuPlatform {
                                 let _ = self.update_interactive_card(mid, &card).await;
                             } else {
                                 let _ = self
-                                    .send_text_message(
-                                        &receive_id_type,
-                                        &receive_id,
-                                        &text,
-                                    )
+                                    .send_text_message(&receive_id_type, &receive_id, &text)
                                     .await;
                             }
                         }
                         Err(e) => {
                             let err_text = crate::command::agents::failed_start_agent_message(
-                                &GLOBAL_CHANNEL_SESSIONS.effective_channel_provider(
-                                    chat_id,
-                                    &self.agent_settings,
-                                ),
+                                &GLOBAL_CHANNEL_SESSIONS
+                                    .effective_channel_provider(chat_id, &self.agent_settings),
                                 e,
                             );
                             let title = crate::t!("feishu.card_resumed_title");
@@ -1078,11 +1068,7 @@ impl FeishuPlatform {
                                 let _ = self.update_interactive_card(mid, &card).await;
                             } else {
                                 let _ = self
-                                    .send_text_message(
-                                        &receive_id_type,
-                                        &receive_id,
-                                        &err_text,
-                                    )
+                                    .send_text_message(&receive_id_type, &receive_id, &err_text)
                                     .await;
                             }
                         }
@@ -1106,9 +1092,8 @@ impl FeishuPlatform {
                     };
                     let title = crate::t!("feishu.card_session_deleted_title");
                     let success = deleted;
-                    let card = crate::platform::feishu::cards::build_result_card(
-                        title, msg, success,
-                    );
+                    let card =
+                        crate::platform::feishu::cards::build_result_card(title, msg, success);
                     if let Some(mid) = open_message_id {
                         let _ = self.update_interactive_card(mid, &card).await;
                     } else {
@@ -1137,8 +1122,10 @@ impl FeishuPlatform {
                     if let Some(ref active) = runtime.active_agent {
                         let ctrl = active.controller.lock().await;
                         if is_allow {
-                            let allow_msg =
-                                crate::runtime::protocol::build_permission_allow(request_id, stored_input);
+                            let allow_msg = crate::runtime::protocol::build_permission_allow(
+                                request_id,
+                                stored_input,
+                            );
                             let _ = ctrl.send_input(allow_msg).await;
                         } else {
                             let deny_msg = crate::runtime::protocol::build_permission_deny(
@@ -1155,9 +1142,8 @@ impl FeishuPlatform {
                     } else {
                         crate::t!("feishu.card_denied")
                     };
-                    let card = crate::platform::feishu::cards::build_result_card(
-                        title, text, is_allow,
-                    );
+                    let card =
+                        crate::platform::feishu::cards::build_result_card(title, text, is_allow);
                     if let Some(mid) = open_message_id {
                         let _ = self.update_interactive_card(mid, &card).await;
                     }
@@ -1176,15 +1162,14 @@ impl FeishuPlatform {
                         .await;
                     if let Some(ref active) = runtime.active_agent {
                         let ctrl = active.controller.lock().await;
-                        let msg = crate::runtime::protocol::build_permission_allow(request_id, None);
+                        let msg =
+                            crate::runtime::protocol::build_permission_allow(request_id, None);
                         let _ = ctrl.send_input(msg).await;
                     }
                     // Update the select card to show result
                     let title = crate::t!("feishu.card_selected_title");
                     let text = crate::t!("feishu.card_selected");
-                    let card = crate::platform::feishu::cards::build_result_card(
-                        title, text, true,
-                    );
+                    let card = crate::platform::feishu::cards::build_result_card(title, text, true);
                     if let Some(mid) = open_message_id {
                         let _ = self.update_interactive_card(mid, &card).await;
                     }

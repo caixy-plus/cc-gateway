@@ -5,13 +5,13 @@ use crate::config::loader::ConfigLoader;
 use crate::config::model::{AgentConfig, AgentProvider, GatewayConfig};
 use crate::{t, t_fmt};
 
-/// First-run guided setup. Creates the config file with the user's initial
-/// choices. After this, everything is managed through the WebUI — once a config
-/// file exists, `init` is skipped (see `run_init_config`).
+/// First-run guided setup. Skipped when `config.json` already exists.
+///
+/// Always writes `config.json` before returning — including wizard errors or
+/// early interruption — so daemon / TUI / WebUI can load a real file afterward.
 pub fn run_init_config() -> Result<()> {
     let config_path = ConfigLoader::config_path()?;
 
-    // Rule 1: a config already exists → skip and point the user to the WebUI.
     if config_path.is_file() {
         println!(
             "{}",
@@ -20,42 +20,44 @@ pub fn run_init_config() -> Result<()> {
         return Ok(());
     }
 
-    ConfigLoader::ensure_config_dir()?;
+    ConfigLoader::initialize_runtime()?;
 
     println!("{}\n", t!("wizard.init_title"));
     println!("{}", t!("wizard.welcome"));
-    println!("{}", t_fmt!("wizard.location", PATH = config_path.display()));
+    println!(
+        "{}",
+        t_fmt!("wizard.location", PATH = config_path.display())
+    );
     println!("{}\n", t!("wizard.rerun"));
 
-    let mut config = GatewayConfig::default();
-    // Start from a clean slate: nothing enabled until the user opts in.
-    config.feishu.enabled = false;
-    config.feishu.app_id = String::new();
-    config.feishu.app_secret = String::new();
-    config.telegram.enabled = false;
-    config.telegram.bot_token = String::new();
+    let mut config = GatewayConfig::runtime_defaults();
+    // Baseline on disk immediately so even SIGINT / I/O errors mid-wizard still
+    // leave a usable config file (subsequent save refreshes wizard choices).
+    save_config(&config)?;
 
     let mut warnings: Vec<String> = Vec::new();
 
-    configure_agent_step(&mut config, &mut warnings)?;
-    configure_bot_step(&mut config, &mut warnings)?;
+    let wizard_result: Result<()> = (|| {
+        configure_agent_step(&mut config, &mut warnings)?;
+        configure_bot_step(&mut config, &mut warnings)?;
 
-    // Auto-generate WebUI access token for security
-    config.webui_token = Some(crate::web::middleware::generate_webui_token());
+        config.webui_token = Some(crate::web::middleware::generate_webui_token());
 
-    // Final review: surface anything incomplete but never block — the user can
-    // always finish in the WebUI.
-    println!("\n{}", t!("wizard.review_title"));
-    if warnings.is_empty() {
-        println!("{}", t!("wizard.review_ok"));
-    } else {
-        println!("{}", t!("wizard.review_has_issues"));
-        for w in &warnings {
-            println!("{}", w);
+        println!("\n{}", t!("wizard.review_title"));
+        if warnings.is_empty() {
+            println!("{}", t!("wizard.review_ok"));
+        } else {
+            println!("{}", t!("wizard.review_has_issues"));
+            for w in &warnings {
+                println!("{}", w);
+            }
         }
-    }
+        Ok(())
+    })();
 
-    save_config(&config)?;
+    save_config(&config).context("Failed to persist configuration after init")?;
+
+    wizard_result?;
 
     println!("\n{}", t!("wizard.setup_complete"));
     println!(
@@ -105,10 +107,14 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
         AgentProvider::Pi => &mut config.agent.pi,
         AgentProvider::CodeWhale => &mut config.agent.codewhale,
     };
+    target.enabled = true;
     target.default_args = Some(default_args);
 
     if !cli_installed(&defaults.cli_path) {
-        println!("{}", t_fmt!("wizard.agent_unavailable_warn", NAME = defaults.cli_path));
+        println!(
+            "{}",
+            t_fmt!("wizard.agent_unavailable_warn", NAME = defaults.cli_path)
+        );
         warnings.push(t_fmt!(
             "wizard.warn_agent_missing",
             NAME = provider.to_string()
@@ -205,4 +211,22 @@ fn save_config(config: &GatewayConfig) -> Result<()> {
     let path = ConfigLoader::config_path()?;
     ConfigLoader::save(config)
         .with_context(|| format!("Failed to write config to {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_defaults_disables_all_integrations() {
+        let config = GatewayConfig::runtime_defaults();
+
+        assert!(!config.agent.claude.enabled);
+        assert!(!config.agent.cursor.enabled);
+        assert!(!config.agent.pi.enabled);
+        assert!(!config.agent.codewhale.enabled);
+        assert!(!config.feishu.enabled);
+        assert!(!config.telegram.enabled);
+    }
+
 }

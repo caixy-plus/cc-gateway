@@ -196,7 +196,8 @@ async fn test_process_agent_event_sets_pending_for_confirm_select_question() {
         ),
     ] {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let pending_perm: Arc<RwLock<Option<(String, String, String)>>> = Arc::new(RwLock::new(None));
+        let pending_perm: Arc<RwLock<Option<(String, String, String)>>> =
+            Arc::new(RwLock::new(None));
         let session_arc: Arc<RwLock<Option<AgentRuntime>>> = Arc::new(RwLock::new(None));
         let provider_session_id: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
 
@@ -307,4 +308,3 @@ async fn codewhale_acp_spawn_if_installed() {
     assert!(controller.is_session_active().await);
     controller.stop_session().await.expect("stop session");
 }
-

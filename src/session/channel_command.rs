@@ -297,74 +297,70 @@ impl ChatCommandExecutor {
                     .list_agent_sessions_by_channel(&context.channel_id, Some(10));
                 Ok(ChatCommandOutcome::History { sessions })
             }
-            CommandAction::FlushQueue { prompt } => {
-                match context.active_agent.as_ref() {
-                    Some(active) => {
-                        let ctrl = active.controller.lock().await;
-                        let has_buffered = ctrl.has_buffered_messages().await;
-                        let busy = ctrl.is_busy();
-                        let provider = active.agent_session.stored_provider();
-                        if !busy && prompt.is_none() && !has_buffered {
-                            return Ok(ChatCommandOutcome::Reply(
-                                crate::command::agents::esc_already_idle_message(&provider),
-                            ));
-                        }
-                        if busy || has_buffered {
-                            if let Err(e) = ctrl.flush_queued_messages().await {
-                                return Ok(ChatCommandOutcome::Error(t_fmt!(
-                                    "builtin.failed_esc",
-                                    ERR = e
-                                )));
-                            }
-                        }
-                        if let Some(ref text) = prompt {
-                            match ctrl.send_message(text).await {
-                                Ok(()) => Ok(ChatCommandOutcome::Reply(
-                                    crate::command::agents::esc_with_prompt_sent_message(
-                                        &provider, text,
-                                    ),
-                                )),
-                                Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
-                                    "builtin.failed_esc",
-                                    ERR = e
-                                ))),
-                            }
-                        } else {
-                            Ok(ChatCommandOutcome::Reply(
-                                crate::command::agents::esc_sent_message(&provider),
-                            ))
+            CommandAction::FlushQueue { prompt } => match context.active_agent.as_ref() {
+                Some(active) => {
+                    let ctrl = active.controller.lock().await;
+                    let has_buffered = ctrl.has_buffered_messages().await;
+                    let busy = ctrl.is_busy();
+                    let provider = active.agent_session.stored_provider();
+                    if !busy && prompt.is_none() && !has_buffered {
+                        return Ok(ChatCommandOutcome::Reply(
+                            crate::command::agents::esc_already_idle_message(&provider),
+                        ));
+                    }
+                    if busy || has_buffered {
+                        if let Err(e) = ctrl.flush_queued_messages().await {
+                            return Ok(ChatCommandOutcome::Error(t_fmt!(
+                                "builtin.failed_esc",
+                                ERR = e
+                            )));
                         }
                     }
-                    None => Ok(ChatCommandOutcome::Error(
-                        t!("controller.no_active_session").to_string(),
-                    )),
-                }
-            }
-            CommandAction::StopGeneration => {
-                match context.active_agent.as_ref() {
-                    Some(active) => {
-                        let ctrl = active.controller.lock().await;
-                        let provider = active.agent_session.stored_provider();
-                        if !ctrl.is_busy() {
-                            return Ok(ChatCommandOutcome::Reply(
-                                crate::command::agents::stop_already_idle_message(&provider),
-                            ));
-                        }
-                        match ctrl.send_stop_generation().await {
+                    if let Some(ref text) = prompt {
+                        match ctrl.send_message(text).await {
                             Ok(()) => Ok(ChatCommandOutcome::Reply(
-                                crate::command::agents::stop_sent_message(&provider),
+                                crate::command::agents::esc_with_prompt_sent_message(
+                                    &provider, text,
+                                ),
                             )),
                             Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
-                                "builtin.failed_stop_generation",
+                                "builtin.failed_esc",
                                 ERR = e
                             ))),
                         }
+                    } else {
+                        Ok(ChatCommandOutcome::Reply(
+                            crate::command::agents::esc_sent_message(&provider),
+                        ))
                     }
-                    None => Ok(ChatCommandOutcome::Error(
-                        t!("controller.no_active_session").to_string(),
-                    )),
                 }
-            }
+                None => Ok(ChatCommandOutcome::Error(
+                    t!("controller.no_active_session").to_string(),
+                )),
+            },
+            CommandAction::StopGeneration => match context.active_agent.as_ref() {
+                Some(active) => {
+                    let ctrl = active.controller.lock().await;
+                    let provider = active.agent_session.stored_provider();
+                    if !ctrl.is_busy() {
+                        return Ok(ChatCommandOutcome::Reply(
+                            crate::command::agents::stop_already_idle_message(&provider),
+                        ));
+                    }
+                    match ctrl.send_stop_generation().await {
+                        Ok(()) => Ok(ChatCommandOutcome::Reply(
+                            crate::command::agents::stop_sent_message(&provider),
+                        )),
+                        Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                            "builtin.failed_stop_generation",
+                            ERR = e
+                        ))),
+                    }
+                }
+                None => Ok(ChatCommandOutcome::Error(
+                    t!("controller.no_active_session").to_string(),
+                )),
+            },
             CommandAction::Status => {
                 let summary = match context.active_agent.as_ref() {
                     Some(active) => {
@@ -375,35 +371,33 @@ impl ChatCommandExecutor {
                 };
                 Ok(ChatCommandOutcome::Reply(summary))
             }
-            CommandAction::ClearSession => {
-                match context.active_agent.as_ref() {
-                    Some(active) => {
-                        let agent_session_id = active.agent_session.id.clone();
-                        let ctrl = active.controller.lock().await;
-                        match ctrl.clear_session().await {
-                            Ok(_) => {
-                                drop(ctrl);
-                                GLOBAL_CHANNEL_SESSIONS
-                                    .refresh_agent_session_from_controller(
-                                        &agent_session_id,
-                                        &active.controller,
-                                    )
-                                    .await;
-                                Ok(ChatCommandOutcome::Reply(
-                                    t!("builtin.context_cleared").to_string(),
-                                ))
-                            }
-                            Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
-                                "builtin.failed_clear",
-                                ERR = e
-                            ))),
+            CommandAction::ClearSession => match context.active_agent.as_ref() {
+                Some(active) => {
+                    let agent_session_id = active.agent_session.id.clone();
+                    let ctrl = active.controller.lock().await;
+                    match ctrl.clear_session().await {
+                        Ok(_) => {
+                            drop(ctrl);
+                            GLOBAL_CHANNEL_SESSIONS
+                                .refresh_agent_session_from_controller(
+                                    &agent_session_id,
+                                    &active.controller,
+                                )
+                                .await;
+                            Ok(ChatCommandOutcome::Reply(
+                                t!("builtin.context_cleared").to_string(),
+                            ))
                         }
+                        Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                            "builtin.failed_clear",
+                            ERR = e
+                        ))),
                     }
-                    None => Ok(ChatCommandOutcome::Error(
-                        t!("controller.no_active_session").to_string(),
-                    )),
                 }
-            }
+                None => Ok(ChatCommandOutcome::Error(
+                    t!("controller.no_active_session").to_string(),
+                )),
+            },
             CommandAction::ForwardToAgent(text) => {
                 let active = match context.active_agent.clone() {
                     Some(active) => {
@@ -490,18 +484,19 @@ impl ChatCommandExecutor {
                 match context.active_agent.as_ref() {
                     Some(active) => {
                         let ctrl = active.controller.lock().await;
-                        let msg =
-                            crate::runtime::protocol::build_permission_allow(&id, None);
+                        let msg = crate::runtime::protocol::build_permission_allow(&id, None);
                         match ctrl.send_input(msg).await {
                             Ok(()) => {
                                 ctrl.clear_pending_request().await;
-                                Ok(ChatCommandOutcome::Reply(
-                                    t_fmt!("controller.permission_allowed", ID = id),
-                                ))
+                                Ok(ChatCommandOutcome::Reply(t_fmt!(
+                                    "controller.permission_allowed",
+                                    ID = id
+                                )))
                             }
-                            Err(e) => Ok(ChatCommandOutcome::Error(
-                                t_fmt!("controller.failed_permission", ERR = e),
-                            )),
+                            Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                                "controller.failed_permission",
+                                ERR = e
+                            ))),
                         }
                     }
                     None => Ok(ChatCommandOutcome::Error(
@@ -509,10 +504,7 @@ impl ChatCommandExecutor {
                     )),
                 }
             }
-            CommandAction::PermissionDeny {
-                request_id,
-                reason,
-            } => {
+            CommandAction::PermissionDeny { request_id, reason } => {
                 let id = match request_id {
                     Some(id) => id,
                     None => match context.active_agent.as_ref() {
@@ -538,18 +530,19 @@ impl ChatCommandExecutor {
                 match context.active_agent.as_ref() {
                     Some(active) => {
                         let ctrl = active.controller.lock().await;
-                        let msg =
-                            crate::runtime::protocol::build_permission_deny(&id, &reason);
+                        let msg = crate::runtime::protocol::build_permission_deny(&id, &reason);
                         match ctrl.send_input(msg).await {
                             Ok(()) => {
                                 ctrl.clear_pending_request().await;
-                                Ok(ChatCommandOutcome::Reply(
-                                    t_fmt!("controller.permission_denied", ID = id),
-                                ))
+                                Ok(ChatCommandOutcome::Reply(t_fmt!(
+                                    "controller.permission_denied",
+                                    ID = id
+                                )))
                             }
-                            Err(e) => Ok(ChatCommandOutcome::Error(
-                                t_fmt!("controller.failed_permission", ERR = e),
-                            )),
+                            Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                                "controller.failed_permission",
+                                ERR = e
+                            ))),
                         }
                     }
                     None => Ok(ChatCommandOutcome::Error(

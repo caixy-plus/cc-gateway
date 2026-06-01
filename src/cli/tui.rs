@@ -495,7 +495,9 @@ enum KeyAction {
     Quit,
     Submit(String),
     /// User confirmed the interactive permission prompt.
-    PermissionResponse { allow: bool },
+    PermissionResponse {
+        allow: bool,
+    },
 }
 
 fn handle_key(key: &KeyEvent, app: &mut App) -> KeyAction {

@@ -19,7 +19,7 @@ const DAEMON_PID_FILE: &str = "daemon.pid";
 /// Uses file locking to prevent multiple instances — the lock is held by the
 /// daemon process for its entire lifetime and automatically released on exit.
 pub async fn start(config_path: Option<PathBuf>) -> Result<()> {
-    let config_dir = ConfigLoader::ensure_config_dir()?;
+    let config_dir = ConfigLoader::initialize_runtime()?;
     let pid_file = config_dir.join(DAEMON_PID_FILE);
 
     // --- Singleton guard 1: temporary lock prevents concurrent start() races ---
@@ -187,8 +187,7 @@ pub async fn run(config_path: Option<PathBuf>) -> Result<()> {
 
     // Write PID file separately (not locked, readable by stop()/status()).
     let pid = std::process::id();
-    fs::write(&pid_file, format!("{}\n", pid))
-        .context("Failed to write PID file")?;
+    fs::write(&pid_file, format!("{}\n", pid)).context("Failed to write PID file")?;
 
     // Trim log file before initializing logging to avoid race with the writer.
     {
@@ -273,7 +272,11 @@ pub async fn stop() -> Result<()> {
                         .filter_map(|line| {
                             let pid_str = line.split(',').nth(1)?;
                             let pid = pid_str.trim_matches('"').parse::<u32>().ok()?;
-                            if pid != current_pid { Some(pid) } else { None }
+                            if pid != current_pid {
+                                Some(pid)
+                            } else {
+                                None
+                            }
                         })
                         .next()
                 });
@@ -392,7 +395,11 @@ pub async fn status() -> Result<()> {
                         .filter_map(|line| {
                             let pid_str = line.split(',').nth(1)?;
                             let pid = pid_str.trim_matches('"').parse::<u32>().ok()?;
-                            if pid != current_pid { Some(pid) } else { None }
+                            if pid != current_pid {
+                                Some(pid)
+                            } else {
+                                None
+                            }
                         })
                         .next()
                 });
@@ -477,7 +484,11 @@ async fn is_daemon_running_for_webui_check() -> Result<bool> {
                         .filter_map(|line| {
                             let pid_str = line.split(',').nth(1)?;
                             let pid = pid_str.trim_matches('"').parse::<u32>().ok()?;
-                            if pid != current_pid { Some(pid) } else { None }
+                            if pid != current_pid {
+                                Some(pid)
+                            } else {
+                                None
+                            }
                         })
                         .next()
                 });
@@ -493,15 +504,14 @@ pub async fn webui_token(refresh: bool) -> Result<()> {
     let mut config = if config_path.is_file() {
         ConfigLoader::load_from(&config_path).unwrap_or_default()
     } else {
-        ConfigLoader::ensure_config_dir()?;
-        GatewayConfig::default()
+        ConfigLoader::initialize_runtime()?;
+        GatewayConfig::runtime_defaults()
     };
 
     let generated = if refresh || config.webui_token.is_none() {
         let new_token = crate::web::middleware::generate_webui_token();
         config.webui_token = Some(new_token.clone());
-        ConfigLoader::save(&config)
-            .context("Failed to save config with new token")?;
+        ConfigLoader::save(&config).context("Failed to save config with new token")?;
         true
     } else {
         false
@@ -511,10 +521,16 @@ pub async fn webui_token(refresh: bool) -> Result<()> {
     let url = if config.bind_address == "0.0.0.0" || config.bind_address == "::" {
         format!("http://127.0.0.1:{}?token={}", config.port, token)
     } else {
-        format!("http://{}:{}?token={}", config.bind_address, config.port, token)
+        format!(
+            "http://{}:{}?token={}",
+            config.bind_address, config.port, token
+        )
     };
 
-    println!("{}", t_fmt!("daemon.webui_token_header", TOKEN = token.as_str()));
+    println!(
+        "{}",
+        t_fmt!("daemon.webui_token_header", TOKEN = token.as_str())
+    );
     if generated {
         if refresh {
             println!("{}", t!("daemon.webui_token_refreshed"));

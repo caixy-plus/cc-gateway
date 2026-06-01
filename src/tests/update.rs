@@ -73,6 +73,69 @@ fn test_build_download_url() {
     );
 }
 
+#[test]
+fn windows_update_script_downloads_installer_file_instead_of_iex() {
+    let script = crate::update::build_windows_update_install_script(
+        1234,
+        true,
+        Some(std::path::Path::new(r"C:\Users\me\.cc-gateway\config.json")),
+        r"C:\Users\me\AppData\Local\cc-gateway\cc-gateway.exe",
+        r"C:\Users\me\AppData\Local\Temp\cc-gateway-install.ps1",
+    );
+
+    assert!(script.contains("Invoke-WebRequest"));
+    assert!(script.contains("-OutFile $installer"));
+    assert!(script.contains("& $installer"));
+    assert!(script.contains("& $gateway @restartArgs"));
+    assert!(script.contains(r"Remove-Item Env:\CC_GATEWAY_SKIP_SETUP"));
+    assert!(!script.contains("| iex"));
+    assert!(!script.contains("|iex"));
+}
+
+#[test]
+fn windows_install_skip_setup_returns_to_update_wrapper() {
+    let script = include_str!("../../install.ps1");
+
+    assert!(script.contains("if ($env:CC_GATEWAY_SKIP_SETUP)"));
+    assert!(script.contains("return"));
+    assert!(!script.contains("exit 0"));
+}
+
+#[test]
+fn windows_install_script_does_not_prefix_empty_user_path_with_separator() {
+    let script = include_str!("../../install.ps1");
+
+    assert!(script.contains(r#"$sep = if ($UserPath) { ";" } else { "" }"#));
+    assert!(script.contains(r#""$UserPath$sep$InstallDir""#));
+    assert!(!script.contains(r#""$UserPath;$InstallDir""#));
+}
+
+#[test]
+fn windows_uninstall_script_removes_path_entry_with_trailing_slash_variants() {
+    let script = include_str!("../../uninstall.ps1");
+
+    assert!(script.contains(r#"$installDirNorm = $InstallDir.TrimEnd('\')"#));
+    assert!(script.contains(r#"$_.TrimEnd('\') -ine $installDirNorm"#));
+}
+
+#[test]
+fn unix_install_script_does_not_write_shell_path_for_default_install_dir() {
+    let script = include_str!("../../install.sh");
+
+    assert!(script.contains(r#"DEFAULT_INSTALL_DIR="$HOME/.local/bin""#));
+    assert!(script.contains(r#"if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then"#));
+    assert!(script.contains("standard user bin path"));
+}
+
+#[test]
+fn unix_uninstall_script_does_not_modify_shell_path_imports() {
+    let script = include_str!("../../uninstall.sh");
+
+    assert!(!script.contains(".zshrc"));
+    assert!(!script.contains(".bashrc"));
+    assert!(!script.contains("export PATH="));
+}
+
 #[tokio::test]
 async fn test_download_and_replace() {
     // Start a tiny HTTP server that serves a fixed binary payload.

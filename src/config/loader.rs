@@ -9,36 +9,25 @@ use crate::utils::env::substitute_env_vars;
 pub struct ConfigLoader;
 
 impl ConfigLoader {
+    /// Prepare `~/.cc-gateway` (and `logs/`) then load `config.json` if present.
+    /// Does **not** create `config.json` — only `cc-gateway init` (any exit) or
+    /// an explicit save (e.g. WebUI) writes that file.
     pub fn load() -> Result<GatewayConfig> {
-        // Guarantee a config file always exists, even if the user bypassed
-        // `cc-gateway init` and started the daemon / TUI / WebUI directly. Once
-        // the file exists, `init` is skipped and all further changes happen in
-        // the WebUI.
-        let path = Self::ensure_config_file()?;
-        Self::load_from(&path)
-    }
-
-    /// Create a default config file at the standard path if one does not exist.
-    /// Idempotent: never overwrites an existing file. Returns the config path.
-    pub fn ensure_config_file() -> Result<PathBuf> {
+        Self::initialize_runtime()?;
         let path = Self::config_path()?;
-        Self::ensure_config_file_at(&path)?;
-        Ok(path)
+        if path.is_file() {
+            Self::load_from(&path)
+        } else {
+            Ok(GatewayConfig::runtime_defaults())
+        }
     }
 
-    /// Path-parameterized core of [`ensure_config_file`], split out for testing.
-    fn ensure_config_file_at(path: &Path) -> Result<()> {
-        if path.is_file() {
-            return Ok(());
-        }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config dir {}", parent.display()))?;
-        }
-        let content = serde_json::to_string_pretty(&GatewayConfig::default())?;
-        fs::write(path, content)
-            .with_context(|| format!("Failed to write default config to {}", path.display()))?;
-        Ok(())
+    /// Create config and log directories without writing `config.json`.
+    pub fn initialize_runtime() -> Result<PathBuf> {
+        let dir = Self::ensure_config_dir()?;
+        fs::create_dir_all(dir.join("logs"))
+            .with_context(|| format!("Failed to create logs dir {}", dir.display()))?;
+        Ok(dir)
     }
 
     pub fn load_from(path: &Path) -> Result<GatewayConfig> {
@@ -162,23 +151,43 @@ mod tests {
     }
 
     #[test]
-    fn ensure_config_file_creates_default_then_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("cc-gateway-ensure-{}", std::process::id()));
-        let path = dir.join("nested").join("config.json");
+    fn save_writes_config_json() {
+        let dir = std::env::temp_dir().join(format!("cc-gateway-save-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &dir);
 
-        // First call creates a parseable default config (and parent dirs).
-        assert!(!path.is_file());
-        ConfigLoader::ensure_config_file_at(&path).unwrap();
-        assert!(path.is_file());
-        let config = ConfigLoader::load_from(&path).unwrap();
-        assert_eq!(config.port, GatewayConfig::default().port);
+        let config_path = dir.join(".cc-gateway").join("config.json");
+        assert!(!config_path.is_file());
+        ConfigLoader::save(&GatewayConfig::runtime_defaults()).unwrap();
+        assert!(config_path.is_file());
 
-        // Second call must NOT overwrite a user-modified file.
-        fs::write(&path, r#"{"port": 12345}"#).unwrap();
-        ConfigLoader::ensure_config_file_at(&path).unwrap();
-        assert_eq!(ConfigLoader::load_from(&path).unwrap().port, 12345);
+        match original_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 
+    #[test]
+    fn load_does_not_create_config_json() {
+        let dir = std::env::temp_dir().join(format!("cc-gateway-load-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &dir);
+
+        let config_path = dir.join(".cc-gateway").join("config.json");
+        assert!(!config_path.is_file());
+
+        let config = ConfigLoader::load().unwrap();
+        assert!(!config_path.is_file());
+        assert!(!config.agent.claude.enabled);
+        assert!(ConfigLoader::initialize_runtime().is_ok());
+
+        match original_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

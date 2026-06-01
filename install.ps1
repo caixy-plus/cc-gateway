@@ -96,7 +96,7 @@ if ($env:CC_GATEWAY_SKIP_SETUP) {
     Remove-Item -Force $TempFile -ErrorAction SilentlyContinue
     Write-Msg "" ""
     Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
-    exit 0
+    return
 }
 
 # Config directory (actual config initialization is handled by `cc-gateway init`)
@@ -106,7 +106,8 @@ New-Item -ItemType Directory -Path "$ConfigDir\logs" -Force | Out-Null
 # Add to PATH
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$InstallDir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+    $sep = if ($UserPath) { ";" } else { "" }
+    [Environment]::SetEnvironmentVariable("Path", "$UserPath$sep$InstallDir", "User")
     Write-Msg "Added $InstallDir to PATH" "已将 $InstallDir 添加到 PATH"
 }
 
