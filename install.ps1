@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
 $Repo = "caixy-plus/cc-gateway"
@@ -17,6 +17,17 @@ function Get-LangCode {
 }
 
 $lang = Get-LangCode
+
+# PowerShell 5.1 executes .ps1 without a UTF-8 BOM using the system ANSI code page
+# (e.g. GBK on Chinese Windows), which breaks Chinese strings after Invoke-WebRequest
+# saves UTF-8 from GitHub. Re-write downloaded scripts with a BOM before dot-sourcing.
+function Set-ScriptUtf8Bom([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    $utf8Bom = New-Object System.Text.UTF8Encoding $true
+    $text = [System.IO.File]::ReadAllText($Path, $utf8NoBom)
+    [System.IO.File]::WriteAllText($Path, $text, $utf8Bom)
+}
 
 function Write-Msg($en, $zh) {
     if ($lang -eq 'zh') {
@@ -138,7 +149,8 @@ Write-Msg "" ""
 Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gateway 已成功安装到 $InstallDir\$Binary.exe"
 Write-Msg "Run '$Binary --help' to get started" "运行 '$Binary --help' 开始使用"
 Write-Msg "Open WebUI: '$Binary webui' (starts daemon if needed)" "打开 WebUI：'$Binary webui'（如未启动会自动 start）"
-Write-Msg "If daemon start looks stuck, run: '$Binary status' and '$Binary log -n 200'" "若守护进程启动疑似卡住，请运行：'$Binary status' 和 '$Binary log -n 200'"
+$stuckHintZh = "若守护进程启动疑似卡住，请运行：{0} status 和 {1} log -n 200" -f $Binary, $Binary
+Write-Msg "If daemon start looks stuck, run: '$Binary status' and '$Binary log -n 200'" $stuckHintZh
 $docsScript = $null
 $docsTmp = $null
 if ($PSScriptRoot) {
@@ -149,6 +161,7 @@ if (-not $docsScript) {
     $docsTmp = Join-Path $env:TEMP "cc-gateway-install-docs.ps1"
     try {
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$Repo/main/scripts/install-docs.ps1" -OutFile $docsTmp -UseBasicParsing
+        Set-ScriptUtf8Bom $docsTmp
         $docsScript = $docsTmp
     } catch {
         $docsScript = $null

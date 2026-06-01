@@ -563,7 +563,7 @@ pub(crate) fn build_windows_update_install_script(
         None => "@('restart')".to_string(),
     };
     format!(
-        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $restart = {restart}; $gateway = {gateway}; $installer = {installer}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; try {{ $env:{skip_env} = '1'; Invoke-WebRequest -UseBasicParsing -Uri {install_url} -OutFile $installer; & $installer; if (-not $?) {{ throw "install script failed" }}; if ($restart) {{ & $gateway @restartArgs }} }} finally {{ Remove-Item -LiteralPath $installer -ErrorAction SilentlyContinue; Remove-Item Env:\{skip_env} -ErrorAction SilentlyContinue }}"#,
+        r#"$ErrorActionPreference = 'Stop'; $pidToWait = {updater_pid}; $restart = {restart}; $gateway = {gateway}; $installer = {installer}; $restartArgs = {restart_args}; while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; try {{ $env:{skip_env} = '1'; Invoke-WebRequest -UseBasicParsing -Uri {install_url} -OutFile $installer; $utf8NoBom = New-Object System.Text.UTF8Encoding $false; $utf8Bom = New-Object System.Text.UTF8Encoding $true; $installText = [System.IO.File]::ReadAllText($installer, $utf8NoBom); [System.IO.File]::WriteAllText($installer, $installText, $utf8Bom); & $installer; if (-not $?) {{ throw "install script failed" }}; if ($restart) {{ & $gateway @restartArgs }} }} finally {{ Remove-Item -LiteralPath $installer -ErrorAction SilentlyContinue; Remove-Item Env:\{skip_env} -ErrorAction SilentlyContinue }}"#,
         updater_pid = updater_pid,
         restart = restart,
         gateway = powershell_quote(gateway),

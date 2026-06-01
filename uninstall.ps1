@@ -1,4 +1,4 @@
-# cc-gateway uninstaller (Windows)
+﻿# cc-gateway uninstaller (Windows)
 #
 # Removes the binary, install directory, the User PATH entry, and (unless
 # -KeepData / $env:CCG_KEEP_DATA=1) the data directory.

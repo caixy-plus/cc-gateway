@@ -1,4 +1,4 @@
-# Shared documentation links printed after install / install_local.
+﻿# Shared documentation links printed after install / install_local.
 # Dot-sourced by install.ps1, install_local.ps1
 
 function Print-InstallDocs {

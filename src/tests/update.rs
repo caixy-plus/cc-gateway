@@ -90,6 +90,28 @@ fn windows_update_script_downloads_installer_file_instead_of_iex() {
     assert!(script.contains(r"Remove-Item Env:\CC_GATEWAY_SKIP_SETUP"));
     assert!(!script.contains("| iex"));
     assert!(!script.contains("|iex"));
+    assert!(script.contains("UTF8Encoding"));
+    assert!(script.contains("WriteAllText($installer"));
+}
+
+#[test]
+fn windows_install_ps1_starts_with_utf8_bom() {
+    let bytes = include_bytes!("../../install.ps1");
+    assert_eq!(
+        &bytes[..3],
+        &[0xEF, 0xBB, 0xBF],
+        "install.ps1 must include UTF-8 BOM for Windows PowerShell 5.1"
+    );
+}
+
+#[test]
+fn windows_install_docs_ps1_starts_with_utf8_bom() {
+    let bytes = include_bytes!("../../scripts/install-docs.ps1");
+    assert_eq!(
+        &bytes[..3],
+        &[0xEF, 0xBB, 0xBF],
+        "scripts/install-docs.ps1 must include UTF-8 BOM for Windows PowerShell 5.1"
+    );
 }
 
 #[test]
