@@ -95,6 +95,16 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
         }
     }
 
+    if let Some(agent) = obj.get_mut("agent").and_then(|a| a.as_object_mut()) {
+        agent.remove("codewhale");
+        if matches!(
+            agent.get("default").and_then(|v| v.as_str()),
+            Some("codew") | Some("codewhale")
+        ) {
+            agent.insert("default".to_string(), json!("claude"));
+        }
+    }
+
     if let Some(agent) = obj.get("agent").cloned() {
         if agent.get("provider").is_some() && agent.get("default").is_none() {
             let provider = agent
@@ -135,6 +145,22 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
 mod tests {
     use super::*;
     use crate::config::model::{AgentProvider, GatewayConfig};
+
+    #[test]
+    fn upgrade_strips_removed_codewhale_profile() {
+        let raw = json!({
+            "agent": {
+                "default": "codew",
+                "claude": {},
+                "cursor": {},
+                "pi": {},
+                "codewhale": { "enabled": true }
+            }
+        });
+        let upgraded = upgrade_config_json(raw);
+        let config: GatewayConfig = serde_json::from_value(upgraded).unwrap();
+        assert_eq!(config.agent.default, AgentProvider::Claude);
+    }
 
     #[test]
     fn upgrade_top_level_claude_to_agent_profiles() {

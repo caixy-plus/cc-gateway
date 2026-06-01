@@ -85,7 +85,7 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 | 字段 | 类型 | 默认值 | 说明 |
 |-------|------|---------|------|
 | `default` | string | `"claude"` | `/agent` 未指定时的默认智能体 |
-| `<provider>` | object | — | 各 provider 配置（`claude`、`cursor`、`pi`、`codewhale`、`opencode` 等） |
+| `<provider>` | object | — | 各 provider 配置（`claude`、`cursor`、`pi`、`opencode` 等） |
 
 每个 provider 配置：
 

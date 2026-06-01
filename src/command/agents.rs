@@ -119,7 +119,6 @@ pub fn stop_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::Claude => t!("builtin.stop_sent_claude").to_string(),
         AgentProvider::Cursor => t!("builtin.stop_sent_cursor").to_string(),
         AgentProvider::Pi => t!("builtin.stop_sent_pi").to_string(),
-        AgentProvider::CodeWhale => t!("builtin.stop_sent_codewhale").to_string(),
         AgentProvider::OpenCode => t!("builtin.stop_sent_opencode").to_string(),
     }
 }
@@ -130,7 +129,6 @@ pub fn esc_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::Claude => t!("builtin.esc_sent_claude").to_string(),
         AgentProvider::Cursor => t!("builtin.esc_sent_cursor").to_string(),
         AgentProvider::Pi => t!("builtin.esc_sent_pi").to_string(),
-        AgentProvider::CodeWhale => t!("builtin.esc_sent_codewhale").to_string(),
         AgentProvider::OpenCode => t!("builtin.esc_sent_opencode").to_string(),
     }
 }
@@ -141,7 +139,6 @@ pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> Stri
         AgentProvider::Claude => t_fmt!("builtin.esc_with_prompt_sent_claude", MSG = msg),
         AgentProvider::Cursor => t_fmt!("builtin.esc_with_prompt_sent_cursor", MSG = msg),
         AgentProvider::Pi => t_fmt!("builtin.esc_with_prompt_sent_pi", MSG = msg),
-        AgentProvider::CodeWhale => t_fmt!("builtin.esc_with_prompt_sent_codewhale", MSG = msg),
         AgentProvider::OpenCode => t_fmt!("builtin.esc_with_prompt_sent_opencode", MSG = msg),
     }
 }
@@ -183,8 +180,8 @@ mod tests {
     fn build_provider_items_marks_current_default() {
         let profiles = test_profiles_both();
         let items = build_provider_items(&profiles, &AgentProvider::Cursor);
-        // All five providers enabled by default
-        assert_eq!(items.len(), 5);
+        // All four providers enabled by default
+        assert_eq!(items.len(), 4);
         assert!(items.iter().any(|(label, _)| label.contains("claude")));
         assert!(items.iter().any(|(label, _)| label.contains("cursor")));
     }
@@ -217,7 +214,7 @@ mod tests {
         let profiles = test_profiles_both();
         let available = available_providers(&profiles);
         // All four providers default to enabled=true
-        assert_eq!(available.len(), 5);
+        assert_eq!(available.len(), 4);
         assert!(available.contains(&AgentProvider::Claude));
         assert!(available.contains(&AgentProvider::Cursor));
     }
@@ -233,9 +230,8 @@ mod tests {
             ..Default::default()
         };
         let available = available_providers(&profiles);
-        // claude is enabled (default), cursor is disabled, pi, codewhale & opencode are
-        // enabled by default → 4 total.
-        assert_eq!(available.len(), 4);
+        // claude is enabled (default), cursor is disabled, pi & opencode enabled by default → 3 total.
+        assert_eq!(available.len(), 3);
         assert!(available.contains(&AgentProvider::Claude));
     }
 
@@ -251,10 +247,6 @@ mod tests {
                 ..Default::default()
             },
             pi: AgentProviderConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            codewhale: AgentProviderConfig {
                 enabled: false,
                 ..Default::default()
             },

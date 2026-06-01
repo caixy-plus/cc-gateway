@@ -7,7 +7,7 @@ use tracing::debug;
 use crate::runtime::controller::{AgentController, ControllerEvent};
 
 /// After `Done`, keep draining the event channel briefly so late ACP `session/update`
-/// chunks (Cursor/CodeWhale) are not dropped when the prompt RPC returns early.
+/// chunks (Cursor/OpenCode ACP) are not dropped when the prompt RPC returns early.
 const LATE_EVENT_GRACE: Duration = Duration::from_millis(2000);
 
 /// Buffers assistant text for one agent turn; platforms flush on `Done` / errors.

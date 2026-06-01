@@ -1,7 +1,6 @@
 mod agent_controller;
 mod channel_agent;
 mod chat_command_executor;
-mod codewhale_context;
 mod command_router;
 mod config_model;
 mod core_flow;

@@ -16,7 +16,7 @@ pub struct AgentProviderDef {
     pub display_name: &'static str,
     /// Binary checked by `cc-gateway init` / wizard (`which` on PATH).
     pub cli_binary: &'static str,
-    /// Extra `/agent <alias>` tokens (e.g. `codew` → CodeWhale).
+    /// Extra `/agent <alias>` tokens beyond `id`.
     pub slash_aliases: &'static [&'static str],
 }
 
@@ -41,13 +41,6 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
         display_name: "pi",
         cli_binary: "pi",
         slash_aliases: &[],
-    },
-    AgentProviderDef {
-        provider: AgentProvider::CodeWhale,
-        id: "codewhale",
-        display_name: "codew",
-        cli_binary: "codewhale",
-        slash_aliases: &["codew"],
     },
     AgentProviderDef {
         provider: AgentProvider::OpenCode,
@@ -84,7 +77,6 @@ pub fn profile_for_def<'a>(
         AgentProvider::Claude => &profiles.claude,
         AgentProvider::Cursor => &profiles.cursor,
         AgentProvider::Pi => &profiles.pi,
-        AgentProvider::CodeWhale => &profiles.codewhale,
         AgentProvider::OpenCode => &profiles.opencode,
     }
 }
@@ -97,7 +89,6 @@ pub fn profile_mut_for_def<'a>(
         AgentProvider::Claude => &mut profiles.claude,
         AgentProvider::Cursor => &mut profiles.cursor,
         AgentProvider::Pi => &mut profiles.pi,
-        AgentProvider::CodeWhale => &mut profiles.codewhale,
         AgentProvider::OpenCode => &mut profiles.opencode,
     }
 }
@@ -154,15 +145,10 @@ mod tests {
 
     #[test]
     fn registry_lists_all_provider_variants() {
-        assert_eq!(AGENT_PROVIDER_DEFS.len(), 5);
+        assert_eq!(AGENT_PROVIDER_DEFS.len(), 4);
         for def in AGENT_PROVIDER_DEFS {
             assert_eq!(def_for_provider(def.provider.clone()).id, def.id);
         }
-    }
-
-    #[test]
-    fn parse_codew_alias_to_codewhale() {
-        assert_eq!(parse_provider_id("codew"), Some(AgentProvider::CodeWhale));
     }
 
     #[test]
@@ -197,7 +183,6 @@ mod tests {
         assert!(profiles.claude.enabled);
         assert!(profiles.cursor.enabled);
         assert!(profiles.pi.enabled);
-        assert!(!profiles.codewhale.enabled);
         assert!(!profiles.opencode.enabled);
     }
 

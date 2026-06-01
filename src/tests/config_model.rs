@@ -202,28 +202,6 @@ fn agent_config_serde_roundtrip() {
 }
 
 #[test]
-fn codewhale_yolo_in_default_args_maps_to_allow_and_is_not_passed_to_cli() {
-    let mut profiles = AgentProfiles::default();
-    profiles.codewhale.enabled = true;
-    profiles.codewhale.default_args = Some("--yolo".to_string());
-
-    let cfg = profiles.config_for_provider(Some(AgentProvider::CodeWhale));
-    assert_eq!(cfg.default_args, "");
-    assert_eq!(cfg.permission, "allow");
-}
-
-#[test]
-fn codewhale_explicit_permission_overrides_yolo_semantics() {
-    let mut profiles = AgentProfiles::default();
-    profiles.codewhale.enabled = true;
-    profiles.codewhale.default_args = Some("--yolo".to_string());
-    profiles.codewhale.permission = Some("prompt".to_string());
-
-    let cfg = profiles.config_for_provider(Some(AgentProvider::CodeWhale));
-    assert_eq!(cfg.permission, "prompt");
-}
-
-#[test]
 fn opencode_default_config_uses_opencode_cli() {
     let cfg = AgentConfig::default_for_provider(AgentProvider::OpenCode);
     assert_eq!(cfg.cli_path, "opencode");
@@ -239,12 +217,12 @@ fn opencode_parse_str_recognizes_provider_id() {
 }
 
 #[test]
-fn codewhale_normalization_strips_other_cursor_only_default_args() {
+fn pi_normalization_strips_cursor_only_default_args() {
     let mut profiles = AgentProfiles::default();
-    profiles.codewhale.enabled = true;
-    profiles.codewhale.default_args = Some("--force --print".to_string());
+    profiles.pi.enabled = true;
+    profiles.pi.default_args = Some("--force --print".to_string());
 
-    let cfg = profiles.config_for_provider(Some(AgentProvider::CodeWhale));
+    let cfg = profiles.config_for_provider(Some(AgentProvider::Pi));
     assert_eq!(cfg.default_args, "");
 }
 

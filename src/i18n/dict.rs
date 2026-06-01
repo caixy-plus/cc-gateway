@@ -612,10 +612,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
             Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
         },
-        "builtin.esc_sent_codewhale" => match lang {
-            Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
-            Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
-        },
         "builtin.esc_sent_opencode" => match lang {
             Language::En => "ESC sent — current generation cancelled via ACP.",
             Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
@@ -644,10 +640,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "Message forwarded: {MSG}",
             Language::ZhCN => "消息已转发：{MSG}",
         },
-        "builtin.esc_with_prompt_sent_codewhale" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
         "builtin.esc_with_prompt_sent_opencode" => match lang {
             Language::En => "Message forwarded: {MSG}",
             Language::ZhCN => "消息已转发：{MSG}",
@@ -671,10 +663,6 @@ pub fn t(key: &str) -> &str {
         "builtin.stop_sent_pi" => match lang {
             Language::En => "Stop sent — current operation aborted.",
             Language::ZhCN => "Stop 已发送 — 已中止当前操作。",
-        },
-        "builtin.stop_sent_codewhale" => match lang {
-            Language::En => "Stop sent — the running CodeWhale process will be killed.",
-            Language::ZhCN => "Stop 已发送 — 正在运行的 CodeWhale 进程将被终止。",
         },
         "builtin.stop_sent_opencode" => match lang {
             Language::En => "Stop sent — current generation cancelled via ACP.",
@@ -1147,10 +1135,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "Cursor session not found ({ID}); a new session was started. If you rely on flags like --yolo/--print, consider creating a new session explicitly.",
             Language::ZhCN => "未找到 Cursor 会话（{ID}），已自动新建会话。如果你依赖 --yolo/--print 等启动参数，建议显式新建会话。",
         },
-        "codewhale.session_not_found_new_session" => match lang {
-            Language::En => "CodeWhale session not found ({ID}); a new session was started.",
-            Language::ZhCN => "未找到 CodeWhale 会话（{ID}），已自动新建会话。",
-        },
         "opencode.session_not_found_new_session" => match lang {
             Language::En => "OpenCode session not found ({ID}); a new session was started. Run `opencode auth login` if authentication fails.",
             Language::ZhCN => "未找到 OpenCode 会话（{ID}），已自动新建会话。若认证失败，请在终端运行 `opencode auth login`。",
@@ -1168,8 +1152,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "其他文本将直接发送给活动智能体。",
         },
         "telegram.help_text" => match lang {
-            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, codew).\nAny other text will be forwarded to the active agent.",
-            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、codew）。\n其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode).\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode）。\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",

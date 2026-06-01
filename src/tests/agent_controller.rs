@@ -275,36 +275,3 @@ async fn test_get_pending_request_and_clear() {
     }
     assert!(pending_perm.read().await.is_none());
 }
-
-#[tokio::test]
-async fn codewhale_acp_spawn_if_installed() {
-    if std::process::Command::new("codewhale")
-        .arg("--help")
-        .output()
-        .is_err()
-    {
-        return;
-    }
-
-    let home = dirs::home_dir().expect("home dir");
-    let mut profiles = crate::config::model::AgentProfiles::default();
-    profiles.default = crate::config::model::AgentProvider::CodeWhale;
-    profiles.codewhale.enabled = true;
-
-    let controller = AgentController::new(profiles, false);
-    let result = controller
-        .start_session_with_provider(
-            home.to_string_lossy().to_string(),
-            vec![],
-            Some(crate::config::model::AgentProvider::CodeWhale),
-        )
-        .await;
-
-    assert!(
-        result.is_ok(),
-        "CodeWhale ACP session should start when codewhale is installed: {:?}",
-        result.err()
-    );
-    assert!(controller.is_session_active().await);
-    controller.stop_session().await.expect("stop session");
-}

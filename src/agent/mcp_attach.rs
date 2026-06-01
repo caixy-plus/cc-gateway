@@ -14,7 +14,7 @@ use crate::runtime::file_delivery::{McpContext, MCP_TARGET_ENV};
 pub enum ProviderMcpSupport {
     /// Claude Code `--mcp-config` JSON file.
     ClaudeMcpConfig,
-    /// ACP `session/new` / `session/load` `mcpServers` array (Cursor, CodeWhale).
+    /// ACP `session/new` / `session/load` `mcpServers` array (Cursor, OpenCode).
     AcpSession,
     /// Not wired yet (Pi RPC has no MCP hook in cc-gateway).
     Unsupported,
@@ -23,9 +23,7 @@ pub enum ProviderMcpSupport {
 pub fn provider_mcp_support(provider: AgentProvider) -> ProviderMcpSupport {
     match provider {
         AgentProvider::Claude => ProviderMcpSupport::ClaudeMcpConfig,
-        AgentProvider::Cursor | AgentProvider::CodeWhale | AgentProvider::OpenCode => {
-            ProviderMcpSupport::AcpSession
-        }
+        AgentProvider::Cursor | AgentProvider::OpenCode => ProviderMcpSupport::AcpSession,
         AgentProvider::Pi => ProviderMcpSupport::Unsupported,
     }
 }
@@ -147,10 +145,6 @@ mod tests {
         );
         assert_eq!(
             provider_mcp_support(AgentProvider::Cursor),
-            ProviderMcpSupport::AcpSession
-        );
-        assert_eq!(
-            provider_mcp_support(AgentProvider::CodeWhale),
             ProviderMcpSupport::AcpSession
         );
         assert_eq!(

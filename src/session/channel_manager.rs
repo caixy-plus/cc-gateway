@@ -493,12 +493,6 @@ impl ChannelManager {
             ctrl.init_work_dir(work_dir.clone()).await;
             ctrl.start_session_with_provider(work_dir.clone(), args.args, args.provider_override)
                 .await?;
-            // Only bind gateway_history_id for fresh sessions (no resume).
-            // For resumed sessions, the history key is already set from
-            // resume_session_id during spawn — don't overwrite it.
-            if args.resume_session_id.is_none() {
-                ctrl.set_gateway_history_id(&agent_session_id).await;
-            }
         }
 
         // Use the validated path the controller applied at spawn (matches ACP `cwd` / process cwd).
@@ -635,11 +629,7 @@ impl ChannelManager {
                 _ => true,
             };
             if try_resume {
-                let resume_sid = match stored_provider {
-                    AgentProvider::CodeWhale => Some(existing.id.clone()),
-                    _ => existing.resume_provider_session_id(),
-                };
-                if let Some(sid) = resume_sid {
+                if let Some(sid) = existing.resume_provider_session_id() {
                     ctrl.set_pending_resume_session_id(Some(sid)).await;
                 }
             }
@@ -668,12 +658,6 @@ impl ChannelManager {
             )
         };
 
-        // CodeWhale ACP sessions are ephemeral — don't persist provider_session_id.
-        let persistable_session_id = match resumed_provider.as_str() {
-            "codewhale" => None,
-            _ => new_provider_session_id,
-        };
-
         let mut session = existing;
         let is_webui_channel = self
             .get_channel(&session.channel_session_id)
@@ -689,7 +673,7 @@ impl ChannelManager {
         session.state = AgentSessionState::Active;
         session.work_dir = work_dir.clone();
         session.provider = resumed_provider;
-        session.provider_session_id = persistable_session_id;
+        session.provider_session_id = new_provider_session_id;
         session.updated_at = Some(Utc::now());
         session.stopped_at = None;
 
@@ -719,11 +703,7 @@ impl ChannelManager {
 
         {
             let ctrl = controller.lock().await;
-            let resume_sid = match stored_provider {
-                AgentProvider::CodeWhale => Some(existing.id.clone()),
-                _ => existing.resume_provider_session_id(),
-            };
-            if let Some(sid) = resume_sid {
+            if let Some(sid) = existing.resume_provider_session_id() {
                 ctrl.set_pending_resume_session_id(Some(sid)).await;
             }
             let provider = ctrl
@@ -748,12 +728,6 @@ impl ChannelManager {
             )
         };
 
-        // CodeWhale ACP sessions are ephemeral — don't persist provider_session_id.
-        let persistable_session_id = match resumed_provider.as_str() {
-            "codewhale" => None,
-            _ => new_provider_session_id,
-        };
-
         let mut session = existing;
         let is_webui_channel = self
             .get_channel(&session.channel_session_id)
@@ -769,7 +743,7 @@ impl ChannelManager {
         session.state = AgentSessionState::Active;
         session.work_dir = work_dir.clone();
         session.provider = resumed_provider;
-        session.provider_session_id = persistable_session_id;
+        session.provider_session_id = new_provider_session_id;
         session.updated_at = Some(Utc::now());
         session.stopped_at = None;
 

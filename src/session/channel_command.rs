@@ -123,9 +123,9 @@ impl ChatCommandExecutor {
         match action {
             CommandAction::Reply(text) => Ok(ChatCommandOutcome::Reply(text)),
             CommandAction::NoOp => Ok(ChatCommandOutcome::NoOp),
-            CommandAction::UnknownCommand(_) => Ok(ChatCommandOutcome::Reply(
-                context.unknown_command_message(),
-            )),
+            CommandAction::UnknownCommand(_) => {
+                Ok(ChatCommandOutcome::Reply(context.unknown_command_message()))
+            }
             CommandAction::StopSession => {
                 let stopped_provider = context
                     .active_agent

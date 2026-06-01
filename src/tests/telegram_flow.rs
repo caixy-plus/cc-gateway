@@ -176,8 +176,8 @@ fn telegram_history_message_shows_gateway_session_id_when_provider_id_missing() 
     let sessions = vec![AgentSession {
         id: "codewhale-session-1".to_string(),
         channel_session_id: "channel-1".to_string(),
-        provider: "codew".to_string(),
-        title: "CodeWhale work".to_string(),
+        provider: "opencode".to_string(),
+        title: "OpenCode work".to_string(),
         work_dir: "/home/me/project".to_string(),
         active: false,
         state: AgentSessionState::Stopped,

@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::config::model::AgentProvider;
 use crate::runtime::controller::AgentController;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
@@ -57,7 +56,7 @@ impl BuiltinCommands {
             ctrl.set_pending_resume_provider(Some(resume_provider.clone()))
                 .await;
             ctrl.set_pending_resume_session_id(resume_sid).await;
-            if target.resume_session_id.is_none() && resume_provider != AgentProvider::CodeWhale {
+            if target.resume_session_id.is_none() {
                 return t_fmt!(
                     "builtin.resume_session_missing_id",
                     SID = &target_sid[..target_sid.len().min(8)]
@@ -122,9 +121,7 @@ impl BuiltinCommands {
                     ctrl.set_pending_resume_provider(Some(resume_provider.clone()))
                         .await;
                     ctrl.set_pending_resume_session_id(resume_sid).await;
-                    if target.resume_session_id.is_none()
-                        && resume_provider != AgentProvider::CodeWhale
-                    {
+                    if target.resume_session_id.is_none() {
                         return t_fmt!(
                             "builtin.resume_session_missing_id",
                             SID = &target_sid[..target_sid.len().min(8)]
@@ -362,13 +359,7 @@ impl HistorySessionInfo {
 }
 
 fn resume_session_id_for_history(target: &HistorySessionInfo) -> Option<String> {
-    match target.stored_provider() {
-        AgentProvider::CodeWhale => target
-            .resume_session_id
-            .clone()
-            .or_else(|| target.cc_gateway_id.clone()),
-        _ => target.resume_session_id.clone(),
-    }
+    target.resume_session_id.clone()
 }
 
 /// Load TUI-created Claude sessions from the cc-gateway database.

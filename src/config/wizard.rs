@@ -246,8 +246,8 @@ mod tests {
     fn resolve_agent_menu_choice_by_index_and_alias() {
         assert_eq!(resolve_agent_menu_choice("1"), Some(AgentProvider::Claude));
         assert_eq!(
-            resolve_agent_menu_choice("codew"),
-            Some(AgentProvider::CodeWhale)
+            resolve_agent_menu_choice("opencode"),
+            Some(AgentProvider::OpenCode)
         );
         assert_eq!(resolve_agent_menu_choice("skip"), None);
     }
@@ -259,7 +259,6 @@ mod tests {
         assert!(!config.agent.claude.enabled);
         assert!(!config.agent.cursor.enabled);
         assert!(!config.agent.pi.enabled);
-        assert!(!config.agent.codewhale.enabled);
         assert!(!config.agent.opencode.enabled);
         assert!(!config.feishu.enabled);
         assert!(!config.telegram.enabled);

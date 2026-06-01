@@ -47,7 +47,6 @@ pub enum AgentProvider {
     Claude,
     Cursor,
     Pi,
-    CodeWhale,
     OpenCode,
 }
 
@@ -68,7 +67,6 @@ pub struct AgentProfiles {
     pub claude: AgentProviderConfig,
     pub cursor: AgentProviderConfig,
     pub pi: AgentProviderConfig,
-    pub codewhale: AgentProviderConfig,
     pub opencode: AgentProviderConfig,
 }
 
@@ -178,7 +176,6 @@ impl std::fmt::Display for AgentProvider {
             AgentProvider::Claude => write!(f, "claude"),
             AgentProvider::Cursor => write!(f, "cursor"),
             AgentProvider::Pi => write!(f, "pi"),
-            AgentProvider::CodeWhale => write!(f, "codew"),
             AgentProvider::OpenCode => write!(f, "opencode"),
         }
     }
@@ -209,7 +206,6 @@ impl Default for AgentProfiles {
             claude: AgentProviderConfig::default(),
             cursor: AgentProviderConfig::default(),
             pi: AgentProviderConfig::default(),
-            codewhale: AgentProviderConfig::default(),
             opencode: AgentProviderConfig::default(),
         }
     }
@@ -231,13 +227,6 @@ impl AgentConfig {
                 cli_path: "pi".to_string(),
                 default_args: String::new(),
                 mode: "rpc".to_string(),
-                permission: "prompt".to_string(),
-            },
-            AgentProvider::CodeWhale => Self {
-                provider: AgentProvider::CodeWhale,
-                cli_path: "codewhale".to_string(),
-                default_args: String::new(),
-                mode: "agent".to_string(),
                 permission: "prompt".to_string(),
             },
             AgentProvider::OpenCode => Self {
@@ -271,17 +260,14 @@ impl AgentConfig {
                 self.default_args.clear();
             }
         }
-        if matches!(
-            self.provider,
-            AgentProvider::CodeWhale | AgentProvider::Pi | AgentProvider::OpenCode
-        ) {
+        if matches!(self.provider, AgentProvider::Pi | AgentProvider::OpenCode) {
             self.default_args = strip_unsupported_default_args(&self.default_args);
         }
         self
     }
 }
 
-/// Flags meant for Cursor/Claude CLIs that break other providers (e.g. `codewhale serve --acp`).
+/// Flags meant for Cursor/Claude CLIs that break other providers.
 fn strip_unsupported_default_args(args: &str) -> String {
     const UNSUPPORTED: &[&str] = &[
         "--yolo",
@@ -305,7 +291,6 @@ impl AgentProfiles {
             AgentProvider::Claude => self.claude.enabled,
             AgentProvider::Cursor => self.cursor.enabled,
             AgentProvider::Pi => self.pi.enabled,
-            AgentProvider::CodeWhale => self.codewhale.enabled,
             AgentProvider::OpenCode => self.opencode.enabled,
         }
     }
@@ -321,7 +306,6 @@ impl AgentProfiles {
             AgentProvider::Claude => &self.claude,
             AgentProvider::Cursor => &self.cursor,
             AgentProvider::Pi => &self.pi,
-            AgentProvider::CodeWhale => &self.codewhale,
             AgentProvider::OpenCode => &self.opencode,
         };
         let explicit_permission = profile.permission.clone();
@@ -379,7 +363,6 @@ impl GatewayConfig {
         config.agent.claude.enabled = false;
         config.agent.cursor.enabled = false;
         config.agent.pi.enabled = false;
-        config.agent.codewhale.enabled = false;
         config.agent.opencode.enabled = false;
         config.qq.enabled = false;
         config.qq.app_id.clear();

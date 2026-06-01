@@ -85,7 +85,7 @@ Run `cc-gateway init` for an interactive wizard, or edit via WebUI **Settings**.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `default` | string | `"claude"` | Default provider for `/agent` when omitted |
-| `<provider>` | object | — | Per-provider profile (`claude`, `cursor`, `pi`, `codewhale`, `opencode`, …) |
+| `<provider>` | object | — | Per-provider profile (`claude`, `cursor`, `pi`, `opencode`, …) |
 
 Each provider profile:
 

@@ -2,13 +2,13 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Gateway for controlling local agent CLIs (Claude Code, Cursor, Pi, CodeWhale, OpenCode, …) via **Feishu/Lark**, **Telegram**, **QQ**, **WebUI**, and an interactive **CLI**.
+Gateway for controlling local agent CLIs (Claude Code, Cursor, Pi, OpenCode, …) via **Feishu/Lark**, **Telegram**, **QQ**, **WebUI**, and an interactive **CLI**.
 
 ## Features
 
 - **Remote control** — Use chat bots on your phone to drive agents running on your machine
 - **Multi-platform** — Feishu/Lark, Telegram, and QQ official bots; enable any combination
-- **Multi-provider** — Pluggable agent backends (`claude`, `cursor`, `pi`, `codewhale`, `opencode`, …); pick per chat with `/agents`
+- **Multi-provider** — Pluggable agent backends (`claude`, `cursor`, `pi`, `opencode`, …); pick per chat with `/agents`
 - **Per-chat isolation** — Each chat/channel gets its own agent subprocess; messages never mix across chats
 - **Pairing** — Optional WebUI approval for new chats before they can use the bot (recommended)
 - **Local CLI** — Interactive REPL with Tab completion and inline hints for `/` commands
@@ -125,7 +125,7 @@ Available in CLI, WebUI, and connected bots (after pairing if enabled):
 | `/show-thinking` / `/hide-thinking` | Toggle Thinking output |
 | `/stop` / `/clear` / `/status` / `/esc` | Control active generation (where supported) |
 
-**Providers:** `claude`, `cursor`, `pi`, `codewhale` (alias `codew`), `opencode` — run `/agents` to see enabled profiles.
+**Providers:** `claude`, `cursor`, `pi`, `opencode` — run `/agents` to see enabled profiles.
 
 ### Session mode
 
@@ -151,7 +151,7 @@ User (QQ)           <--->  cc-gateway daemon
 User (CLI / WebUI)  <--->  cc-gateway daemon
 ```
 
-The gateway spawns provider CLIs as child processes and bridges chat traffic to them (e.g. Claude **stream-json** on stdio, Cursor/CodeWhale **ACP**, Pi **JSON-RPC**). See [CLAUDE.md](CLAUDE.md) for protocol details.
+The gateway spawns provider CLIs as child processes and bridges chat traffic to them (e.g. Claude **stream-json** on stdio, Cursor/OpenCode **ACP**, Pi **JSON-RPC**). See [CLAUDE.md](CLAUDE.md) for protocol details.
 
 ## License
 

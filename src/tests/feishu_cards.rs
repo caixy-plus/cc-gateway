@@ -79,8 +79,8 @@ fn session_history_card_shows_gateway_session_id_when_provider_id_missing() {
     let session = AgentSession {
         id: "codewhale-session-1".to_string(),
         channel_session_id: "channel-internal-id".to_string(),
-        provider: "codew".to_string(),
-        title: "CodeWhale work".to_string(),
+        provider: "opencode".to_string(),
+        title: "OpenCode work".to_string(),
         work_dir: "/tmp/project".to_string(),
         active: false,
         state: AgentSessionState::Stopped,
