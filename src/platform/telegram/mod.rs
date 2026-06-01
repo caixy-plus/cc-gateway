@@ -670,6 +670,7 @@ impl TelegramPlatform {
             self.show_thinking,
         );
         let mut context = ChatCommandContext::new(
+            "telegram",
             runtime.channel_session.id.clone(),
             format!("Telegram {}", chat_id),
             runtime.channel_session.work_dir.clone(),

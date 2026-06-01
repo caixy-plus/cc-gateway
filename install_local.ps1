@@ -163,3 +163,9 @@ try {
 } catch {
     # Ignore browser open failures during local install
 }
+
+$docsScript = Join-Path $PSScriptRoot "scripts\install-docs.ps1"
+if (Test-Path $docsScript) {
+    . $docsScript
+    Print-InstallDocs -LocalRepoRoot $PSScriptRoot
+}

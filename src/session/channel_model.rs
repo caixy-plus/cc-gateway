@@ -8,6 +8,7 @@ pub enum SessionSource {
     WebUI,
     Feishu,
     Telegram,
+    Qq,
     #[serde(rename = "TUI")]
     Tui,
 }
@@ -18,6 +19,7 @@ impl fmt::Display for SessionSource {
             SessionSource::WebUI => write!(f, "WebUI"),
             SessionSource::Feishu => write!(f, "Feishu"),
             SessionSource::Telegram => write!(f, "Telegram"),
+            SessionSource::Qq => write!(f, "QQ"),
             SessionSource::Tui => write!(f, "TUI"),
         }
     }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -241,6 +241,49 @@ pub fn emit_acp_turn_done(
 pub fn reset_acp_turn_done(done_sent: &std::sync::atomic::AtomicBool) {
     use std::sync::atomic::Ordering;
     done_sent.store(false, Ordering::SeqCst);
+}
+
+/// Reply to an agent-initiated JSON-RPC request (filesystem, extensions, etc.).
+pub fn spawn_jsonrpc_result(stdin: &Arc<Mutex<ChildStdin>>, id: Value, result: Value) {
+    let stdin = stdin.clone();
+    tokio::spawn(async move {
+        let line = match serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        })) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("ACP JSON-RPC result serialize failed: {}", e);
+                return;
+            }
+        };
+        let mut stdin = stdin.lock().await;
+        let _ = stdin.write_all(line.as_bytes()).await;
+        let _ = stdin.write_all(b"\n").await;
+        let _ = stdin.flush().await;
+    });
+}
+
+pub fn spawn_jsonrpc_error(stdin: &Arc<Mutex<ChildStdin>>, id: Value, code: i32, message: String) {
+    let stdin = stdin.clone();
+    tokio::spawn(async move {
+        let line = match serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message },
+        })) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("ACP JSON-RPC error serialize failed: {}", e);
+                return;
+            }
+        };
+        let mut stdin = stdin.lock().await;
+        let _ = stdin.write_all(line.as_bytes()).await;
+        let _ = stdin.write_all(b"\n").await;
+        let _ = stdin.flush().await;
+    });
 }
 
 #[cfg(test)]

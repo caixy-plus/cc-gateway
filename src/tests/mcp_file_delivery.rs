@@ -1,6 +1,7 @@
+use crate::platform::qq::QqFileChatTarget;
 use crate::runtime::file_delivery::{
     telegram_send_document_url, validate_outbound_file, FeishuFileTarget, McpContext,
-    McpDeliveryTarget, TelegramFileTarget,
+    McpDeliveryTarget, QqFileTarget, TelegramFileTarget,
 };
 use crate::runtime::mcp_server::send_file_tool_schema;
 
@@ -36,6 +37,24 @@ fn mcp_delivery_target_round_trips_telegram_json_env() {
     let encoded = context.to_env_json().unwrap();
     let decoded = McpContext::from_env_json(&encoded).unwrap();
 
+    assert_eq!(decoded, context);
+}
+
+#[test]
+fn mcp_delivery_target_round_trips_qq_json_env() {
+    let context = McpContext {
+        delivery: McpDeliveryTarget::Qq(QqFileTarget {
+            app_id: "qq-app".to_string(),
+            app_secret: "qq-secret".to_string(),
+            sandbox: false,
+            chat: QqFileChatTarget::C2c {
+                openid: "openid-1".to_string(),
+            },
+        }),
+    };
+
+    let encoded = context.to_env_json().unwrap();
+    let decoded = McpContext::from_env_json(&encoded).unwrap();
     assert_eq!(decoded, context);
 }
 

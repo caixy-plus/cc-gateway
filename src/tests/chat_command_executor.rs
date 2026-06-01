@@ -22,6 +22,7 @@ async fn chat_command_executor_starts_session_and_updates_channel_work_dir() {
     let executor =
         ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_agent_profiles(), false);
     let mut context = ChatCommandContext::new(
+        "telegram",
         channel.id.clone(),
         "Telegram chat-1".to_string(),
         channel.work_dir.clone(),
@@ -73,6 +74,7 @@ async fn chat_command_executor_changes_work_dir_without_platform_specific_code()
     let executor =
         ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_agent_profiles(), false);
     let mut context = ChatCommandContext::new(
+        "feishu",
         channel.id.clone(),
         "Feishu oc-chat".to_string(),
         channel.work_dir.clone(),

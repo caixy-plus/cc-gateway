@@ -195,6 +195,7 @@ impl ChannelManager {
         let source = match platform {
             "feishu" => SessionSource::Feishu,
             "telegram" => SessionSource::Telegram,
+            "qq" => SessionSource::Qq,
             "tui" => SessionSource::Tui,
             _ => SessionSource::WebUI,
         };

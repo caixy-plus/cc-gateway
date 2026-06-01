@@ -9,11 +9,14 @@ use tracing::{debug, info};
 use crate::agent::acp_client::{
     emit_acp_turn_done, is_acp_turn_complete_update, reset_acp_turn_done, AcpClient,
 };
+use crate::agent::acp_fs::{read_for_acp_tag, try_handle_fs_request};
 use crate::agent::codewhale_context::{
     build_history_transcript, build_prompt, fetch_capability, CodeWhaleCapability, ContextPolicy,
 };
 use crate::agent::event::AgentEvent;
+use crate::agent::mcp_attach::build_acp_mcp_servers;
 use crate::config::model::AgentConfig;
+use crate::runtime::mcp_server::McpContext;
 
 pub struct CodeWhaleAcpSession {
     client: AcpClient,
@@ -25,6 +28,7 @@ pub struct CodeWhaleAcpSession {
     gateway_history_id: Option<String>,
     capability: CodeWhaleCapability,
     context_policy: ContextPolicy,
+    mcp_servers: Value,
 }
 
 impl CodeWhaleAcpSession {
@@ -34,6 +38,7 @@ impl CodeWhaleAcpSession {
         config: &AgentConfig,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         resume_session_id: Option<String>,
+        mcp_context: Option<McpContext>,
     ) -> Result<(Self, Option<String>)> {
         // Same validated absolute path the controller uses for spawn (ACP `cwd` must match).
         let work_dir = crate::runtime::controller::ensure_under_home(&work_dir)?;
@@ -105,8 +110,12 @@ impl CodeWhaleAcpSession {
         let turn_done_notify = turn_done.clone();
         let wd_tags = work_dir_for_tags;
         let wd_session = wd_tags.clone();
+        let fs_stdin = client.stdin_arc();
         let on_notification: crate::agent::acp_client::NotificationHandler =
             Arc::new(move |msg: &Value| {
+                if try_handle_fs_request(msg, &wd_tags, &fs_stdin) {
+                    return;
+                }
                 let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
                 match method {
                     "session/update" => {
@@ -148,6 +157,7 @@ impl CodeWhaleAcpSession {
 
         let capability = fetch_capability(&config.cli_path).await;
         let gateway_history_id = resume_session_id.filter(|sid| !sid.trim().is_empty());
+        let mcp_servers = build_acp_mcp_servers(mcp_context.as_ref())?;
 
         let session = Self {
             client,
@@ -158,6 +168,7 @@ impl CodeWhaleAcpSession {
             gateway_history_id,
             capability,
             context_policy: ContextPolicy::default(),
+            mcp_servers,
         };
 
         // ACP handshake: initialize → session/new.
@@ -170,7 +181,7 @@ impl CodeWhaleAcpSession {
                 json!({
                     "protocolVersion": 1,
                     "clientCapabilities": {
-                        "fs": { "readTextFile": true, "writeTextFile": false },
+                        "fs": { "readTextFile": true, "writeTextFile": true },
                         "terminal": false
                     },
                     "clientInfo": { "name": "cc-gateway", "version": env!("CARGO_PKG_VERSION") }
@@ -190,7 +201,7 @@ impl CodeWhaleAcpSession {
                 json!({
                     "cwd": work_dir,
                     "mode": mode,
-                    "mcpServers": []
+                    "mcpServers": session.mcp_servers,
                 }),
             )
             .await?;
@@ -305,7 +316,7 @@ impl CodeWhaleAcpSession {
                 json!({
                     "cwd": &work_dir,
                     "mode": mode,
-                    "mcpServers": []
+                    "mcpServers": self.mcp_servers,
                 }),
             )
             .await?;
@@ -368,9 +379,7 @@ fn rpc_id_key(id: &Value) -> String {
 
 fn resolve_acp_tags(text: &str, work_dir: &str) -> String {
     use regex::Regex;
-    use std::path::PathBuf;
 
-    // Match both self-closing (<acp:read_file ... />) and paired (<acp:read_file ...></acp:read_file>)
     let re: Regex = Regex::new(
         r#"<acp:read_file\s+path="([^"]*)"(?:\s+offset="([^"]*)")?(?:\s+limit="([^"]*)")?\s*(?:/>|></acp:read_file>)"#,
     )
@@ -388,59 +397,18 @@ fn resolve_acp_tags(text: &str, work_dir: &str) -> String {
             .unwrap_or(1);
         let limit: Option<usize> = caps.get(3).and_then(|m| m.as_str().parse().ok());
 
-        let file_path = PathBuf::from(work_dir).join(path);
-
-        let content = if file_path.is_dir() {
-            match std::fs::read_dir(&file_path) {
-                Ok(entries) => {
-                    let mut items: Vec<String> = entries
-                        .filter_map(|e| e.ok())
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            let suffix = if e.path().is_dir() { "/" } else { "" };
-                            format!("  {}{}", name, suffix)
-                        })
-                        .collect();
-                    items.sort();
-                    if items.is_empty() {
-                        format!("[Directory {} is empty]", file_path.display())
-                    } else {
-                        items.insert(0, format!("Contents of {}:", file_path.display()));
-                        items.join("\n")
-                    }
-                }
-                Err(e) => format!("[Error listing {}: {}]", file_path.display(), e),
-            }
+        let raw = read_for_acp_tag(work_dir, path, offset, limit);
+        let content = if raw.starts_with('[') {
+            raw
         } else {
-            match std::fs::read_to_string(&file_path) {
-                Ok(s) => {
-                    let lines: Vec<&str> = s.lines().collect();
-                    let start = offset.saturating_sub(1);
-                    let end = match limit {
-                        Some(n) => (start + n).min(lines.len()),
-                        None => lines.len(),
-                    };
-                    let selected: Vec<&str> = lines[start..end].to_vec();
-                    if selected.is_empty() {
-                        format!("[File {} is empty at offset {}]", path, offset)
-                    } else {
-                        format!(
-                            "Content of {} (lines {}-{}):\n```\n{}\n```",
-                            path,
-                            offset,
-                            offset + selected.len().saturating_sub(1),
-                            selected.join("\n")
-                        )
-                    }
-                }
-                Err(e) => format!("[Error reading {}: {}]", file_path.display(), e),
-            }
+            format!(
+                "Content of {} (from offset {}):\n```\n{}\n```",
+                path, offset, raw
+            )
         };
-
         replacements.push((full_match.start(), full_match.end(), content));
     }
 
-    // Apply replacements in reverse order so indices stay valid
     for (start, end, content) in replacements.into_iter().rev() {
         result.replace_range(start..end, &content);
     }

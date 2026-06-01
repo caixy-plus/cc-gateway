@@ -27,6 +27,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
     let mut config = crate::config::loader::ConfigLoader::load().unwrap_or_default();
     config.feishu.app_secret = mask_secret(&config.feishu.app_secret);
     config.telegram.bot_token = mask_secret(&config.telegram.bot_token);
+    config.qq.app_secret = mask_secret(&config.qq.app_secret);
     if let Some(ref token) = config.webui_token {
         config.webui_token = Some(mask_secret(token));
     }
@@ -37,8 +38,16 @@ pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json
             "default_dir": state.default_dir,
             "agent_settings": state.agent_settings,
         },
+        "agents": crate::config::agent_registry::build_agents_api_response(&state.agent_settings),
         "restart_policy": crate::config::restart_policy::restart_policy_metadata(),
     }))
+}
+
+/// Integrated agent catalog and per-provider profile settings for WebUI / API clients.
+pub async fn handle_get_agents(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(crate::config::agent_registry::build_agents_api_response(
+        &state.agent_settings,
+    ))
 }
 
 pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusCode, String) {
@@ -133,6 +142,17 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             config.telegram.require_pairing = c.require_pairing;
         }
     }
+    if let Some(v) = body.get("qq") {
+        if let Ok(c) = serde_json::from_value::<crate::config::model::QqConfig>(v.clone()) {
+            if !is_masked_value(&c.app_secret, &config.qq.app_secret) {
+                config.qq.app_secret = c.app_secret;
+            }
+            config.qq.enabled = c.enabled;
+            config.qq.app_id = c.app_id;
+            config.qq.sandbox = c.sandbox;
+            config.qq.require_pairing = c.require_pairing;
+        }
+    }
 
     let assessment = crate::config::restart_policy::assess_config_changes(&before, &config);
 
@@ -144,6 +164,8 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
                 .set_require_pairing("feishu", config.feishu.require_pairing);
             crate::session::pairing::GLOBAL_PAIRING_MANAGER
                 .set_require_pairing("telegram", config.telegram.require_pairing);
+            crate::session::pairing::GLOBAL_PAIRING_MANAGER
+                .set_require_pairing("qq", config.qq.require_pairing);
             let body = json!({
                 "status": "saved",
                 "requires_restart": assessment.requires_restart,
@@ -179,6 +201,14 @@ pub async fn handle_get_platforms() -> Json<serde_json::Value> {
             "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("telegram"),
         }));
     }
+    if config.qq.enabled {
+        platforms.push(serde_json::json!({
+            "name": "qq",
+            "enabled": true,
+            "state": crate::platform::status::get_state("qq").as_str(),
+            "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("qq"),
+        }));
+    }
 
     Json(serde_json::json!({ "platforms": platforms }))
 }
@@ -196,7 +226,7 @@ pub async fn handle_set_require_pairing(
             return (StatusCode::BAD_REQUEST, body.to_string());
         }
     };
-    if platform != "feishu" && platform != "telegram" {
+    if platform != "feishu" && platform != "telegram" && platform != "qq" {
         let body = json!({ "error": "Unknown platform" });
         return (StatusCode::BAD_REQUEST, body.to_string());
     }
@@ -210,6 +240,7 @@ pub async fn handle_set_require_pairing(
         match platform {
             "feishu" => config.feishu.require_pairing = required,
             "telegram" => config.telegram.require_pairing = required,
+            "qq" => config.qq.require_pairing = required,
             _ => {}
         }
         if let Err(e) = ConfigLoader::save(&config) {

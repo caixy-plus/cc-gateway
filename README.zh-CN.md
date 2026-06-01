@@ -1,53 +1,67 @@
 # cc-gateway
 
-通过飞书 (Lark)、Telegram 机器人和 CLI 控制本地 Claude Code 的网关。
+[English](README.md) | **简体中文**
+
+通过 **飞书/Lark**、**Telegram**、**QQ**、**WebUI** 与交互式 **CLI**，在本地运行并远程驱动多种智能体 CLI（Claude Code、Cursor、Pi、CodeWhale、OpenCode 等）。
 
 ## 功能特性
 
-- **远程控制**: 通过手机上的飞书 (Lark) 或 Telegram 机器人控制本地 Claude Code
-- **聊天隔离**: 每个聊天都有独立的智能体子进程 — 不同群聊或用户的消息不会相互混淆
-- **本地 CLI 聊天**: 交互式命令行聊天，支持 Tab 补全和行内提示
-- **会话切换**: `/agent` 进入智能体会话模式；除网关内置命令外所有内容直接转发给当前智能体
-- **目录选择器**: `/ll` 打开交互式目录选择器 (CLI 中为 TUI，飞书中为卡片)
-- **守护进程模式**: 使用 `start/stop/restart/log` 命令作为后台服务运行，通过端口绑定保证单实例
+- **远程控制** — 用手机上的聊天机器人操作本机智能体
+- **多平台** — 飞书/Lark、Telegram、QQ 官方机器人，可同时启用
+- **多智能体** — 可插拔后端（`claude`、`cursor`、`pi`、`codewhale`、`opencode` 等），用 `/agents` 按聊天指定默认智能体
+- **聊天隔离** — 每个聊天/频道独立子进程，消息互不串线
+- **配对放行** — 可在 WebUI 中批准新聊天后再允许使用（建议开启）
+- **本地 CLI** — 交互式命令行，支持 `/` 命令 Tab 补全与行内提示
+- **WebUI** — 浏览器管理会话、配对、设置与实时事件
+- **目录工具** — `/ll`（CLI 为 TUI，飞书为卡片，其他平台为文本列表）
+- **守护进程** — `start` / `stop` / `restart` / `log`，端口绑定保证单实例
 
 ## 安装
 
-### macOS / Linux
+### macOS / Linux（发布版二进制）
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.sh | sh
 ```
 
-### Windows
+安装过程会执行 `cc-gateway init`、重启守护进程，并输出文档链接。
+
+### Windows（发布版二进制）
 
 ```powershell
 irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1 | iex
 ```
 
-### 从源码编译
+### 从源码（开发者）
 
 ```sh
 git clone https://github.com/caixy-plus/cc-gateway.git
 cd cc-gateway
-cargo build --release
+./install_local.sh    # macOS/Linux：构建 WebUI 并安装到 ~/.local/bin
+# Windows: .\install_local.ps1
 ```
+
+或手动 `cargo build --release`（WebUI 嵌入说明见 [CLAUDE.md](CLAUDE.md)）。
 
 ## 快速开始
 
-1. **配置**
+1. **初始化配置**
 
    ```sh
-   cc-gateway config      # 在 $EDITOR 中打开配置
-   # 或
-   cc-gateway config --init > ~/.cc-gateway/config.json
+   cc-gateway init
    ```
 
-   编辑 `~/.cc-gateway/config.json`:
-   - 飞书: 将 `feishu.enabled` 设为 `true`，并设置 `feishu.app_id` 和 `feishu.app_secret` (从 [飞书开放平台](https://open.feishu.cn) 获取)
-   - Telegram: 将 `telegram.enabled` 设为 `true`，并设置 `telegram.bot_token` (从 [@BotFather](https://t.me/BotFather) 获取)
-   - 设置 `default_dir` 为远程用户应该浏览的目录 (例如 `~/Workspace`)
-   - 两个平台可以同时启用
+   也可在 `cc-gateway start` 后通过 WebUI **设置** 或编辑 `~/.cc-gateway/config.json`。
+
+   按需启用机器人，例如：
+
+   | 平台 | 配置项 | 配置指南 |
+   |------|--------|----------|
+   | 飞书 / Lark | `feishu.enabled`、`app_id`、`app_secret` | [docs/bots/feishu.zh-CN.md](docs/bots/feishu.zh-CN.md) |
+   | Telegram | `telegram.enabled`、`bot_token` | [docs/bots/telegram.zh-CN.md](docs/bots/telegram.zh-CN.md) |
+   | QQ | `qq.enabled`、`app_id`、`app_secret`、`sandbox` | [docs/bots/qq.zh-CN.md](docs/bots/qq.zh-CN.md) |
+
+   将 `default_dir` 设为远程用户可浏览的工作区根目录（如 `~/Workspace`）。多个平台可同时运行。
 
 2. **启动守护进程**
 
@@ -55,69 +69,89 @@ cargo build --release
    cc-gateway start
    ```
 
-3. **从 CLI 聊天**
+3. **打开 WebUI**（配对、设置、会话）
+
+   ```sh
+   cc-gateway webui
+   ```
+
+4. **在 CLI 中对话**
 
    ```sh
    cc-gateway
    cc-gateway> /agent
-   💬 ~/Workspace ▶ hello, review this code for me
+   💬 ~/Workspace ▶ 请审查 src/main.rs 的改动
    ```
 
-4. **停止守护进程**
+5. **停止服务**
 
    ```sh
    cc-gateway stop
    ```
 
-## 命令
+## CLI 命令
 
 | 命令 | 说明 |
-|---------|-------------|
-| `cc-gateway` | 进入交互式 CLI 聊天模式 |
+|------|------|
+| `cc-gateway` | 交互式 CLI 聊天模式 |
+| `cc-gateway init` | 交互式配置向导（含可选机器人凭证） |
 | `cc-gateway start` | 启动网关守护进程 |
 | `cc-gateway stop` | 停止网关守护进程 |
 | `cc-gateway restart` | 重启网关守护进程 |
-| `cc-gateway log [-f] [-n 100]` | 查看守护进程日志 |
-| `cc-gateway config` | 编辑配置文件 |
-| `cc-gateway config --init` | 打印默认配置 |
+| `cc-gateway status` | 查看守护进程状态 |
+| `cc-gateway log [-f] [-n 100]` | 查看日志（`-f` 跟踪） |
+| `cc-gateway webui` | 在浏览器打开 WebUI（未运行时会先 start） |
+| `cc-gateway webui-token [--refresh]` | 查看或重新生成 WebUI 访问令牌 |
+| `cc-gateway enable` / `disable` | 开关开机自启（launchd / systemd 用户服务） |
+| `cc-gateway update [-y]` | 检查并安装最新发布版 |
+| `cc-gateway uninstall` | 卸载二进制与服务项 |
 
-## 网关命令 (聊天中可用)
+## 网关命令（聊天内）
+
+在 CLI、WebUI 及已接入的机器人中可用（若开启配对须先放行）：
 
 | 命令 | 说明 |
-|---------|-------------|
-| `/help` | 显示可用命令 |
-| `/quit` | 退出当前智能体会话 (未激活时 = 退出程序) |
-| `/cd <path>` | 更改工作目录 |
-| `/cd_default` | 将工作目录更改为默认目录 |
-| `/agent [claude|cursor] [args...]` | 启动或重启智能体会话 (传递参数给对应 CLI) |
-| `/agents [claude|cursor]` | 选择 / 设置本频道默认智能体 |
-| `/agent-history [n]` | 显示最近会话并按索引恢复 |
+|------|------|
+| `/help` | 显示命令列表 |
+| `/quit` | 结束当前智能体会话（无会话时退出 CLI） |
+| `/cd <路径>` | 更改工作目录 |
+| `/cd_default` | 恢复为 `default_dir` |
+| `/agent [provider] [参数...]` | 启动或重启智能体会话 |
+| `/agents [provider]` | 设置本频道默认智能体 |
+| `/agent-history [n]` | 列出最近会话；按序号恢复 |
 | `/pwd` | 显示当前工作目录 |
-| `/ll` | 打开交互式目录选择器 |
-| `/mkdir <目录名>` | 创建新目录 |
-| `/show-thinking` | 始终显示可用的 Thinking 输出 |
-| `/hide-thinking` | 隐藏 Thinking 输出 |
+| `/ll` | 选择目录（TUI / 飞书卡片 / 文本列表） |
+| `/mkdir <名称>` | 创建目录 |
+| `/show-thinking` / `/hide-thinking` | 开关 Thinking 输出 |
+| `/stop` / `/clear` / `/status` / `/esc` | 控制当前生成（视平台支持） |
 
-### 会话切换
+**智能体：** `claude`、`cursor`、`pi`、`codewhale`（别名 `codew`）、`opencode` — 运行 `/agents` 查看已启用的配置。
 
-运行 `/agent` 后，网关进入 **会话模式**:
-- 提示符变为 `💬 ~/Workspace ▶` 表示正在与智能体聊天
-- 你输入的所有内容直接发送给当前智能体 (无需前缀)
-- 输入 `/quit` 停止会话并返回网关命令模式
+### 会话模式
 
-## 配置
+执行 `/agent` 后提示符变为 `💬 ~/Workspace ▶`，普通文本会转发给智能体；网关命令仍可使用。`/quit` 返回网关模式（CLI 下若无活动会话则退出程序）。
 
-完整配置说明请参阅 [docs/config.zh-CN.md](docs/config.zh-CN.md)。
+## 文档
+
+| 主题 | 中文 | English |
+|------|------|---------|
+| 机器人配置总览 | [docs/bots/README.zh-CN.md](docs/bots/README.zh-CN.md) | [docs/bots/README.md](docs/bots/README.md) |
+| 配置说明 | [docs/config.zh-CN.md](docs/config.zh-CN.md) | [docs/config.md](docs/config.md) |
+| 使用指南 | [docs/usage.zh-CN.md](docs/usage.zh-CN.md) | [docs/usage.md](docs/usage.md) |
+| 开发者说明 | [CLAUDE.md](CLAUDE.md) | — |
+
+安装脚本结束时会再次打印上述链接。
 
 ## 架构
 
 ```
-用户 (飞书/Lark)  <-->  cc-gateway 守护进程  <-->  Claude Code (本地)
-用户 (Telegram)   <-->  cc-gateway 守护进程  <-->  Claude Code (本地)
-用户 (CLI)        <-->  cc-gateway 守护进程  <-->  Claude Code (本地)
+用户 (飞书/Lark)  <-->  cc-gateway 守护进程  <-->  本地智能体 CLI
+用户 (Telegram)   <-->  cc-gateway 守护进程  <-->  claude / cursor / pi / …
+用户 (QQ)         <-->  cc-gateway 守护进程
+用户 (CLI/WebUI)  <-->  cc-gateway 守护进程
 ```
 
-cc-gateway 通过 stdin/stdout 使用 `stream-json` 协议与 Claude Code 通信 (`--input-format stream-json --output-format stream-json`)。
+网关以子进程方式拉起各 provider CLI，并桥接聊天消息（例如 Claude 的 **stream-json**、Cursor/CodeWhale 的 **ACP**、Pi 的 **JSON-RPC**）。协议细节见 [CLAUDE.md](CLAUDE.md)。
 
 ## 许可证
 

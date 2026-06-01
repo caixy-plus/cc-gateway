@@ -1,9 +1,10 @@
 use crate::config::loader::upgrade_config_json;
 use crate::config::model::{
     effective_session_retention_per_channel, AgentConfig, AgentProfiles, AgentProvider,
-    FeishuConfig, GatewayConfig, LogConfig, MAX_SESSION_RETENTION_PER_CHANNEL,
+    FeishuConfig, GatewayConfig, LogConfig, QqConfig, MAX_SESSION_RETENTION_PER_CHANNEL,
     MIN_SESSION_RETENTION_PER_CHANNEL,
 };
+use crate::session::channel_model::SessionSource;
 
 #[test]
 fn runtime_defaults_disables_integrations_until_init() {
@@ -223,6 +224,21 @@ fn codewhale_explicit_permission_overrides_yolo_semantics() {
 }
 
 #[test]
+fn opencode_default_config_uses_opencode_cli() {
+    let cfg = AgentConfig::default_for_provider(AgentProvider::OpenCode);
+    assert_eq!(cfg.cli_path, "opencode");
+    assert_eq!(cfg.provider, AgentProvider::OpenCode);
+}
+
+#[test]
+fn opencode_parse_str_recognizes_provider_id() {
+    assert_eq!(
+        AgentProvider::parse_str("opencode"),
+        AgentProvider::OpenCode
+    );
+}
+
+#[test]
 fn codewhale_normalization_strips_other_cursor_only_default_args() {
     let mut profiles = AgentProfiles::default();
     profiles.codewhale.enabled = true;
@@ -271,4 +287,28 @@ fn test_feishu_config_serde_roundtrip() {
     let deserialized: FeishuConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(original.enabled, deserialized.enabled);
     assert_eq!(original.app_id, deserialized.app_id);
+}
+
+#[test]
+fn test_qq_config_serde_roundtrip() {
+    let original = QqConfig {
+        enabled: true,
+        app_id: "102000".to_string(),
+        app_secret: "secret".to_string(),
+        sandbox: true,
+        require_pairing: false,
+    };
+    let json = serde_json::to_string(&original).unwrap();
+    let deserialized: QqConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(original, deserialized);
+}
+
+#[tokio::test]
+async fn platform_channel_qq_maps_session_source() {
+    let channel = crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel("qq", "u:test-openid", "/tmp/qq-test")
+        .await;
+    assert_eq!(channel.platform, "qq");
+    assert_eq!(channel.source, SessionSource::Qq);
+    assert_eq!(channel.channel_id, "u:test-openid");
 }

@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 
-use crate::config::model::{AgentProfiles, FeishuConfig, GatewayConfig, LogConfig, TelegramConfig};
+use crate::config::model::{
+    AgentProfiles, FeishuConfig, GatewayConfig, LogConfig, QqConfig, TelegramConfig,
+};
 
 /// Describes which saved config changes need a daemon restart vs apply live.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,11 +38,19 @@ pub fn daemon_restart_field_paths() -> Vec<&'static str> {
         "feishu.app_secret",
         "telegram.enabled",
         "telegram.bot_token",
+        "qq.enabled",
+        "qq.app_id",
+        "qq.app_secret",
+        "qq.sandbox",
     ]
 }
 
 pub fn live_field_paths() -> Vec<&'static str> {
-    vec!["feishu.require_pairing", "telegram.require_pairing"]
+    vec![
+        "feishu.require_pairing",
+        "telegram.require_pairing",
+        "qq.require_pairing",
+    ]
 }
 
 /// Compare config before/after a save merge.
@@ -93,6 +103,7 @@ pub fn assess_config_changes(
         &mut restart_fields,
         &mut live_fields,
     );
+    qq_restart_fields(&before.qq, &after.qq, &mut restart_fields, &mut live_fields);
 
     let requires_restart = !restart_fields.is_empty();
     ConfigRestartAssessment {
@@ -150,6 +161,29 @@ fn telegram_restart_fields(
     }
 }
 
+fn qq_restart_fields(
+    before: &QqConfig,
+    after: &QqConfig,
+    restart_fields: &mut Vec<String>,
+    live_fields: &mut Vec<String>,
+) {
+    if before.enabled != after.enabled {
+        restart_fields.push("qq.enabled".to_string());
+    }
+    if before.app_id != after.app_id {
+        restart_fields.push("qq.app_id".to_string());
+    }
+    if before.app_secret != after.app_secret {
+        restart_fields.push("qq.app_secret".to_string());
+    }
+    if before.sandbox != after.sandbox {
+        restart_fields.push("qq.sandbox".to_string());
+    }
+    if before.require_pairing != after.require_pairing {
+        live_fields.push("qq.require_pairing".to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +222,29 @@ mod tests {
         assert!(assessment
             .restart_fields
             .contains(&"feishu.enabled".to_string()));
+    }
+
+    #[test]
+    fn qq_sandbox_change_requires_restart() {
+        let before = GatewayConfig::default();
+        let mut after = before.clone();
+        after.qq.sandbox = true;
+        let assessment = assess_config_changes(&before, &after);
+        assert!(assessment.requires_restart);
+        assert!(assessment
+            .restart_fields
+            .contains(&"qq.sandbox".to_string()));
+    }
+
+    #[test]
+    fn qq_require_pairing_change_is_live_only() {
+        let before = GatewayConfig::default();
+        let mut after = before.clone();
+        after.qq.require_pairing = false;
+        let assessment = assess_config_changes(&before, &after);
+        assert!(!assessment.requires_restart);
+        assert!(assessment
+            .live_fields
+            .contains(&"qq.require_pairing".to_string()));
     }
 }

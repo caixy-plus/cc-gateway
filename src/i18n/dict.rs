@@ -338,6 +338,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "  - Feishu is enabled but app_id/app_secret are empty.",
             Language::ZhCN => "  - 飞书已启用，但 app_id/app_secret 为空。",
         },
+        "wizard.warn_qq_incomplete" => match lang {
+            Language::En => "QQ bot credentials are incomplete; enable after filling app_id and app_secret.",
+            Language::ZhCN => "QQ 机器人凭证不完整，请补全 app_id 与 app_secret 后再启用。",
+        },
         "wizard.warn_telegram_incomplete" => match lang {
             Language::En => "  - Telegram is enabled but bot_token is empty.",
             Language::ZhCN => "  - Telegram 已启用，但 bot_token 为空。",
@@ -584,6 +588,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "cc-gateway is shutting down, session closed.",
             Language::ZhCN => "机器人正在关闭，会话已退出。",
         },
+        "builtin.unknown_command" => match lang {
+            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+        },
         "builtin.failed_stop_session" => match lang {
             Language::En => "Failed to stop session: {ERR}",
             Language::ZhCN => "停止会话失败: {ERR}",
@@ -607,6 +615,10 @@ pub fn t(key: &str) -> &str {
         "builtin.esc_sent_codewhale" => match lang {
             Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
             Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
+        },
+        "builtin.esc_sent_opencode" => match lang {
+            Language::En => "ESC sent — current generation cancelled via ACP.",
+            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
         },
         "builtin.esc_already_idle" => match lang {
             Language::En => "Agent is idle with no queued messages.",
@@ -636,6 +648,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Message forwarded: {MSG}",
             Language::ZhCN => "消息已转发：{MSG}",
         },
+        "builtin.esc_with_prompt_sent_opencode" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
         "builtin.failed_esc" => match lang {
             Language::En => "Failed to send ESC: {ERR}",
             Language::ZhCN => "发送 ESC 失败: {ERR}",
@@ -659,6 +675,10 @@ pub fn t(key: &str) -> &str {
         "builtin.stop_sent_codewhale" => match lang {
             Language::En => "Stop sent — the running CodeWhale process will be killed.",
             Language::ZhCN => "Stop 已发送 — 正在运行的 CodeWhale 进程将被终止。",
+        },
+        "builtin.stop_sent_opencode" => match lang {
+            Language::En => "Stop sent — current generation cancelled via ACP.",
+            Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
         },
         "builtin.stop_already_idle" => match lang {
             Language::En => "Agent is already idle — nothing to stop.",
@@ -1071,6 +1091,38 @@ pub fn t(key: &str) -> &str {
             Language::En => "Bot is shutting down, sessions exited.",
             Language::ZhCN => "机器人正在关闭，会话已退出。",
         },
+        "qq.choose_agent" => match lang {
+            Language::En => "Choose default agent (reply with number or name):",
+            Language::ZhCN => "选择默认智能体（回复序号或名称）：",
+        },
+        "qq.use_agents_hint" => match lang {
+            Language::En => "Tip: /agents <name> sets the default for this chat.",
+            Language::ZhCN => "提示：/agents <名称> 可设置本聊天默认智能体。",
+        },
+        "qq.choose_directory" => match lang {
+            Language::En => "Choose working directory: {DIR}",
+            Language::ZhCN => "选择工作目录：{DIR}",
+        },
+        "qq.shutdown_notice" => match lang {
+            Language::En => "QQ bot is shutting down, sessions exited.",
+            Language::ZhCN => "QQ 机器人正在关闭，会话已退出。",
+        },
+        "qq.permission_request" => match lang {
+            Language::En => "Permission request: `{NAME}`\nReply with allow/deny and ID: `{ID}`",
+            Language::ZhCN => "权限请求: `{NAME}`\n请回复允许/拒绝并带上 ID: `{ID}`",
+        },
+        "qq.unknown_command" => match lang {
+            Language::En => "Unknown command. Available commands: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+            Language::ZhCN => "未知命令。可用命令: /help, /cd, /agent, /agents, /agent-history, /clear, /esc, /stop, /ll, /mkdir, /quit, /pwd, /show-thinking, /hide-thinking, /status",
+        },
+        "qq.sent_file_caption" => match lang {
+            Language::En => "File: {NAME}",
+            Language::ZhCN => "文件：{NAME}",
+        },
+        "qq.send_file_group_unsupported" => match lang {
+            Language::En => "This file type cannot be sent in QQ groups (images/videos/voice only). Use private chat (C2C) or send a PNG/JPG.",
+            Language::ZhCN => "该文件类型无法发到 QQ 群（群聊仅支持图片/视频/语音富媒体）。请私聊发送，或改用 PNG/JPG 图片。",
+        },
         "telegram.permission_request" => match lang {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
@@ -1098,6 +1150,10 @@ pub fn t(key: &str) -> &str {
         "codewhale.session_not_found_new_session" => match lang {
             Language::En => "CodeWhale session not found ({ID}); a new session was started.",
             Language::ZhCN => "未找到 CodeWhale 会话（{ID}），已自动新建会话。",
+        },
+        "opencode.session_not_found_new_session" => match lang {
+            Language::En => "OpenCode session not found ({ID}); a new session was started. Run `opencode auth login` if authentication fails.",
+            Language::ZhCN => "未找到 OpenCode 会话（{ID}），已自动新建会话。若认证失败，请在终端运行 `opencode auth login`。",
         },
         "telegram.command_help" => match lang {
             Language::En => "Show help",

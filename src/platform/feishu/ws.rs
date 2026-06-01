@@ -464,6 +464,7 @@ impl FeishuPlatform {
             .map(|c| c.work_dir)
             .unwrap_or_else(|| runtime.channel_session.work_dir.clone());
         let mut context = ChatCommandContext::new(
+            "feishu",
             runtime.channel_session.id.clone(),
             format!("Feishu {}", chat_id),
             channel_work_dir,

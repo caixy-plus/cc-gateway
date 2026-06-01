@@ -9,8 +9,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::agent::mcp_attach::build_claude_mcp_servers_object;
 use crate::config::model::AgentConfig;
-use crate::runtime::file_delivery::MCP_TARGET_ENV;
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{InputMessage, OutputEvent};
 
@@ -158,17 +158,8 @@ impl StreamJsonSession {
         let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
             let config_path =
                 std::env::temp_dir().join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
-            let target_json = mcp_ctx.to_env_json()?;
             let config_json = serde_json::json!({
-                "mcpServers": {
-                    "cc-gateway": {
-                        "command": std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cc-gateway")),
-                        "args": ["_mcp-server"],
-                        "env": {
-                            (MCP_TARGET_ENV): target_json,
-                        }
-                    }
-                }
+                "mcpServers": build_claude_mcp_servers_object(mcp_ctx)?,
             });
             let content = serde_json::to_string_pretty(&config_json)?;
             tokio::fs::write(&config_path, &content).await?;
@@ -280,17 +271,8 @@ impl StreamJsonSession {
         let mcp_config_path = if let Some(ref mcp_ctx) = mcp_context {
             let config_path =
                 std::env::temp_dir().join(format!("cc-gateway-mcp-{}.json", uuid::Uuid::new_v4()));
-            let target_json = mcp_ctx.to_env_json()?;
             let config_json = serde_json::json!({
-                "mcpServers": {
-                    "cc-gateway": {
-                        "command": std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cc-gateway")),
-                        "args": ["_mcp-server"],
-                        "env": {
-                            (MCP_TARGET_ENV): target_json,
-                        }
-                    }
-                }
+                "mcpServers": build_claude_mcp_servers_object(mcp_ctx)?,
             });
             let content = serde_json::to_string_pretty(&config_json)?;
             tokio::fs::write(&config_path, &content).await?;

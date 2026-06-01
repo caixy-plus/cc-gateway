@@ -7,6 +7,7 @@ pub struct GatewayConfig {
     pub agent: AgentProfiles,
     pub feishu: FeishuConfig,
     pub telegram: TelegramConfig,
+    pub qq: QqConfig,
     /// Default working directory for gateway sessions.
     pub default_dir: String,
     /// Whether to display agent Thinking blocks in output.
@@ -47,6 +48,7 @@ pub enum AgentProvider {
     Cursor,
     Pi,
     CodeWhale,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +69,7 @@ pub struct AgentProfiles {
     pub cursor: AgentProviderConfig,
     pub pi: AgentProviderConfig,
     pub codewhale: AgentProviderConfig,
+    pub opencode: AgentProviderConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +120,17 @@ pub struct TelegramConfig {
     pub require_pairing: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QqConfig {
+    pub enabled: bool,
+    pub app_id: String,
+    pub app_secret: String,
+    /// Use QQ sandbox API hosts when true.
+    pub sandbox: bool,
+    pub require_pairing: bool,
+}
+
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
@@ -124,6 +138,7 @@ impl Default for GatewayConfig {
             agent: AgentProfiles::default(),
             feishu: FeishuConfig::default(),
             telegram: TelegramConfig::default(),
+            qq: QqConfig::default(),
             default_dir: "~".to_string(),
             show_thinking: false,
             media_retention_days: 30,
@@ -164,18 +179,14 @@ impl std::fmt::Display for AgentProvider {
             AgentProvider::Cursor => write!(f, "cursor"),
             AgentProvider::Pi => write!(f, "pi"),
             AgentProvider::CodeWhale => write!(f, "codew"),
+            AgentProvider::OpenCode => write!(f, "opencode"),
         }
     }
 }
 
 impl AgentProvider {
     pub fn parse_str(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "cursor" => AgentProvider::Cursor,
-            "pi" => AgentProvider::Pi,
-            "codew" => AgentProvider::CodeWhale,
-            _ => AgentProvider::Claude,
-        }
+        crate::config::agent_registry::parse_provider_id(s).unwrap_or(AgentProvider::Claude)
     }
 }
 
@@ -199,6 +210,7 @@ impl Default for AgentProfiles {
             cursor: AgentProviderConfig::default(),
             pi: AgentProviderConfig::default(),
             codewhale: AgentProviderConfig::default(),
+            opencode: AgentProviderConfig::default(),
         }
     }
 }
@@ -228,6 +240,13 @@ impl AgentConfig {
                 mode: "agent".to_string(),
                 permission: "prompt".to_string(),
             },
+            AgentProvider::OpenCode => Self {
+                provider: AgentProvider::OpenCode,
+                cli_path: "opencode".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
         }
     }
 
@@ -252,7 +271,10 @@ impl AgentConfig {
                 self.default_args.clear();
             }
         }
-        if matches!(self.provider, AgentProvider::CodeWhale | AgentProvider::Pi) {
+        if matches!(
+            self.provider,
+            AgentProvider::CodeWhale | AgentProvider::Pi | AgentProvider::OpenCode
+        ) {
             self.default_args = strip_unsupported_default_args(&self.default_args);
         }
         self
@@ -284,6 +306,7 @@ impl AgentProfiles {
             AgentProvider::Cursor => self.cursor.enabled,
             AgentProvider::Pi => self.pi.enabled,
             AgentProvider::CodeWhale => self.codewhale.enabled,
+            AgentProvider::OpenCode => self.opencode.enabled,
         }
     }
 
@@ -299,6 +322,7 @@ impl AgentProfiles {
             AgentProvider::Cursor => &self.cursor,
             AgentProvider::Pi => &self.pi,
             AgentProvider::CodeWhale => &self.codewhale,
+            AgentProvider::OpenCode => &self.opencode,
         };
         let explicit_permission = profile.permission.clone();
         if let Some(ref default_args) = profile.default_args {
@@ -356,6 +380,10 @@ impl GatewayConfig {
         config.agent.cursor.enabled = false;
         config.agent.pi.enabled = false;
         config.agent.codewhale.enabled = false;
+        config.agent.opencode.enabled = false;
+        config.qq.enabled = false;
+        config.qq.app_id.clear();
+        config.qq.app_secret.clear();
         config.feishu.enabled = false;
         config.feishu.app_id.clear();
         config.feishu.app_secret.clear();
@@ -370,6 +398,18 @@ impl Default for TelegramConfig {
         Self {
             enabled: false,
             bot_token: "${TELEGRAM_BOT_TOKEN}".to_string(),
+            require_pairing: true,
+        }
+    }
+}
+
+impl Default for QqConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            app_id: "${QQ_APP_ID}".to_string(),
+            app_secret: "${QQ_APP_SECRET}".to_string(),
+            sandbox: false,
             require_pairing: true,
         }
     }

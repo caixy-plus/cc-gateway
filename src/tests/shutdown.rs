@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use crate::command::router::CommandRouter;
 use crate::config::model::AgentProfiles;
 use crate::platform::feishu::FeishuChannelRuntime;
+use crate::platform::qq::{QqChannelRuntime, QqChatTarget};
 use crate::platform::telegram::TelegramChannelRuntime;
 use crate::runtime::controller::AgentController;
 use crate::session::channel_manager::ActiveAgentRuntime;
@@ -78,4 +79,30 @@ fn telegram_shutdown_notice_targets_only_active_runtime() {
 
     assert_eq!(active.shutdown_notice_chat_id(), Some(12345));
     assert_eq!(inactive.shutdown_notice_chat_id(), None);
+}
+
+#[test]
+fn qq_shutdown_notice_targets_only_active_runtime() {
+    let chat = QqChatTarget::C2c {
+        openid: "openid-abc".to_string(),
+    };
+    let mut active = QqChannelRuntime::new(
+        channel(SessionSource::Qq, "qq", "u:openid-abc"),
+        chat.clone(),
+    );
+    active.active_agent = Some(dummy_active_runtime("channel-u-openid-abc"));
+    let inactive = QqChannelRuntime::new(
+        channel(SessionSource::Qq, "qq", "u:other"),
+        QqChatTarget::C2c {
+            openid: "other".to_string(),
+        },
+    );
+
+    assert_eq!(
+        active.shutdown_notice_target(),
+        Some(QqChatTarget::C2c {
+            openid: "openid-abc".to_string(),
+        })
+    );
+    assert_eq!(inactive.shutdown_notice_target(), None);
 }

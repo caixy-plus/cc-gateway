@@ -144,6 +144,10 @@ async fn parses_core_commands_without_starting_claude() {
         CommandAction::StartSession { provider: Some(AgentProvider::CodeWhale), args, .. } if args.is_empty()
     ));
     assert!(matches!(
+        router.route("/agent opencode").await,
+        CommandAction::StartSession { provider: Some(AgentProvider::OpenCode), args, .. } if args.is_empty()
+    ));
+    assert!(matches!(
         router.route("/agent cursor --force").await,
         CommandAction::StartSession { provider: Some(AgentProvider::Cursor), args, .. } if args == vec!["--force"]
     ));

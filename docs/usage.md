@@ -52,7 +52,7 @@ The daemon enforces a single instance by binding to a local port (`port` in conf
 cc-gateway start
 ```
 
-Starts cc-gateway as a background daemon. The daemon listens for messages from all enabled platforms (Feishu and Telegram can run simultaneously).
+Starts cc-gateway as a background daemon. The daemon listens for messages from all enabled platforms (Feishu, Telegram, and QQ can run simultaneously).
 
 ### Stop
 
@@ -76,9 +76,13 @@ cc-gateway log -f           # Follow log output
 cc-gateway log -n 500       # Show last 500 lines
 ```
 
+## Pairing new chats
+
+When `require_pairing` is enabled (default), open **WebUI → Pairing** after a user messages the bot for the first time. The bot sends a pairing code; approve the request before `/agent` works. See [bots/README.md](bots/README.md).
+
 ## Feishu Bot
 
-Once the daemon is running with Feishu configured, you can:
+Setup: [bots/feishu.md](bots/feishu.md). Once the daemon is running with Feishu configured, you can:
 
 1. Open Feishu and find your bot
 2. Send messages directly — they are forwarded to Claude Code when a session is active
@@ -97,13 +101,24 @@ Send `/ll` in Feishu to receive an interactive card listing folders from `defaul
 
 ## Telegram Bot
 
-Once the daemon is running with Telegram configured:
+Setup: [bots/telegram.md](bots/telegram.md). Once the daemon is running with Telegram configured:
 
 1. Open Telegram and find your bot
 2. Send messages directly — they are forwarded to Claude Code
 3. Use the same gateway commands as in CLI mode
 
-Each chat gets its own isolated Claude subprocess. The Telegram platform uses long-polling (`getUpdates`) by default; set `webhook_url` to switch to webhook mode.
+Each chat gets its own isolated agent subprocess. Telegram uses long-polling (`getUpdates`) only.
+
+## QQ Bot
+
+Setup: [bots/qq.md](bots/qq.md). Once the daemon is running with QQ configured:
+
+1. **Private (C2C):** DM the bot directly.
+2. **Group:** @ the bot when sending a message.
+3. Use the same gateway commands as CLI (`/agent`, `/cd`, `/help`, …).
+4. `/ll` and agent selection are **plain text** (no interactive cards).
+
+Each QQ channel (`u:…` / `g:…`) has its own isolated agent session. Restart the daemon after changing QQ credentials or `sandbox`.
 
 ## Tips
 

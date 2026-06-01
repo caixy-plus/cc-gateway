@@ -4,6 +4,8 @@ use tokio::sync::mpsc;
 use crate::agent::codewhale_acp::CodeWhaleAcpSession;
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
+use crate::agent::mcp_attach::{log_unsupported_mcp, supports_mcp_attach};
+use crate::agent::opencode_acp::OpenCodeAcpSession;
 use crate::agent::pi_rpc::PiRpcSession;
 use crate::config::model::{AgentConfig, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
@@ -23,6 +25,7 @@ pub enum AgentRuntime {
     Cursor(CursorAcpSession),
     Pi(PiRpcSession),
     CodeWhale(CodeWhaleAcpSession),
+    OpenCode(OpenCodeAcpSession),
 }
 
 impl AgentRuntime {
@@ -34,6 +37,9 @@ impl AgentRuntime {
         resume_session_id: Option<String>,
         mcp_context: Option<McpContext>,
     ) -> Result<(Self, Option<String>)> {
+        if mcp_context.is_some() && !supports_mcp_attach(config.provider.clone()) {
+            log_unsupported_mcp(config.provider.clone());
+        }
         match config.provider {
             AgentProvider::Claude => {
                 let (claude_tx, mut claude_rx) = mpsc::unbounded_channel::<OutputEvent>();
@@ -63,6 +69,7 @@ impl AgentRuntime {
                     config,
                     event_tx,
                     resume_session_id,
+                    mcp_context,
                 )
                 .await?;
                 Ok((Self::Cursor(session), session_id))
@@ -80,9 +87,22 @@ impl AgentRuntime {
                     config,
                     event_tx,
                     resume_session_id,
+                    mcp_context,
                 )
                 .await?;
                 Ok((Self::CodeWhale(session), session_id))
+            }
+            AgentProvider::OpenCode => {
+                let (session, session_id) = OpenCodeAcpSession::spawn(
+                    work_dir,
+                    extra_args,
+                    config,
+                    event_tx,
+                    resume_session_id,
+                    mcp_context,
+                )
+                .await?;
+                Ok((Self::OpenCode(session), session_id))
             }
         }
     }
@@ -97,6 +117,7 @@ impl AgentRuntime {
             AgentRuntime::Cursor(session) => session.send_user_message(text).await,
             AgentRuntime::Pi(session) => session.send_user_message(text).await,
             AgentRuntime::CodeWhale(session) => session.send_message(text).await,
+            AgentRuntime::OpenCode(session) => session.send_user_message(text).await,
         }
     }
 
@@ -110,7 +131,10 @@ impl AgentRuntime {
     pub async fn flush_queued_messages(&mut self) -> Result<()> {
         match self {
             AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
-            AgentRuntime::Cursor(_) | AgentRuntime::Pi(_) | AgentRuntime::CodeWhale(_) => Ok(()),
+            AgentRuntime::Cursor(_)
+            | AgentRuntime::Pi(_)
+            | AgentRuntime::CodeWhale(_)
+            | AgentRuntime::OpenCode(_) => Ok(()),
         }
     }
 
@@ -122,6 +146,7 @@ impl AgentRuntime {
             AgentRuntime::Cursor(session) => session.send_cancel().await,
             AgentRuntime::Pi(session) => session.send_cancel().await,
             AgentRuntime::CodeWhale(session) => session.send_stop_generation().await,
+            AgentRuntime::OpenCode(session) => session.send_cancel().await,
         }
     }
 
@@ -144,6 +169,11 @@ impl AgentRuntime {
             }
             AgentRuntime::Pi(session) => session.new_provider_session().await,
             AgentRuntime::CodeWhale(session) => {
+                session
+                    .new_provider_session(&ctx.work_dir, ctx.config)
+                    .await
+            }
+            AgentRuntime::OpenCode(session) => {
                 session
                     .new_provider_session(&ctx.work_dir, ctx.config)
                     .await
@@ -205,6 +235,23 @@ impl AgentRuntime {
                 }
                 InputMessage::Interrupt => Ok(()),
             },
+            AgentRuntime::OpenCode(session) => match msg {
+                InputMessage::ControlResponse { response } => {
+                    let allow = response.response.behavior == "allow";
+                    session
+                        .send_permission_response(&response.request_id, allow)
+                        .await
+                }
+                InputMessage::User { message } => {
+                    let text = message
+                        .content
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| message.content.to_string());
+                    session.send_user_message(&text).await
+                }
+                InputMessage::Interrupt => Ok(()),
+            },
         }
     }
 
@@ -214,6 +261,7 @@ impl AgentRuntime {
             AgentRuntime::Cursor(session) => session.stop().await,
             AgentRuntime::Pi(session) => session.stop().await,
             AgentRuntime::CodeWhale(session) => session.stop().await,
+            AgentRuntime::OpenCode(session) => session.stop().await,
         }
     }
 
@@ -227,6 +275,7 @@ impl AgentRuntime {
             AgentRuntime::Cursor(session) => session.force_stop().await,
             AgentRuntime::Pi(session) => session.force_stop().await,
             AgentRuntime::CodeWhale(session) => session.force_stop().await,
+            AgentRuntime::OpenCode(session) => session.force_stop().await,
         }
     }
 
@@ -236,6 +285,7 @@ impl AgentRuntime {
             AgentRuntime::Cursor(session) => session.is_alive(),
             AgentRuntime::Pi(session) => session.is_alive(),
             AgentRuntime::CodeWhale(session) => session.is_alive(),
+            AgentRuntime::OpenCode(session) => session.is_alive(),
         }
     }
 
@@ -245,6 +295,7 @@ impl AgentRuntime {
             AgentRuntime::Cursor(_) => String::new(),
             AgentRuntime::Pi(session) => session.recent_stderr(),
             AgentRuntime::CodeWhale(session) => session.recent_stderr(),
+            AgentRuntime::OpenCode(session) => session.recent_stderr(),
         }
     }
 }

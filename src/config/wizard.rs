@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::io::{self, Write};
 
+use crate::config::agent_registry::{self, AGENT_PROVIDER_DEFS};
 use crate::config::loader::ConfigLoader;
 use crate::config::model::{AgentConfig, AgentProvider, GatewayConfig};
 use crate::{t, t_fmt};
@@ -80,37 +81,42 @@ pub fn run_init_config() -> Result<()> {
 fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) -> Result<()> {
     println!("\n{}", t!("wizard.agent_section_title"));
     println!("{}", t!("wizard.agent_section_hint"));
-    println!("  1. claude    {}", status_label(cli_installed("claude")));
-    println!("  2. cursor    {}", status_label(cli_installed("agent")));
-    println!("  3. pi        {}", status_label(cli_installed("pi")));
-    println!("  4. codew {}", status_label(cli_installed("codewhale")));
+    for (idx, def) in AGENT_PROVIDER_DEFS.iter().enumerate() {
+        let aliases = if def.slash_aliases.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", def.slash_aliases.join(", "))
+        };
+        println!(
+            "  {}. {}{}    {}",
+            idx + 1,
+            def.display_name,
+            aliases,
+            status_label(cli_installed(def.cli_binary))
+        );
+    }
     println!("  {}", t!("wizard.opt_skip"));
 
-    let provider = match read_choice()?.as_str() {
-        "1" | "claude" => AgentProvider::Claude,
-        "2" | "cursor" => AgentProvider::Cursor,
-        "3" | "pi" => AgentProvider::Pi,
-        "4" | "codew" => AgentProvider::CodeWhale,
-        _ => {
+    let choice = read_choice()?;
+    let provider = match resolve_agent_menu_choice(&choice) {
+        Some(p) => p,
+        None => {
             println!("{}", t!("wizard.skipped_agent"));
             return Ok(());
         }
     };
 
     config.agent.default = provider.clone();
+    agent_registry::apply_init_agent_enablement(&mut config.agent, provider.clone(), cli_installed);
+
     let defaults = AgentConfig::default_for_provider(provider.clone());
     let default_args = prompt_field("default_args", &defaults.default_args)?;
 
-    let target = match provider {
-        AgentProvider::Claude => &mut config.agent.claude,
-        AgentProvider::Cursor => &mut config.agent.cursor,
-        AgentProvider::Pi => &mut config.agent.pi,
-        AgentProvider::CodeWhale => &mut config.agent.codewhale,
-    };
-    target.enabled = true;
+    let def = agent_registry::def_for_provider(provider.clone());
+    let target = agent_registry::profile_mut_for_def(&mut config.agent, def);
     target.default_args = Some(default_args);
 
-    if !cli_installed(&defaults.cli_path) {
+    if !cli_installed(def.cli_binary) {
         println!(
             "{}",
             t_fmt!("wizard.agent_unavailable_warn", NAME = defaults.cli_path)
@@ -127,6 +133,16 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
     Ok(())
 }
 
+/// Map init menu input (number, config id, or slash alias) to a provider.
+fn resolve_agent_menu_choice(choice: &str) -> Option<AgentProvider> {
+    if let Ok(n) = choice.parse::<usize>() {
+        if n >= 1 && n <= AGENT_PROVIDER_DEFS.len() {
+            return Some(AGENT_PROVIDER_DEFS[n - 1].provider.clone());
+        }
+    }
+    agent_registry::parse_provider_id(choice)
+}
+
 /// Step 2: pick a single bot platform (or skip). Both can be configured later
 /// in the WebUI.
 fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) -> Result<()> {
@@ -134,6 +150,7 @@ fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) ->
     println!("{}", t!("wizard.bot_section_hint"));
     println!("  1. feishu");
     println!("  2. telegram");
+    println!("  3. qq");
     println!("  {}", t!("wizard.opt_skip"));
 
     match read_choice()?.as_str() {
@@ -153,6 +170,15 @@ fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) ->
                 warnings.push(t!("wizard.warn_telegram_incomplete").to_string());
             }
             println!("{}", t_fmt!("wizard.bot_configured", NAME = "telegram"));
+        }
+        "3" | "qq" => {
+            config.qq.enabled = true;
+            config.qq.app_id = prompt_field("app_id", &config.qq.app_id)?;
+            config.qq.app_secret = prompt_field("app_secret", "")?;
+            if config.qq.app_id.is_empty() || config.qq.app_secret.is_empty() {
+                warnings.push(t!("wizard.warn_qq_incomplete").to_string());
+            }
+            println!("{}", t_fmt!("wizard.bot_configured", NAME = "qq"));
         }
         _ => {
             println!("{}", t!("wizard.skipped_bot"));
@@ -216,6 +242,15 @@ fn save_config(config: &GatewayConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resolve_agent_menu_choice_by_index_and_alias() {
+        assert_eq!(resolve_agent_menu_choice("1"), Some(AgentProvider::Claude));
+        assert_eq!(
+            resolve_agent_menu_choice("codew"),
+            Some(AgentProvider::CodeWhale)
+        );
+        assert_eq!(resolve_agent_menu_choice("skip"), None);
+    }
 
     #[test]
     fn runtime_defaults_disables_all_integrations() {
@@ -225,8 +260,9 @@ mod tests {
         assert!(!config.agent.cursor.enabled);
         assert!(!config.agent.pi.enabled);
         assert!(!config.agent.codewhale.enabled);
+        assert!(!config.agent.opencode.enabled);
         assert!(!config.feishu.enabled);
         assert!(!config.telegram.enabled);
+        assert!(!config.qq.enabled);
     }
-
 }

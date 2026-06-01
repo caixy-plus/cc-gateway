@@ -1,5 +1,24 @@
 #!/bin/sh
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Language (same as install.sh)
+detect_lang() {
+    if [ -n "$CC_GATEWAY_LANG" ]; then
+        case "$CC_GATEWAY_LANG" in zh*) echo "zh" ;; *) echo "en" ;; esac
+        return
+    fi
+    if [ -n "$LANG" ]; then
+        case "$LANG" in zh*) echo "zh" ;; *) echo "en" ;; esac
+        return
+    fi
+    echo "en"
+}
+LANG_CODE=$(detect_lang)
+msg() {
+    if [ "$LANG_CODE" = "zh" ]; then echo "$2"; else echo "$1"; fi
+}
+
 DEFAULT_PORT=17534
 CONFIG_FILE="$HOME/.cc-gateway/config.json"
 PID_FILE="$HOME/.cc-gateway/daemon.pid"
@@ -44,7 +63,6 @@ with open('$CONFIG_FILE', 'w') as f:
     fi
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WEBUI_DIR="$(dirname "$SCRIPT_DIR")/cc-gateway-webui"
 
 # Build frontend if source exists
@@ -80,5 +98,11 @@ echo "4. 重启 cc-gateway..."
 cc-gateway restart
 
 echo ""
-echo "5. 打开 WebUI（如未启动会自动 start）"
+msg "5. Open WebUI (starts daemon if needed)..." "5. 打开 WebUI（如未启动会自动 start）..."
 cc-gateway webui || true
+
+if [ -f "$SCRIPT_DIR/scripts/install-docs.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$SCRIPT_DIR/scripts/install-docs.sh"
+    print_install_docs "$SCRIPT_DIR"
+fi

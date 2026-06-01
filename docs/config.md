@@ -4,6 +4,8 @@ cc-gateway uses JSON configuration stored at `~/.cc-gateway/config.json`.
 
 All string values support `${VAR_NAME}` environment variable substitution.
 
+**Per-platform bot setup (step-by-step):** see [docs/bots/README.md](bots/README.md).
+
 ## Example
 
 ```json
@@ -15,37 +17,42 @@ All string values support `${VAR_NAME}` environment variable substitution.
   "agent": {
     "default": "claude",
     "claude": {
+      "enabled": true,
       "cli_path": "claude",
-      "default_args": "--dangerously-skip-permissions",
-      "mode": "agent",
-      "permission": "prompt"
+      "default_args": "--dangerously-skip-permissions"
     },
     "cursor": {
+      "enabled": false,
       "cli_path": "agent",
-      "default_args": "",
-      "mode": "agent",
-      "permission": "prompt"
+      "default_args": ""
     }
   },
   "feishu": {
     "enabled": true,
     "app_id": "${FEISHU_APP_ID}",
     "app_secret": "${FEISHU_APP_SECRET}",
-    "allow_from": "*",
-    "encrypt_key": "",
-    "mode": "websocket",
-    "webhook_bind": "0.0.0.0:3000"
+    "require_pairing": true
   },
   "telegram": {
     "enabled": false,
     "bot_token": "${TELEGRAM_BOT_TOKEN}",
-    "allow_from": "*",
-    "webhook_url": ""
+    "require_pairing": true
+  },
+  "qq": {
+    "enabled": false,
+    "app_id": "${QQ_APP_ID}",
+    "app_secret": "${QQ_APP_SECRET}",
+    "sandbox": false,
+    "require_pairing": true
   },
   "default_dir": "~/Workspace",
-  "port": 17534
+  "show_thinking": false,
+  "port": 17534,
+  "bind_address": "127.0.0.1"
 }
 ```
+
+Run `cc-gateway init` for an interactive wizard, or edit via WebUI **Settings**.
 
 ## Fields
 
@@ -55,84 +62,94 @@ All string values support `${VAR_NAME}` environment variable substitution.
 |-------|------|---------|-------------|
 | `level` | string | `"info"` | Log level: trace, debug, info, warn, error |
 | `file` | string | `"~/.cc-gateway/logs/gateway.log"` | Log file path |
+| `max_lines` | usize | `100000` | Max lines retained in the log file |
+| `max_size_mb` | usize | `50` | Max log file size (MB) before rotation |
 
 ### Top-level fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `port` | u16 | `17534` | Local port bound by the daemon to enforce a single instance |
-| `default_dir` | string | `"~"` | Default working directory for gateway sessions |
-| `show_thinking` | bool | `false` | Display Claude's Thinking blocks in output |
-| `media_retention_days` | u64 | `30` | Days to retain downloaded media files |
+| `port` | u16 | `17534` | HTTP port (WebUI + single-instance lock) |
+| `bind_address` | string | `"127.0.0.1"` | Bind address (`0.0.0.0` for LAN) |
+| `allowed_ips` | string[] | `[]` | Optional CIDR allowlist (empty = no IP filter) |
+| `webui_token` | string? | — | Optional WebUI access token |
+| `default_dir` | string | `"~"` | Default working directory for sessions |
+| `show_thinking` | bool | `false` | Show agent Thinking blocks in output |
+| `media_retention_days` | u64 | `30` | Days to keep downloaded media |
+| `session_retention_per_channel` | u64 | `30` | Max agent sessions kept per channel (10–100) |
 
-> **Note:** The daemon starts **all platforms whose `enabled` flag is `true`** simultaneously. You can run Feishu and Telegram at the same time by enabling both.
+> **Note:** The daemon starts **all platforms whose `enabled` flag is `true`** at once (Feishu, Telegram, QQ, or any combination).
 
 ### `agent`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default` | string | `"claude"` | Default provider used by `/agent` when no provider is specified |
-| `claude` | object |  | Provider profile for `claude` |
-| `cursor` | object |  | Provider profile for `cursor` |
+| `default` | string | `"claude"` | Default provider for `/agent` when omitted |
+| `<provider>` | object | — | Per-provider profile (`claude`, `cursor`, `pi`, `codewhale`, `opencode`, …) |
 
-Each provider profile supports:
+Each provider profile:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Whether the provider appears in `/agents` and init |
+| `cli_path` | string | CLI binary (defaults per provider) |
+| `default_args` | string | Args passed on session start |
+| `mode` | string | Provider mode when supported |
+| `permission` | string | `prompt`, `allow`, or `deny` |
+
+Override per session: `/agent [provider] <extra args>`.
+
+### `feishu`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `cli_path` | string | `"claude"` / `"agent"` | CLI binary path for the provider |
-| `default_args` | string | `""` | Default args passed to the provider on session start |
-| `mode` | string | `"agent"` | Provider mode (passed to the provider if supported) |
-| `permission` | string | `"prompt"` | Permission policy: `prompt`, `allow`, `deny` |
+| `enabled` | bool | `true` in file template; `false` until `init` | Enable Feishu bot |
+| `app_id` | string | `"${FEISHU_APP_ID}"` | Feishu app ID |
+| `app_secret` | string | `"${FEISHU_APP_SECRET}"` | Feishu app secret |
+| `require_pairing` | bool | `true` | Require WebUI approval for new chats |
 
-You can override or append arguments per session via `/agent [provider] <args>`.
+**Setup guide:** [bots/feishu.md](bots/feishu.md)
 
 ### `telegram`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable Telegram bot |
-| `bot_token` | string | `"${TELEGRAM_BOT_TOKEN}"` | Telegram Bot API token |
-| `allow_from` | string | `"*"` | Allowed user IDs or usernames, comma-separated; `"*"` = all |
-| `webhook_url` | string | `""` | Webhook URL for Telegram Bot API (empty = long-polling) |
+| `bot_token` | string | `"${TELEGRAM_BOT_TOKEN}"` | BotFather HTTP API token |
+| `require_pairing` | bool | `true` | Require WebUI approval for new chats |
 
-Notes:
+Uses **long-polling** (`getUpdates`) only. **Setup guide:** [bots/telegram.md](bots/telegram.md)
 
-- `allow_from` accepts a comma-separated allowlist:
-  - numeric user id (e.g. `12345678`)
-  - username without `@` (e.g. `alice`)
-  - `"*"` to allow all (not recommended for public bots)
-- `webhook_url`:
-  - empty string uses long-polling (`getUpdates`)
-  - set to an HTTPS URL to switch to webhook mode (you must expose a public endpoint)
-
-### `feishu`
+### `qq`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable Feishu bot |
-| `app_id` | string | `"${FEISHU_APP_ID}"` | Feishu app ID |
-| `app_secret` | string | `"${FEISHU_APP_SECRET}"` | Feishu app secret |
-| `allow_from` | string | `"*"` | Allowed user open_ids, comma-separated; `"*"` = all |
-| `encrypt_key` | string | `""` | Event encrypt key (optional) |
-| `mode` | string | `"websocket"` | Connection mode: `"websocket"` or `"webhook"` |
-| `webhook_bind` | string | `"0.0.0.0:3000"` | Bind address for webhook server |
+| `enabled` | bool | `false` | Enable QQ official bot |
+| `app_id` | string | `"${QQ_APP_ID}"` | QQ bot AppID |
+| `app_secret` | string | `"${QQ_APP_SECRET}"` | Client secret |
+| `sandbox` | bool | `false` | Use sandbox API hosts when `true` |
+| `require_pairing` | bool | `true` | Require WebUI approval for new channels |
 
-`default_dir` determines:
-- Which directory `/ll` lists in Feishu interactive cards
-- The upper boundary for `/cd ..` in Feishu mode (cannot navigate above this directory)
+Uses **WebSocket Gateway** (OpenAPI v2). **Setup guide:** [bots/qq.md](bots/qq.md)
 
-## Telegram Setup
+### `default_dir`
 
-1. Message [@BotFather](https://t.me/BotFather) on Telegram and create a new bot
-2. Copy the bot token to `telegram.bot_token` in your config
-3. Set `telegram.enabled` to `true`
-4. Optionally set `telegram.allow_from` to restrict which users can interact with the bot
-5. Leave `telegram.webhook_url` empty for long-polling, or set it to switch to webhook mode
+- Root for `/ll` listings (Feishu cards list under this path; other platforms use text lists).
+- Upper bound for `/cd ..` in Feishu (cannot navigate above `default_dir`).
 
-## Feishu Setup
+## Restart vs live config
 
-1. Go to [Feishu Open Platform](https://open.feishu.cn) and create an app
-2. Enable "Bot" capability
-3. Add `im.message.receive_v1` event, select WebSocket long-connection mode
-4. Copy `app_id` and `app_secret` to your config
-5. Install the app to your workspace
+| Change | Effect |
+|--------|--------|
+| `feishu` / `telegram` / `qq` credentials, `enabled`, `qq.sandbox` | **Restart daemon** required |
+| `require_pairing` on any platform | Applied **live** when saved from WebUI |
+| `port`, `bind_address`, `agent`, `log`, … | **Restart daemon** required |
+
+## Platform setup (quick links)
+
+| Platform | Guide |
+|----------|-------|
+| Feishu / Lark | [bots/feishu.md](bots/feishu.md) |
+| Telegram | [bots/telegram.md](bots/telegram.md) |
+| QQ | [bots/qq.md](bots/qq.md) |
+| Overview + pairing | [bots/README.md](bots/README.md) |

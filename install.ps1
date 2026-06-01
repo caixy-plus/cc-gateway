@@ -139,6 +139,31 @@ Write-Msg "cc-gateway installed successfully to $InstallDir\$Binary.exe" "cc-gat
 Write-Msg "Run '$Binary --help' to get started" "运行 '$Binary --help' 开始使用"
 Write-Msg "Open WebUI: '$Binary webui' (starts daemon if needed)" "打开 WebUI：'$Binary webui'（如未启动会自动 start）"
 Write-Msg "If daemon start looks stuck, run: '$Binary status' and '$Binary log -n 200'" "若守护进程启动疑似卡住，请运行：'$Binary status' 和 '$Binary log -n 200'"
-Write-Msg "" ""
-Write-Msg "For Feishu bot setup instructions, see:" "飞书机器人配置说明请参阅:"
-Write-Msg "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup" "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"
+$docsScript = $null
+$docsTmp = $null
+if ($PSScriptRoot) {
+    $candidate = Join-Path $PSScriptRoot "scripts\install-docs.ps1"
+    if (Test-Path $candidate) { $docsScript = $candidate }
+}
+if (-not $docsScript) {
+    $docsTmp = Join-Path $env:TEMP "cc-gateway-install-docs.ps1"
+    try {
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$Repo/main/scripts/install-docs.ps1" -OutFile $docsTmp -UseBasicParsing
+        $docsScript = $docsTmp
+    } catch {
+        $docsScript = $null
+        if ($docsTmp -and (Test-Path $docsTmp)) {
+            Remove-Item -Force $docsTmp -ErrorAction SilentlyContinue
+        }
+        $docsTmp = $null
+    }
+}
+if ($docsScript -and (Test-Path $docsScript)) {
+    . $docsScript
+    Print-InstallDocs
+    if ($docsTmp -and (Test-Path $docsTmp)) {
+        Remove-Item -Force $docsTmp -ErrorAction SilentlyContinue
+    }
+} else {
+    Write-Msg "Documentation: https://github.com/$Repo/tree/main/docs/bots" "文档: https://github.com/$Repo/tree/main/docs/bots"
+}

@@ -78,6 +78,7 @@ pub fn create_app_with_config_path(
         )
         .route("/api/config", get(handlers::config::handle_get_config))
         .route("/api/config", post(handlers::config::handle_save_config))
+        .route("/api/agents", get(handlers::config::handle_get_agents))
         .route(
             "/api/platforms",
             get(handlers::config::handle_get_platforms),

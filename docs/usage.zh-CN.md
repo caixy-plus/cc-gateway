@@ -52,7 +52,7 @@ cc-gateway> /ll
 cc-gateway start
 ```
 
-将 cc-gateway 作为后台守护进程启动。守护进程会同时监听所有已启用平台的消息（飞书和 Telegram 可以同时运行）。
+将 cc-gateway 作为后台守护进程启动。守护进程会同时监听所有已启用平台的消息（飞书、Telegram、QQ 可同时运行）。
 
 ### 停止
 
@@ -76,9 +76,13 @@ cc-gateway log -f           # 追踪日志输出
 cc-gateway log -n 500       # 显示最后 500 行
 ```
 
+## 新聊天配对
+
+默认开启 `require_pairing` 时，用户首次给机器人发消息后，须在 **WebUI → 配对** 中批准（机器人会回复配对码），之后才能正常使用 `/agent`。详见 [bots/README.zh-CN.md](bots/README.zh-CN.md)。
+
 ## 飞书机器人
 
-守护进程运行且飞书已配置后，你可以:
+配置步骤：[bots/feishu.zh-CN.md](bots/feishu.zh-CN.md)。守护进程运行且飞书已配置后，你可以:
 
 1. 打开飞书并找到你的机器人
 2. 直接发送消息 — 当会话激活时它们会被转发给 Claude Code
@@ -97,13 +101,24 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 ## Telegram 机器人
 
-守护进程运行且 Telegram 已配置后:
+配置步骤：[bots/telegram.zh-CN.md](bots/telegram.zh-CN.md)。守护进程运行且 Telegram 已配置后:
 
 1. 打开 Telegram 并找到你的机器人
 2. 直接发送消息 — 它们会被转发给 Claude Code
 3. 使用与 CLI 模式相同的网关命令
 
-每个聊天都有独立的 Claude 子进程。Telegram 平台默认使用长轮询 (`getUpdates`)；设置 `webhook_url` 可切换为 Webhook 模式。
+每个聊天都有独立的智能体子进程。Telegram 仅使用长轮询 (`getUpdates`)。
+
+## QQ 机器人
+
+配置步骤：[bots/qq.zh-CN.md](bots/qq.zh-CN.md)。守护进程运行且 QQ 已配置后:
+
+1. **私聊（C2C）：** 直接与机器人对话。
+2. **群聊：** 发送消息时需 **@ 机器人**。
+3. 网关命令与 CLI 相同（`/agent`、`/cd`、`/help` 等）。
+4. `/ll`、选智能体等为 **纯文本**（无消息卡片）。
+
+每个 QQ 频道（`u:…` / `g:…`）独立会话。修改 QQ 凭证或 `sandbox` 后需重启守护进程。
 
 ## 小贴士
 

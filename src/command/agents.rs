@@ -2,32 +2,17 @@ use crate::command::builtin::{interactive_select_with_prompt, SelectAction};
 use crate::config::model::AgentProvider;
 use crate::{t, t_fmt};
 
-/// Providers whose `cli_path` has been explicitly configured.
-/// Only these appear in the `/agents` picker.
+/// Providers enabled in config — appear in `/agents` pickers and channel agent cards.
 pub fn available_providers(profiles: &crate::config::model::AgentProfiles) -> Vec<AgentProvider> {
-    let mut providers = Vec::new();
-    if profiles.claude.enabled {
-        providers.push(AgentProvider::Claude);
-    }
-    if profiles.cursor.enabled {
-        providers.push(AgentProvider::Cursor);
-    }
-    if profiles.pi.enabled {
-        providers.push(AgentProvider::Pi);
-    }
-    if profiles.codewhale.enabled {
-        providers.push(AgentProvider::CodeWhale);
-    }
-    providers
+    crate::config::agent_registry::AGENT_PROVIDER_DEFS
+        .iter()
+        .filter(|def| profiles.is_provider_enabled(&def.provider))
+        .map(|def| def.provider.clone())
+        .collect()
 }
 
 pub fn provider_display_name(provider: &AgentProvider) -> &'static str {
-    match provider {
-        AgentProvider::Claude => "claude",
-        AgentProvider::Cursor => "cursor",
-        AgentProvider::Pi => "pi",
-        AgentProvider::CodeWhale => "codew",
-    }
+    crate::config::agent_registry::def_for_provider(provider.clone()).display_name
 }
 
 /// Build picker rows: `(label, selectable)`.
@@ -135,6 +120,7 @@ pub fn stop_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::Cursor => t!("builtin.stop_sent_cursor").to_string(),
         AgentProvider::Pi => t!("builtin.stop_sent_pi").to_string(),
         AgentProvider::CodeWhale => t!("builtin.stop_sent_codewhale").to_string(),
+        AgentProvider::OpenCode => t!("builtin.stop_sent_opencode").to_string(),
     }
 }
 
@@ -145,6 +131,7 @@ pub fn esc_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::Cursor => t!("builtin.esc_sent_cursor").to_string(),
         AgentProvider::Pi => t!("builtin.esc_sent_pi").to_string(),
         AgentProvider::CodeWhale => t!("builtin.esc_sent_codewhale").to_string(),
+        AgentProvider::OpenCode => t!("builtin.esc_sent_opencode").to_string(),
     }
 }
 
@@ -155,6 +142,7 @@ pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> Stri
         AgentProvider::Cursor => t_fmt!("builtin.esc_with_prompt_sent_cursor", MSG = msg),
         AgentProvider::Pi => t_fmt!("builtin.esc_with_prompt_sent_pi", MSG = msg),
         AgentProvider::CodeWhale => t_fmt!("builtin.esc_with_prompt_sent_codewhale", MSG = msg),
+        AgentProvider::OpenCode => t_fmt!("builtin.esc_with_prompt_sent_opencode", MSG = msg),
     }
 }
 
@@ -195,8 +183,8 @@ mod tests {
     fn build_provider_items_marks_current_default() {
         let profiles = test_profiles_both();
         let items = build_provider_items(&profiles, &AgentProvider::Cursor);
-        // All four providers enabled by default
-        assert_eq!(items.len(), 4);
+        // All five providers enabled by default
+        assert_eq!(items.len(), 5);
         assert!(items.iter().any(|(label, _)| label.contains("claude")));
         assert!(items.iter().any(|(label, _)| label.contains("cursor")));
     }
@@ -229,7 +217,7 @@ mod tests {
         let profiles = test_profiles_both();
         let available = available_providers(&profiles);
         // All four providers default to enabled=true
-        assert_eq!(available.len(), 4);
+        assert_eq!(available.len(), 5);
         assert!(available.contains(&AgentProvider::Claude));
         assert!(available.contains(&AgentProvider::Cursor));
     }
@@ -245,9 +233,9 @@ mod tests {
             ..Default::default()
         };
         let available = available_providers(&profiles);
-        // claude is enabled (default), cursor is disabled, pi & codewhale are
-        // enabled by default → 3 total.
-        assert_eq!(available.len(), 3);
+        // claude is enabled (default), cursor is disabled, pi, codewhale & opencode are
+        // enabled by default → 4 total.
+        assert_eq!(available.len(), 4);
         assert!(available.contains(&AgentProvider::Claude));
     }
 
@@ -267,6 +255,10 @@ mod tests {
                 ..Default::default()
             },
             codewhale: AgentProviderConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            opencode: AgentProviderConfig {
                 enabled: false,
                 ..Default::default()
             },

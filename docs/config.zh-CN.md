@@ -1,8 +1,10 @@
 # 配置说明
 
-cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
+cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 
 所有字符串值均支持 `${VAR_NAME}` 环境变量替换。
+
+**各平台机器人分步配置：** 请参阅 [docs/bots/README.zh-CN.md](bots/README.zh-CN.md)。
 
 ## 示例
 
@@ -15,124 +17,139 @@ cc-gateway 使用 JSON 配置文件，存储在 `~/.cc-gateway/config.json`。
   "agent": {
     "default": "claude",
     "claude": {
+      "enabled": true,
       "cli_path": "claude",
-      "default_args": "--dangerously-skip-permissions",
-      "mode": "agent",
-      "permission": "prompt"
+      "default_args": "--dangerously-skip-permissions"
     },
     "cursor": {
+      "enabled": false,
       "cli_path": "agent",
-      "default_args": "",
-      "mode": "agent",
-      "permission": "prompt"
+      "default_args": ""
     }
   },
   "feishu": {
     "enabled": true,
     "app_id": "${FEISHU_APP_ID}",
     "app_secret": "${FEISHU_APP_SECRET}",
-    "allow_from": "*",
-    "encrypt_key": "",
-    "mode": "websocket",
-    "webhook_bind": "0.0.0.0:3000"
+    "require_pairing": true
   },
   "telegram": {
     "enabled": false,
     "bot_token": "${TELEGRAM_BOT_TOKEN}",
-    "allow_from": "*",
-    "webhook_url": ""
+    "require_pairing": true
+  },
+  "qq": {
+    "enabled": false,
+    "app_id": "${QQ_APP_ID}",
+    "app_secret": "${QQ_APP_SECRET}",
+    "sandbox": false,
+    "require_pairing": true
   },
   "default_dir": "~/Workspace",
-  "port": 17534
+  "show_thinking": false,
+  "port": 17534,
+  "bind_address": "127.0.0.1"
 }
 ```
+
+可运行 `cc-gateway init` 使用向导，或在 WebUI **设置** 中编辑。
 
 ## 字段说明
 
 ### `log`
 
 | 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|-------------|
-| `level` | string | `"info"` | 日志级别: trace, debug, info, warn, error |
+|-------|------|---------|------|
+| `level` | string | `"info"` | 日志级别 |
 | `file` | string | `"~/.cc-gateway/logs/gateway.log"` | 日志文件路径 |
+| `max_lines` | usize | `100000` | 日志保留最大行数 |
+| `max_size_mb` | usize | `50` | 日志文件大小上限（MB） |
 
 ### 顶层字段
 
 | 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|-------------|
-| `port` | u16 | `17534` | 守护进程绑定的本地端口，用于保证单实例运行 |
-| `default_dir` | string | `"~"` | 网关会话的默认工作目录 |
-| `show_thinking` | bool | `false` | 是否在输出中显示 Claude 的 Thinking 块 |
-| `media_retention_days` | u64 | `30` | 下载的媒体文件保留天数 |
+|-------|------|---------|------|
+| `port` | u16 | `17534` | HTTP 端口（WebUI + 单实例锁） |
+| `bind_address` | string | `"127.0.0.1"` | 监听地址（`0.0.0.0` 允许局域网） |
+| `allowed_ips` | string[] | `[]` | 可选 IP/CIDR 白名单 |
+| `webui_token` | string? | — | 可选 WebUI 访问令牌 |
+| `default_dir` | string | `"~"` | 默认工作目录 |
+| `show_thinking` | bool | `false` | 是否显示 Thinking 块 |
+| `media_retention_days` | u64 | `30` | 媒体文件保留天数 |
+| `session_retention_per_channel` | u64 | `30` | 每频道保留的智能体会话数（10–100） |
 
-> **注意:** 守护进程会同时启动所有 `enabled` 为 `true` 的平台。你可以同时启用飞书和 Telegram，两者会并发运行。
+> **注意：** 守护进程会同时启动所有 `enabled: true` 的平台（飞书、Telegram、QQ 可任意组合）。
 
 ### `agent`
 
 | 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|-------------|
-| `default` | string | `"claude"` | `/agent` 未指定 provider 时使用的默认 provider |
-| `claude` | object |  | `claude` provider 配置 |
-| `cursor` | object |  | `cursor` provider 配置 |
+|-------|------|---------|------|
+| `default` | string | `"claude"` | `/agent` 未指定时的默认智能体 |
+| `<provider>` | object | — | 各 provider 配置（`claude`、`cursor`、`pi`、`codewhale`、`opencode` 等） |
 
-每个 provider 配置支持：
+每个 provider 配置：
 
-| 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|-------------|
-| `cli_path` | string | `"claude"` / `"agent"` | provider CLI 二进制路径 |
-| `default_args` | string | `""` | 每次启动会话时传递给 provider 的默认参数 |
-| `mode` | string | `"agent"` | provider 模式（如果 provider 支持） |
-| `permission` | string | `"prompt"` | 权限策略：`prompt` / `allow` / `deny` |
+| 字段 | 类型 | 说明 |
+|-------|------|------|
+| `enabled` | bool | 是否在 `/agents` 与 init 中可用 |
+| `cli_path` | string | CLI 路径 |
+| `default_args` | string | 启动默认参数 |
+| `mode` | string | 模式（若 provider 支持） |
+| `permission` | string | `prompt` / `allow` / `deny` |
 
-你可以通过 `/agent [provider] <args>` 为每个会话覆盖或追加参数。
-
-### `telegram`
-
-| 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | 启用 Telegram 机器人 |
-| `bot_token` | string | `"${TELEGRAM_BOT_TOKEN}"` | Telegram Bot API token |
-| `allow_from` | string | `"*"` | 允许的用户 ID 或用户名，逗号分隔; `"*"` = 允许所有 |
-| `webhook_url` | string | `""` | Telegram Bot API 的 Webhook URL (留空则使用长轮询) |
-
-说明：
-
-- `allow_from` 支持用英文逗号分隔的白名单：
-  - 数字用户 ID（例如 `12345678`）
-  - 用户名（不带 `@`，例如 `alice`）
-  - `"*"` 表示允许所有（不建议公开机器人使用）
-- `webhook_url`：
-  - 留空使用长轮询（`getUpdates`）
-  - 配置为 HTTPS URL 切换为 webhook 模式（需要对外暴露公网可访问地址）
+会话级覆盖：`/agent [provider] <额外参数>`。
 
 ### `feishu`
 
 | 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|-------------|
-| `enabled` | bool | `true` | 启用飞书机器人 |
-| `app_id` | string | `"${FEISHU_APP_ID}"` | 飞书应用 ID |
-| `app_secret` | string | `"${FEISHU_APP_SECRET}"` | 飞书应用密钥 |
-| `allow_from` | string | `"*"` | 允许的用户 open_id，逗号分隔; `"*"` = 允许所有 |
-| `encrypt_key` | string | `""` | 事件加密密钥 (可选) |
-| `mode` | string | `"websocket"` | 连接模式: `"websocket"` 或 `"webhook"` |
-| `webhook_bind` | string | `"0.0.0.0:3000"` | Webhook 服务器绑定地址 |
+|-------|------|---------|------|
+| `enabled` | bool | 模板默认 `true`；`init` 前运行时默认 `false` | 启用飞书机器人 |
+| `app_id` | string | `"${FEISHU_APP_ID}"` | 飞书 App ID |
+| `app_secret` | string | `"${FEISHU_APP_SECRET}"` | 飞书 App Secret |
+| `require_pairing` | bool | `true` | 新聊天须 WebUI 配对 |
 
-`default_dir` 决定:
-- `/ll` 在飞书交互卡片中列出哪个目录
-- 飞书模式下 `/cd ..` 的上限 (无法导航到此目录之上)
+**配置指南：** [bots/feishu.zh-CN.md](bots/feishu.zh-CN.md)
 
-## Telegram 设置
+### `telegram`
 
-1. 在 Telegram 上联系 [@BotFather](https://t.me/BotFather) 创建新机器人
-2. 将 bot token 复制到配置中的 `telegram.bot_token`
-3. 将 `telegram.enabled` 设为 `true`
-4. 可选: 设置 `telegram.allow_from` 限制哪些用户可以与机器人交互
-5. `telegram.webhook_url` 留空使用长轮询；如需 webhook 模式则配置为 HTTPS URL
+| 字段 | 类型 | 默认值 | 说明 |
+|-------|------|---------|------|
+| `enabled` | bool | `false` | 启用 Telegram |
+| `bot_token` | string | `"${TELEGRAM_BOT_TOKEN}"` | BotFather Token |
+| `require_pairing` | bool | `true` | 新聊天须 WebUI 配对 |
 
-## 飞书设置
+仅支持 **长轮询**（`getUpdates`）。**配置指南：** [bots/telegram.zh-CN.md](bots/telegram.zh-CN.md)
 
-1. 前往 [飞书开放平台](https://open.feishu.cn) 创建应用
-2. 启用 "机器人" 能力
-3. 添加 `im.message.receive_v1` 事件，选择 WebSocket 长连接模式
-4. 将 `app_id` 和 `app_secret` 复制到配置中
-5. 将应用安装到你的工作区
+### `qq`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|-------|------|---------|------|
+| `enabled` | bool | `false` | 启用 QQ 官方机器人 |
+| `app_id` | string | `"${QQ_APP_ID}"` | 机器人 AppID |
+| `app_secret` | string | `"${QQ_APP_SECRET}"` | 客户端密钥 |
+| `sandbox` | bool | `false` | `true` 使用沙箱 API |
+| `require_pairing` | bool | `true` | 新频道须 WebUI 配对 |
+
+使用 **WebSocket Gateway**（OpenAPI v2）。**配置指南：** [bots/qq.zh-CN.md](bots/qq.zh-CN.md)
+
+### `default_dir`
+
+- `/ll` 列出的目录根路径（飞书为卡片，其他平台为文本列表）。
+- 飞书模式下 `/cd ..` 不能超过 `default_dir` 上级。
+
+## 重启与热更新
+
+| 变更项 | 生效方式 |
+|--------|----------|
+| 各平台凭证、`enabled`、`qq.sandbox` | 需 **重启守护进程** |
+| 各平台 `require_pairing` | WebUI 保存后 **立即生效** |
+| `port`、`bind_address`、`agent`、`log` 等 | 需 **重启守护进程** |
+
+## 平台配置指南索引
+
+| 平台 | 文档 |
+|------|------|
+| 飞书 / Lark | [bots/feishu.zh-CN.md](bots/feishu.zh-CN.md) |
+| Telegram | [bots/telegram.zh-CN.md](bots/telegram.zh-CN.md) |
+| QQ | [bots/qq.zh-CN.md](bots/qq.zh-CN.md) |
+| 总览与配对 | [bots/README.zh-CN.md](bots/README.zh-CN.md) |

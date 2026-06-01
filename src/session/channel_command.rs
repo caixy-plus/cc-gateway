@@ -11,6 +11,7 @@ use crate::{t, t_fmt};
 
 #[derive(Clone)]
 pub(crate) struct ChatCommandContext {
+    pub(crate) platform: String,
     pub(crate) channel_id: String,
     pub(crate) title: String,
     pub(crate) channel_work_dir: String,
@@ -20,12 +21,14 @@ pub(crate) struct ChatCommandContext {
 
 impl ChatCommandContext {
     pub(crate) fn new(
+        platform: impl Into<String>,
         channel_id: String,
         title: String,
         channel_work_dir: String,
         active_agent: Option<ActiveAgentRuntime>,
     ) -> Self {
         Self {
+            platform: platform.into(),
             channel_id,
             title,
             channel_work_dir,
@@ -37,6 +40,14 @@ impl ChatCommandContext {
     pub(crate) fn with_mcp_context(mut self, mcp_context: McpContext) -> Self {
         self.mcp_context = Some(mcp_context);
         self
+    }
+
+    fn unknown_command_message(&self) -> String {
+        match self.platform.as_str() {
+            "feishu" => crate::t!("feishu.unknown_command").to_string(),
+            "qq" => crate::t!("qq.unknown_command").to_string(),
+            _ => crate::t!("builtin.unknown_command").to_string(),
+        }
     }
 }
 
@@ -113,7 +124,7 @@ impl ChatCommandExecutor {
             CommandAction::Reply(text) => Ok(ChatCommandOutcome::Reply(text)),
             CommandAction::NoOp => Ok(ChatCommandOutcome::NoOp),
             CommandAction::UnknownCommand(_) => Ok(ChatCommandOutcome::Reply(
-                crate::t!("feishu.unknown_command").to_string(),
+                context.unknown_command_message(),
             )),
             CommandAction::StopSession => {
                 let stopped_provider = context

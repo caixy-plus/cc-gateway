@@ -383,6 +383,7 @@ fn source_to_str(source: &SessionSource) -> &'static str {
         SessionSource::WebUI => "webui",
         SessionSource::Feishu => "feishu",
         SessionSource::Telegram => "telegram",
+        SessionSource::Qq => "qq",
         SessionSource::Tui => "tui",
     }
 }
@@ -392,6 +393,7 @@ fn str_to_source(s: &str) -> SessionSource {
         "webui" => SessionSource::WebUI,
         "feishu" => SessionSource::Feishu,
         "telegram" => SessionSource::Telegram,
+        "qq" => SessionSource::Qq,
         "tui" => SessionSource::Tui,
         other => {
             warn!(

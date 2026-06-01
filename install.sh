@@ -224,6 +224,32 @@ msg "" ""
 msg "cc-gateway installed successfully to $INSTALL_DIR/${BINARY}" "cc-gateway 已成功安装到 $INSTALL_DIR/${BINARY}"
 msg "Run '${BINARY} --help' to get started" "运行 '${BINARY} --help' 开始使用"
 msg "Open WebUI: '${BINARY} webui' (starts daemon if needed)" "打开 WebUI：'${BINARY} webui'（如未启动会自动 start）"
-msg "" ""
-msg "For Feishu bot setup instructions, see:" "飞书机器人配置说明请参阅:"
-msg "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup" "  https://github.com/caixy-plus/cc-gateway/blob/main/docs/config.md#feishu-setup"
+_load_install_docs() {
+    _docs_file=""
+    _docs_tmp=""
+    if [ -n "$0" ] && [ -f "$(dirname "$0")/scripts/install-docs.sh" ] 2>/dev/null; then
+        _docs_file="$(CDPATH= cd -- "$(dirname "$0")" && pwd)/scripts/install-docs.sh"
+    elif command -v curl > /dev/null 2>&1; then
+        _docs_tmp=$(mktemp)
+        if curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/install-docs.sh" -o "$_docs_tmp" 2>/dev/null; then
+            _docs_file="$_docs_tmp"
+        else
+            rm -f "$_docs_tmp"
+            _docs_tmp=""
+        fi
+    fi
+    if [ -n "$_docs_file" ] && [ -f "$_docs_file" ]; then
+        # shellcheck disable=SC1090
+        . "$_docs_file"
+    fi
+    if [ -n "$_docs_tmp" ]; then
+        rm -f "$_docs_tmp"
+    fi
+}
+
+_load_install_docs
+if type print_install_docs > /dev/null 2>&1; then
+    print_install_docs
+else
+    msg "Documentation: https://github.com/${REPO}/tree/main/docs/bots" "文档: https://github.com/${REPO}/tree/main/docs/bots"
+fi

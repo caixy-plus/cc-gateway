@@ -576,13 +576,9 @@ impl CommandRouter {
 }
 
 fn parse_provider_prefix(args: &mut Vec<String>) -> Option<AgentProvider> {
-    let provider = match args.first().map(|s| s.as_str()) {
-        Some("claude") => Some(AgentProvider::Claude),
-        Some("cursor") => Some(AgentProvider::Cursor),
-        Some("pi") => Some(AgentProvider::Pi),
-        Some("codew") => Some(AgentProvider::CodeWhale),
-        _ => None,
-    };
+    let provider = args
+        .first()
+        .and_then(|s| crate::config::agent_registry::parse_provider_id(s));
     if provider.is_some() {
         args.remove(0);
     }

@@ -20,11 +20,13 @@ impl ConnectionState {
 
 static FEISHU_STATE: AtomicU8 = AtomicU8::new(ConnectionState::Disconnected as u8);
 static TELEGRAM_STATE: AtomicU8 = AtomicU8::new(ConnectionState::Disconnected as u8);
+static QQ_STATE: AtomicU8 = AtomicU8::new(ConnectionState::Disconnected as u8);
 
 pub fn set_state(name: &str, state: ConnectionState) {
     let atom = match name {
         "feishu" => &FEISHU_STATE,
         "telegram" => &TELEGRAM_STATE,
+        "qq" => &QQ_STATE,
         _ => return,
     };
     atom.store(state as u8, Ordering::Relaxed);
@@ -34,6 +36,7 @@ pub fn get_state(name: &str) -> ConnectionState {
     let val = match name {
         "feishu" => FEISHU_STATE.load(Ordering::Relaxed),
         "telegram" => TELEGRAM_STATE.load(Ordering::Relaxed),
+        "qq" => QQ_STATE.load(Ordering::Relaxed),
         _ => return ConnectionState::Disconnected,
     };
     match val {

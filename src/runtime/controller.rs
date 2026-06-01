@@ -698,7 +698,7 @@ impl AgentController {
                 input,
             } => {
                 // Auto-approve MCP send_file tool — no user interaction needed.
-                if tool_name == "mcp__cc-gateway__send_file" {
+                if crate::agent::mcp_attach::is_gateway_send_file_tool(&tool_name) {
                     let mut s = session_arc.write().await;
                     if let Some(ref mut session) = *s {
                         let allow_msg = build_permission_allow(&request_id, None);

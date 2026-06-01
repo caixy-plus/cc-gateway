@@ -8,6 +8,7 @@ use tracing::{error, info};
 
 use crate::config::model::GatewayConfig;
 use crate::platform::feishu::FeishuPlatform;
+use crate::platform::qq::QqPlatform;
 use crate::platform::telegram::TelegramPlatform;
 use crate::platform::Platform;
 
@@ -57,6 +58,8 @@ impl DaemonEngine {
             .set_require_pairing("feishu", self.config.feishu.require_pairing);
         crate::session::pairing::GLOBAL_PAIRING_MANAGER
             .set_require_pairing("telegram", self.config.telegram.require_pairing);
+        crate::session::pairing::GLOBAL_PAIRING_MANAGER
+            .set_require_pairing("qq", self.config.qq.require_pairing);
 
         // Start all enabled platforms concurrently
         let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();
@@ -88,6 +91,22 @@ impl DaemonEngine {
             let handle = tokio::spawn(async move {
                 if let Err(e) = platform_for_spawn.run().await {
                     error!("Telegram platform error: {}", e);
+                }
+            });
+            platforms.push((Box::new(platform), handle));
+        }
+
+        if self.config.qq.enabled {
+            let platform = QqPlatform::new(
+                self.config.qq.clone(),
+                &self.config.default_dir,
+                self.config.effective_agent_settings(),
+                self.config.show_thinking,
+            );
+            let platform_for_spawn = platform.clone();
+            let handle = tokio::spawn(async move {
+                if let Err(e) = platform_for_spawn.run().await {
+                    error!("QQ platform error: {}", e);
                 }
             });
             platforms.push((Box::new(platform), handle));
