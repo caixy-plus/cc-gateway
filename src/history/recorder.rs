@@ -61,11 +61,11 @@ async fn record_event(event: &Event) -> anyhow::Result<()> {
         }
     };
 
-    // Use the provider's own session id as the history file name when available.
-    let history_file_id = agent_session
-        .provider_session_id
-        .as_deref()
-        .unwrap_or(&agent_session.id);
+    // Always use the cc-gateway agent session id as the history file name.
+    // The provider_session_id can change across resumes and /clear, which
+    // would fragment history across multiple files.  The agent_session.id is
+    // stable for the lifetime of the session record.
+    let history_file_id = &agent_session.id;
 
     let history_dir = get_history_dir()?;
     fs::create_dir_all(&history_dir)?;

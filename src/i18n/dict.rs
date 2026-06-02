@@ -728,6 +728,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Note: Pi does not support session resume. A new session has been started.",
             Language::ZhCN => "注意：Pi 不支持会话恢复，已为你启动全新会话。",
         },
+        "builtin.failed_resume_session" => match lang {
+            Language::En => "Failed to resume session: {ERR}",
+            Language::ZhCN => "恢复会话失败: {ERR}",
+        },
         "builtin.failed_start_agent" => match lang {
             Language::En => "Failed to start {NAME}: {ERR}",
             Language::ZhCN => "启动 {NAME} 失败: {ERR}",

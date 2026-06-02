@@ -567,11 +567,9 @@ pub async fn handle_get_history(Path(session_id): Path<String>) -> (StatusCode, 
         }
     };
 
-    // Use provider_session_id as history file name when available.
-    let file_id = GLOBAL_CHANNEL_SESSIONS
-        .get_agent_session(&session_id)
-        .and_then(|s| s.provider_session_id)
-        .unwrap_or(session_id);
+    // Always use the cc-gateway agent session id for the history file name
+    // (consistent with history/recorder.rs).
+    let file_id = &session_id;
 
     let file_path = history_dir.join(format!("{}.jsonl", file_id));
     if !file_path.exists() {
@@ -616,11 +614,8 @@ pub async fn handle_delete_session(Path(session_id): Path<String>) -> (StatusCod
         return (StatusCode::CONFLICT, body.to_string());
     }
 
-    // Get provider session id BEFORE removing the session so we can delete the correct history file.
-    let file_id = GLOBAL_CHANNEL_SESSIONS
-        .get_agent_session(&session_id)
-        .and_then(|s| s.provider_session_id)
-        .unwrap_or_else(|| session_id.clone());
+    // Use the cc-gateway agent session id (consistent with the recorder).
+    let file_id = session_id.clone();
 
     if !GLOBAL_CHANNEL_SESSIONS.remove_agent_session(&session_id) {
         let body = json_error(

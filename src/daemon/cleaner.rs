@@ -202,7 +202,7 @@ fn session_last_updated_at(session: &AgentSession) -> DateTime<Utc> {
 }
 
 fn remove_agent_session_record(session: &AgentSession) {
-    let file_id = session.provider_session_id.as_ref().unwrap_or(&session.id);
+    let file_id = &session.id;
     if let Some(home) = dirs::home_dir() {
         let history_file = home
             .join(".cc-gateway")
