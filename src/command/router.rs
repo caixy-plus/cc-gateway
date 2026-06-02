@@ -227,7 +227,9 @@ impl CommandRouter {
                     if trimmed.starts_with('/') {
                         CommandAction::UnknownCommand(cmd.to_string())
                     } else {
-                        CommandAction::Reply(t_fmt!("forward.no_session", MSG = trimmed))
+                        // Regular text with no active session: forward so the
+                        // executor can auto-start/resume a session for the channel.
+                        CommandAction::ForwardToAgent(trimmed.to_string())
                     }
                 }
             }

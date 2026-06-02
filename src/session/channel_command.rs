@@ -418,54 +418,25 @@ impl ChatCommandExecutor {
                             active
                         } else {
                             drop(ctrl);
-                            let work_dir = crate::command::workdir::effective_work_dir(
-                                &context.channel_work_dir,
-                                &self.default_dir,
-                            );
-                            let auto_provider = GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
-                                &context.channel_id,
-                                &self.agent_settings,
-                                None,
-                            );
-                            match GLOBAL_CHANNEL_SESSIONS
-                                .start_agent_session_for_platform(
-                                    crate::session::channel_manager::StartAgentSessionForPlatformArgs {
-                                        channel_id: context.channel_id.clone(),
-                                        title: context.title.clone(),
-                                        default_dir: self.default_dir.clone(),
-                                        agent_settings: self.agent_settings.clone(),
-                                        show_thinking: self.show_thinking,
-                                        args: vec![],
-                                        resume_session_id: None,
-                                        work_dir_override: Some(work_dir),
-                                        mcp_context: context.mcp_context.clone(),
-                                        provider_override: Some(auto_provider.clone()),
-                                    },
-                                )
-                                .await
-                            {
-                                Ok(active) => {
-                                    context.channel_work_dir =
-                                        active.agent_session.work_dir.clone();
-                                    context.active_agent = Some(active.clone());
-                                    active
-                                }
+                            // Session died (e.g. daemon restart): try to resume it.
+                            let session_id = active.agent_session.id.clone();
+                            match resume_or_fallback(self, context, Some(&session_id)).await {
+                                Ok(a) => a,
                                 Err(e) => {
-                                    context.active_agent = None;
-                                    return Ok(ChatCommandOutcome::Error(
-                                        crate::command::agents::failed_start_agent_message(
-                                            &auto_provider,
-                                            e,
-                                        ),
-                                    ));
+                                    return Ok(ChatCommandOutcome::Error(e.to_string()))
                                 }
                             }
                         }
                     }
                     None => {
-                        return Ok(ChatCommandOutcome::Error(
-                            t!("controller.no_active_session").to_string(),
-                        ));
+                        // No active agent: try to resume the latest session for this
+                        // channel, or start a new one.
+                        match resume_or_fallback(self, context, None).await {
+                            Ok(a) => a,
+                            Err(e) => {
+                                return Ok(ChatCommandOutcome::Error(e.to_string()))
+                            }
+                        }
                     }
                 };
                 Ok(ChatCommandOutcome::ForwardToAgent { active, text })
@@ -585,5 +556,133 @@ impl ChatCommandExecutor {
             message: t_fmt!("builtin.dir_changed", PATH = work_dir),
             work_dir,
         })
+    }
+}
+
+/// Try to resume an existing session; only falls back to a new session when
+/// the channel has no previous sessions to resume.
+///
+/// When `resume_session_id` is Some, it names a specific session to resume
+/// (e.g. when a previously-active session's process has died).
+/// When None, we look for the most recent session in this channel.
+///
+/// Resume failures are returned as errors so the user sees the reason rather
+/// than silently getting a new session that lacks conversation history.
+async fn resume_or_fallback(
+    executor: &ChatCommandExecutor,
+    context: &mut ChatCommandContext,
+    resume_session_id: Option<&str>,
+) -> Result<ActiveAgentRuntime> {
+    let work_dir = crate::command::workdir::effective_work_dir(
+        &context.channel_work_dir,
+        &executor.default_dir,
+    );
+    let provider = GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
+        &context.channel_id,
+        &executor.agent_settings,
+        None,
+    );
+
+    // 1) Try to resume a named session.
+    if let Some(sid) = resume_session_id {
+        match GLOBAL_CHANNEL_SESSIONS
+            .resume_agent_session_for_platform(
+                sid,
+                &executor.default_dir,
+                executor.agent_settings.clone(),
+                executor.show_thinking,
+                Some(work_dir.clone()),
+                context.mcp_context.clone(),
+            )
+            .await
+        {
+            Ok(active) => {
+                context.channel_work_dir = active.agent_session.work_dir.clone();
+                context.active_agent = Some(active.clone());
+                return Ok(active);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to resume session {} for channel {}: {}",
+                    sid,
+                    context.channel_id,
+                    e
+                );
+                let detail = crate::command::agents::friendly_spawn_error(&e.to_string());
+                anyhow::bail!(crate::t_fmt!(
+                    "builtin.failed_resume_session",
+                    ERR = detail
+                ))
+            }
+        }
+    }
+
+    // 2) If no session was specified, try to resume the latest session for this channel.
+    if resume_session_id.is_none() {
+        let sessions = GLOBAL_CHANNEL_SESSIONS
+            .list_agent_sessions_by_channel(&context.channel_id, Some(1));
+        if let Some(latest) = sessions.first() {
+            match GLOBAL_CHANNEL_SESSIONS
+                .resume_agent_session_for_platform(
+                    &latest.id,
+                    &executor.default_dir,
+                    executor.agent_settings.clone(),
+                    executor.show_thinking,
+                    Some(work_dir.clone()),
+                    context.mcp_context.clone(),
+                )
+                .await
+            {
+                Ok(active) => {
+                    context.channel_work_dir = active.agent_session.work_dir.clone();
+                    context.active_agent = Some(active.clone());
+                    return Ok(active);
+                }
+                Err(e) => {
+                    let detail = crate::command::agents::friendly_spawn_error(&e.to_string());
+                    tracing::warn!(
+                        "Failed to auto-resume latest session {} for channel {}: {}",
+                        latest.id,
+                        context.channel_id,
+                        e
+                    );
+                    anyhow::bail!(crate::t_fmt!(
+                        "builtin.failed_resume_session",
+                        ERR = detail
+                    ))
+                }
+            }
+        }
+    }
+
+    // 3) No existing session to resume: start a brand-new session.
+    match GLOBAL_CHANNEL_SESSIONS
+        .start_agent_session_for_platform(
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: context.channel_id.clone(),
+                title: context.title.clone(),
+                default_dir: executor.default_dir.clone(),
+                agent_settings: executor.agent_settings.clone(),
+                show_thinking: executor.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: Some(work_dir),
+                mcp_context: context.mcp_context.clone(),
+                provider_override: Some(provider.clone()),
+            },
+        )
+        .await
+    {
+        Ok(active) => {
+            context.channel_work_dir = active.agent_session.work_dir.clone();
+            context.active_agent = Some(active.clone());
+            Ok(active)
+        }
+        Err(e) => {
+            context.active_agent = None;
+            anyhow::bail!(crate::command::agents::failed_start_agent_message(
+                &provider, e
+            ))
+        }
     }
 }
