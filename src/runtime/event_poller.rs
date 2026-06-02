@@ -10,6 +10,29 @@ use crate::runtime::controller::{AgentController, ControllerEvent};
 /// chunks (Cursor/OpenCode ACP) are not dropped when the prompt RPC returns early.
 const LATE_EVENT_GRACE: Duration = Duration::from_millis(2000);
 
+/// Cap tool input/result payload length to avoid flooding chat channels.
+///
+/// This is independent of per-platform buffer policies; it bounds a single tool
+/// message so one huge JSON/result doesn't dominate the turn.
+const TOOL_MESSAGE_MAX_CHARS: usize = 100;
+
+/// Avoid splitting short replies into multiple messages due to timer-based flush.
+/// Only enable time-based flushing once we've buffered a bit of text.
+const MIN_TIME_FLUSH_CHARS: usize = 160;
+
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars <= 3 {
+        return "...".to_string();
+    }
+    let len = s.chars().count();
+    if len <= max_chars {
+        return s.to_string();
+    }
+    let keep = max_chars - 3;
+    let prefix: String = s.chars().take(keep).collect();
+    format!("{}...", prefix)
+}
+
 /// Buffers assistant text for one agent turn; platforms flush on `Done` / errors.
 #[derive(Default)]
 pub struct TurnTextBuffer {
@@ -88,6 +111,12 @@ impl<T: EventPollSink + Send> BufferedSink<T> {
 
     fn next_deadline(&self) -> Option<std::time::Instant> {
         if !self.has_pending() {
+            return None;
+        }
+        // If we only have a small amount of text buffered, wait for more chunks
+        // (or Done) instead of flushing on the timer — this reduces "one sentence
+        // becomes several messages" for streaming providers.
+        if self.text_buffer.char_len() < MIN_TIME_FLUSH_CHARS {
             return None;
         }
         let last = self
@@ -230,7 +259,10 @@ impl AgentEventPoller {
         self,
         sink: &mut BufferedSink<T>,
     ) -> Result<()> {
-        let mut hidden_thinking_placeholder_sent = false;
+        // We always show a single "Thinking..." marker per turn if the agent emits
+        // any thinking content (whether hidden or shown), so all providers/channels
+        // have consistent UX.
+        let mut thinking_placeholder_sent = false;
         loop {
             let deadline = sink.next_deadline();
             let event = match deadline {
@@ -259,16 +291,22 @@ impl AgentEventPoller {
                 }
                 Some(ControllerEvent::Thinking(text)) => {
                     if text.trim().is_empty() {
-                        if !hidden_thinking_placeholder_sent {
-                            sink.on_thinking(crate::t!("claude.thinking_placeholder"))
+                        if !thinking_placeholder_sent {
+                            sink.on_thinking(crate::t!("builtin.thinking_placeholder"))
                                 .await?;
-                            hidden_thinking_placeholder_sent = true;
+                            thinking_placeholder_sent = true;
                         }
                     } else {
+                        if !thinking_placeholder_sent {
+                            sink.on_thinking(crate::t!("builtin.thinking_placeholder"))
+                                .await?;
+                            thinking_placeholder_sent = true;
+                        }
                         sink.on_thinking(&text).await?;
                     }
                 }
                 Some(ControllerEvent::ToolUse(name, input)) => {
+                    let input = truncate_with_ellipsis(&input, TOOL_MESSAGE_MAX_CHARS);
                     let text = format!("\n[Tool: {}]\n{}\n", name, input);
                     sink.flush(&text, false).await?;
                 }
@@ -278,6 +316,7 @@ impl AgentEventPoller {
                     } else {
                         "Tool result"
                     };
+                    let text = truncate_with_ellipsis(&text, TOOL_MESSAGE_MAX_CHARS);
                     let formatted = format!("\n[{}]\n{}\n", prefix, text);
                     sink.flush(&formatted, false).await?;
                 }
@@ -323,7 +362,7 @@ impl AgentEventPoller {
                 Some(ControllerEvent::Done) | None => {
                     sink.flush_buffer(true).await?;
                     sink.flush("", true).await?;
-                    self.drain_late_events(sink, &mut hidden_thinking_placeholder_sent)
+                    self.drain_late_events(sink, &mut thinking_placeholder_sent)
                         .await?;
                     sink.flush_buffer(true).await?;
                     break;
@@ -338,7 +377,7 @@ impl AgentEventPoller {
     async fn drain_late_events<T: EventPollSink + Send>(
         &self,
         sink: &mut BufferedSink<T>,
-        hidden_thinking_placeholder_sent: &mut bool,
+        thinking_placeholder_sent: &mut bool,
     ) -> Result<()> {
         let deadline = std::time::Instant::now() + LATE_EVENT_GRACE;
         loop {
@@ -361,16 +400,22 @@ impl AgentEventPoller {
                 }
                 Some(ControllerEvent::Thinking(text)) => {
                     if text.trim().is_empty() {
-                        if !*hidden_thinking_placeholder_sent {
-                            sink.on_thinking(crate::t!("claude.thinking_placeholder"))
+                        if !*thinking_placeholder_sent {
+                            sink.on_thinking(crate::t!("builtin.thinking_placeholder"))
                                 .await?;
-                            *hidden_thinking_placeholder_sent = true;
+                            *thinking_placeholder_sent = true;
                         }
                     } else {
+                        if !*thinking_placeholder_sent {
+                            sink.on_thinking(crate::t!("builtin.thinking_placeholder"))
+                                .await?;
+                            *thinking_placeholder_sent = true;
+                        }
                         sink.on_thinking(&text).await?;
                     }
                 }
                 Some(ControllerEvent::ToolUse(name, input)) => {
+                    let input = truncate_with_ellipsis(&input, TOOL_MESSAGE_MAX_CHARS);
                     let text = format!("\n[Tool: {}]\n{}\n", name, input);
                     sink.flush(&text, false).await?;
                 }
@@ -380,6 +425,7 @@ impl AgentEventPoller {
                     } else {
                         "Tool result"
                     };
+                    let text = truncate_with_ellipsis(&text, TOOL_MESSAGE_MAX_CHARS);
                     let formatted = format!("\n[{}]\n{}\n", prefix, text);
                     sink.flush(&formatted, false).await?;
                 }

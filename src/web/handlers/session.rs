@@ -73,7 +73,11 @@ pub async fn handle_events() -> Sse<impl Stream<Item = Result<SseEvent, Infallib
 
 #[derive(Deserialize)]
 pub struct ListSessionsQuery {
+    /// Filter by platform id: `webui`, `feishu`, `telegram`, `qq`, `tui`, or `all`.
+    pub(crate) platform: Option<String>,
     pub(crate) source: Option<String>,
+    #[serde(alias = "channelId")]
+    pub(crate) channel_id: Option<String>,
 }
 
 pub async fn handle_list_sessions(
@@ -87,31 +91,75 @@ pub async fn handle_list_sessions(
             .map(|c| (c.id.clone(), c))
             .collect();
 
-    let source_filter = query.source.unwrap_or_else(|| "webui".to_string());
+    let platform_filter = query
+        .platform
+        .unwrap_or_else(|| "webui".to_string());
+    let source_filter = query.source.clone();
+    let channel_filter = query.channel_id.clone();
 
     let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
 
     let mapped: Vec<serde_json::Value> = sessions
         .into_iter()
         .filter(|s| {
-            if source_filter == "all" {
-                return true;
+            let Some(channel) = channels.get(&s.channel_session_id) else {
+                return platform_filter == "all";
+            };
+            if let Some(ref cid) = channel_filter {
+                if cid != "all" && s.channel_session_id != *cid {
+                    return false;
+                }
+            } else if platform_filter != "all"
+                && !channel.platform.eq_ignore_ascii_case(&platform_filter)
+            {
+                return false;
             }
-            channels.get(&s.channel_session_id)
-                .map(|c| c.source.to_string().eq_ignore_ascii_case(&source_filter))
-                .unwrap_or(false)
+            if let Some(ref src) = source_filter {
+                if src != "all"
+                    && !channel
+                        .source
+                        .to_string()
+                        .eq_ignore_ascii_case(src)
+                {
+                    return false;
+                }
+            }
+            true
         })
         .map(|s| {
             let channel = channels.get(&s.channel_session_id);
             let created_at_local = s.created_at.with_timezone(&beijing_offset);
             let stopped_at_local = s.stopped_at.map(|t| t.with_timezone(&beijing_offset));
             let updated_at_local = s.updated_at.map(|t| t.with_timezone(&beijing_offset));
+            let is_webui = channel
+                .map(|c| c.source == crate::session::channel_model::SessionSource::WebUI)
+                .unwrap_or(true);
+            // Avoid leaking test identifiers (e.g. `qq u:test-openid`) in the WebUI list.
+            // Non-WebUI sessions are view-only in WebUI; keep their titles generic when they look like test data.
+            let display_title = if is_webui {
+                s.title.clone()
+            } else {
+                let platform = channel
+                    .map(|c| c.platform.as_str())
+                    .unwrap_or("unknown");
+                let channel_id = channel.map(|c| c.channel_id.as_str()).unwrap_or("");
+                let looks_like_test = s.title.contains("test-openid")
+                    || channel_id.contains("test-openid")
+                    || s.title.contains("u:test-")
+                    || s.title.contains("g:test-");
+                if looks_like_test {
+                    format!("{} (test)", platform)
+                } else {
+                    s.title.clone()
+                }
+            };
             serde_json::json!({
                 "id": s.id,
-                "title": s.title,
+                "title": display_title,
                 "source": channel.map(|c| c.source.to_string()).unwrap_or_else(|| "webui".to_string()),
                 "platform": channel.map(|c| c.platform.clone()).unwrap_or_else(|| "webui".to_string()),
-                "chat_id": s.channel_session_id,
+                // WebUI doesn't need to expose per-chat identifiers for non-WebUI sources.
+                "chat_id": if is_webui { s.channel_session_id } else { "".to_string() },
                 "work_dir": s.work_dir,
                 "active": s.active,
                 "provider": s.provider,

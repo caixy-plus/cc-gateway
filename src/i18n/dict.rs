@@ -402,7 +402,7 @@ pub fn t(key: &str) -> &str {
             Language::En => "Thinking...",
             Language::ZhCN => "思考中...",
         },
-        "claude.thinking_placeholder" => match lang {
+        "builtin.thinking_placeholder" => match lang {
             Language::En => "💭 Thinking...",
             Language::ZhCN => "💭 Thinking...",
         },

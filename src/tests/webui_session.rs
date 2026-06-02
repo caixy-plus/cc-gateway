@@ -297,7 +297,9 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
     let session_id = body["session"]["id"].as_str().unwrap().to_string();
 
     let listed = handle_list_sessions(Query(ListSessionsQuery {
-        source: Some("webui".to_string()),
+        platform: Some("webui".to_string()),
+        source: None,
+        channel_id: None,
     }))
     .await
     .0;
@@ -370,7 +372,9 @@ async fn webui_created_session_keeps_selected_work_dir_when_listed_and_started()
     );
 
     let listed = handle_list_sessions(Query(ListSessionsQuery {
-        source: Some("webui".to_string()),
+        platform: Some("webui".to_string()),
+        source: None,
+        channel_id: None,
     }))
     .await
     .0;

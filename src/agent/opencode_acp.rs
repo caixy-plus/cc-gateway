@@ -398,6 +398,22 @@ fn handle_session_update(
         .and_then(|v| v.as_str())
         .unwrap_or_default();
 
+    if let Some(thinking) = update
+        .get("content")
+        .and_then(|c| {
+            c.get("thinking")
+                .or_else(|| c.get("reasoning"))
+                .or_else(|| c.get("thought"))
+        })
+        .and_then(|v| v.as_str())
+    {
+        let _ = event_tx.send(AgentEvent::Thinking(thinking.to_string()));
+        if is_acp_turn_complete_update(kind) {
+            emit_acp_turn_done(event_tx, turn_done_sent);
+        }
+        return;
+    }
+
     if let Some(text) = update
         .get("content")
         .and_then(|c| c.get("text"))
@@ -467,6 +483,25 @@ mod tests {
         match rx.try_recv().expect("event should be sent") {
             AgentEvent::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn maps_opencode_thinking_update_to_agent_event() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let done = AtomicBool::new(false);
+        handle_session_update(
+            &json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "thinking": "hmm" }
+            }),
+            &tx,
+            &done,
+        );
+
+        match rx.try_recv().expect("event should be sent") {
+            AgentEvent::Thinking(text) => assert_eq!(text, "hmm"),
+            other => panic!("expected thinking event, got {:?}", other),
         }
     }
 
