@@ -14,6 +14,7 @@ mod i18n;
 mod inbound_media;
 mod mcp_file_delivery;
 mod proto;
+mod runtime_session;
 mod shutdown;
 mod telegram_flow;
 mod ui_tui;

@@ -30,6 +30,14 @@ pub struct StreamJsonSession {
     output_tx: mpsc::UnboundedSender<OutputEvent>,
 }
 
+pub(crate) fn remove_mcp_config_file(path: Option<&PathBuf>) {
+    if let Some(path) = path {
+        if let Err(e) = std::fs::remove_file(path) {
+            warn!("Failed to remove MCP config file {:?}: {}", path, e);
+        }
+    }
+}
+
 pub(crate) fn resolve_cli_path(config_path: &str) -> String {
     // If it's an absolute path and exists, use it directly
     let path = std::path::PathBuf::from(config_path);
@@ -426,20 +434,14 @@ impl StreamJsonSession {
 
     pub async fn stop(mut self) -> Result<()> {
         crate::agent::acp_client::kill_child_process_tree(&mut self.child).await;
-
-        // Clean up MCP config file
-        if let Some(ref path) = self.mcp_config_path {
-            if let Err(e) = std::fs::remove_file(path) {
-                warn!("Failed to remove MCP config file {:?}: {}", path, e);
-            }
-        }
-
+        remove_mcp_config_file(self.mcp_config_path.as_ref());
         info!("Claude session stopped");
         Ok(())
     }
 
     pub async fn force_stop(mut self) -> Result<()> {
         crate::agent::acp_client::kill_child_process_tree(&mut self.child).await;
+        remove_mcp_config_file(self.mcp_config_path.as_ref());
         info!("Claude session force-stopped");
         Ok(())
     }
