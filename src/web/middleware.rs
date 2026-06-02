@@ -1,6 +1,6 @@
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::StatusCode,
+    http::{header, StatusCode, HeaderValue},
     middleware::Next,
     response::IntoResponse,
 };
@@ -118,6 +118,9 @@ fn extract_token(request: &Request) -> Option<String> {
 /// When set, requests under `/api` must include the token via `?token=xxx` query
 /// param or `Authorization: Bearer xxx` header. Static assets and the HTML page
 /// are exempt from token checks.
+///
+/// On successful token auth, a long-lived cookie is set so the browser persists
+/// the token across sessions — even when localStorage is unavailable.
 pub async fn webui_token_auth(
     State(state): State<AppState>,
     request: Request,
@@ -125,18 +128,25 @@ pub async fn webui_token_auth(
 ) -> impl IntoResponse {
     if let Some(ref expected) = state.webui_token {
         if request.uri().path().starts_with("/api") {
-            match extract_token(&request) {
-                Some(token) if token == *expected => {
-                    // Token matches — allow
-                }
-                _ => {
-                    tracing::warn!("[webui_token] Rejected request (invalid or missing token)");
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        r#"{"code":401,"msg":"missing or invalid token"}"#.to_string(),
-                    ));
-                }
+            let token_valid = extract_token(&request).map_or(false, |t| t == *expected);
+            if !token_valid {
+                tracing::warn!("[webui_token] Rejected request (invalid or missing token)");
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    r#"{"code":401,"msg":"missing or invalid token"}"#.to_string(),
+                ));
             }
+            // Token is valid — allow and set persistent cookie
+            let response = next.run(request).await;
+            let (mut parts, body) = response.into_parts();
+            if let Ok(cookie_val) = HeaderValue::from_str(&format!(
+                "cc_gateway_token={}; Path=/; Max-Age=31536000; SameSite=Lax",
+                expected
+            )) {
+                parts.headers.insert(header::SET_COOKIE, cookie_val);
+            }
+            let response = axum::response::Response::from_parts(parts, body);
+            return Ok(response);
         }
     }
     Ok(next.run(request).await)

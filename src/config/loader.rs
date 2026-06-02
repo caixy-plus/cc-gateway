@@ -145,6 +145,7 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
 mod tests {
     use super::*;
     use crate::config::model::{AgentProvider, GatewayConfig};
+    use crate::tests::helpers::TestEnv;
 
     #[test]
     fn upgrade_strips_removed_codewhale_profile() {
@@ -178,43 +179,23 @@ mod tests {
 
     #[test]
     fn save_writes_config_json() {
-        let dir = std::env::temp_dir().join(format!("cc-gateway-save-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &dir);
-
-        let config_path = dir.join(".cc-gateway").join("config.json");
+        let env = TestEnv::new();
+        let config_path = env.home().join(".cc-gateway").join("config.json");
         assert!(!config_path.is_file());
         ConfigLoader::save(&GatewayConfig::runtime_defaults()).unwrap();
         assert!(config_path.is_file());
-
-        match original_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn load_does_not_create_config_json() {
-        let dir = std::env::temp_dir().join(format!("cc-gateway-load-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &dir);
-
-        let config_path = dir.join(".cc-gateway").join("config.json");
+        let env = TestEnv::new();
+        let config_path = env.home().join(".cc-gateway").join("config.json");
         assert!(!config_path.is_file());
 
         let config = ConfigLoader::load().unwrap();
         assert!(!config_path.is_file());
         assert!(!config.agent.claude.enabled);
         assert!(ConfigLoader::initialize_runtime().is_ok());
-
-        match original_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

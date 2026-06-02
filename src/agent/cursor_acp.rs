@@ -8,9 +8,11 @@ use tracing::{debug, info};
 use std::sync::atomic::AtomicBool;
 
 use crate::agent::acp_client::{
-    emit_acp_turn_done, extract_acp_session_id, is_acp_turn_complete_update,
+    emit_acp_turn_done, is_acp_turn_complete_update,
     resolve_acp_spawn_session_id, reset_acp_turn_done, AcpClient,
 };
+#[cfg(test)]
+use crate::agent::acp_client::extract_acp_session_id;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
 use crate::agent::mcp_attach::build_acp_mcp_servers;
 use crate::config::model::AgentConfig;
