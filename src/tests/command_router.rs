@@ -313,3 +313,27 @@ async fn active_agent_session_forwards_slash_commands_except_gateway_controls() 
         ctrl.stop_session().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn quit_stops_session_and_marks_controller_inactive() {
+    let env = TestEnv::new();
+    let (router, controller) = test_router_with_default(env.home().to_str().unwrap());
+    {
+        let ctrl = controller.lock().await;
+        ctrl.start_session(env.home().to_string_lossy().to_string(), Vec::new())
+            .await
+            .expect("fake Claude session should start");
+        assert!(ctrl.is_session_active().await);
+    }
+
+    // In active session, /quit becomes StopSession and should force-stop the runtime.
+    let action = router.route("/quit").await;
+    assert!(matches!(action, CommandAction::StopSession));
+    let _ = router.execute(action).await;
+
+    {
+        let ctrl = controller.lock().await;
+        assert!(!ctrl.is_session_active().await);
+        assert!(ctrl.send_message("should fail").await.is_err());
+    }
+}

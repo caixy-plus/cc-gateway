@@ -227,9 +227,12 @@ impl CommandRouter {
                     if trimmed.starts_with('/') {
                         CommandAction::UnknownCommand(cmd.to_string())
                     } else {
-                        // Regular text with no active session: forward so the
-                        // executor can auto-start/resume a session for the channel.
-                        CommandAction::ForwardToAgent(trimmed.to_string())
+                        // Regular text with no active session: do not auto-start.
+                        // Require the user to explicitly run /agent to begin a session.
+                        CommandAction::Reply(crate::t_fmt!(
+                            "forward.failed_send",
+                            ERR = crate::t!("controller.no_active_session")
+                        ))
                     }
                 }
             }

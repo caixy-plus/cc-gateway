@@ -373,10 +373,18 @@ impl AgentController {
 
     pub async fn stop_session(&self) -> Result<()> {
         self.is_busy.store(false, Ordering::Relaxed);
+        // Always transition the controller to inactive, even if the underlying
+        // provider stop has issues. Otherwise routers may keep treating the
+        // session as active and forward messages into a half-stopped runtime.
+        let mut stop_result: Result<()> = Ok(());
         let mut s = self.session.write().await;
         if let Some(session) = s.take() {
-            session.stop().await?;
-            info!("Claude session stopped");
+            stop_result = session.stop().await;
+            if let Err(ref e) = stop_result {
+                tracing::warn!("Failed to stop agent session: {}", e);
+            } else {
+                info!("Claude session stopped");
+            }
         }
         {
             let mut state = self.session_state.write().await;
@@ -387,18 +395,27 @@ impl AgentController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
+        // Unblock any active pollers (platforms/TUI) that are waiting for turn completion.
+        let _ = self.event_tx.send(ControllerEvent::Done);
         // NOTE: we intentionally keep provider_session_id here so that a
         // subsequent /agent can resume the same provider session.
-        Ok(())
+        stop_result
     }
 
     /// Force-stop the active session immediately (used by `/quit`).
     pub async fn force_stop_session(&self) -> Result<()> {
         self.is_busy.store(false, Ordering::Relaxed);
+        // Same as stop_session(): ensure we always transition to inactive to
+        // prevent subsequent messages from being forwarded.
+        let mut stop_result: Result<()> = Ok(());
         let mut s = self.session.write().await;
         if let Some(session) = s.take() {
-            session.force_stop().await?;
-            info!("Agent session force-stopped");
+            stop_result = session.force_stop().await;
+            if let Err(ref e) = stop_result {
+                tracing::warn!("Failed to force-stop agent session: {}", e);
+            } else {
+                info!("Agent session force-stopped");
+            }
         }
         {
             let mut state = self.session_state.write().await;
@@ -412,7 +429,9 @@ impl AgentController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
-        Ok(())
+        // Unblock any active pollers that are waiting for turn completion.
+        let _ = self.event_tx.send(ControllerEvent::Done);
+        stop_result
     }
 
     /// Clear current session context by starting a fresh provider session.
