@@ -140,6 +140,7 @@ cd cc-gateway
 | 机器人配置总览 | [docs/bots/README.zh-CN.md](docs/bots/README.zh-CN.md) | [docs/bots/README.md](docs/bots/README.md) |
 | 配置说明 | [docs/config.zh-CN.md](docs/config.zh-CN.md) | [docs/config.md](docs/config.md) |
 | 使用指南 | [docs/usage.zh-CN.md](docs/usage.zh-CN.md) | [docs/usage.md](docs/usage.md) |
+| **发版（tag 与 CI）** | [docs/release.zh-CN.md](docs/release.zh-CN.md) | [docs/release.md](docs/release.md) |
 | 开发者说明 | [CLAUDE.md](CLAUDE.md) | — |
 
 安装脚本结束时会再次打印上述链接。

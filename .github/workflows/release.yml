@@ -41,11 +41,20 @@ jobs:
           fi
           echo "Version check passed: v$TAG_VERSION == Cargo.toml $CARGO_VERSION"
 
+      # WebUI is NOT taken from webui/dist in this repo — only from cc-gateway-webui @ main on GitHub.
+      # Push the frontend repo before tagging. See docs/release.md and scripts/check-release-ready.sh.
       - name: Checkout frontend
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/cc-gateway-webui
           path: webui-src
+
+      - name: Log embedded WebUI revision
+        shell: bash
+        run: |
+          cd webui-src
+          echo "WebUI commit embedded in this release: $(git rev-parse HEAD)"
+          git log -1 --oneline
 
       - name: Setup Node
         uses: actions/setup-node@v4

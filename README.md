@@ -140,6 +140,7 @@ After `/agent`, the prompt becomes `💬 ~/Workspace ▶`. Plain text is forward
 | Bot setup overview | [docs/bots/README.md](docs/bots/README.md) | [docs/bots/README.zh-CN.md](docs/bots/README.zh-CN.md) |
 | Configuration | [docs/config.md](docs/config.md) | [docs/config.zh-CN.md](docs/config.zh-CN.md) |
 | Usage (CLI & daemon) | [docs/usage.md](docs/usage.md) | [docs/usage.zh-CN.md](docs/usage.zh-CN.md) |
+| **Release (tag & CI)** | [docs/release.md](docs/release.md) | [docs/release.zh-CN.md](docs/release.zh-CN.md) |
 | Developer guide | [CLAUDE.md](CLAUDE.md) | — |
 
 Install scripts print these links again at the end of setup.
