@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::command::router::CommandAction;
+use crate::command::models;
 use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
@@ -78,6 +79,14 @@ pub(crate) enum ChatCommandOutcome {
     SelectAgent {
         current: AgentProvider,
         options: Vec<(String, String)>,
+    },
+    SelectModel {
+        /// Current provider (for display).
+        provider: AgentProvider,
+        /// Known active model id, if any.
+        current: Option<String>,
+        /// Model ids (provider-specific).
+        options: Vec<String>,
     },
     DirCreated {
         path: String,
@@ -403,6 +412,74 @@ impl ChatCommandExecutor {
                             "builtin.failed_clear",
                             ERR = e
                         ))),
+                    }
+                }
+                None => Ok(ChatCommandOutcome::Error(
+                    t!("controller.no_active_session").to_string(),
+                )),
+            },
+            CommandAction::Models { arg } => match context.active_agent.as_ref() {
+                Some(active) => {
+                    let provider = active.agent_session.stored_provider();
+                    let provider_name =
+                        crate::command::agents::provider_display_name(&provider);
+                    if models::is_platform_bound_agent(&provider) {
+                        return Ok(ChatCommandOutcome::Reply(t_fmt!(
+                            "models.not_supported_platform_agent",
+                            NAME = provider_name
+                        )));
+                    }
+                    if arg.trim().is_empty() {
+                        let ctrl = active.controller.lock().await;
+                        let current = ctrl.current_model_id().await;
+                        let mut opts = match ctrl.list_available_models().await {
+                            Ok(opts) => opts,
+                            Err(e) => {
+                                return Ok(ChatCommandOutcome::Reply(e.to_string()));
+                            }
+                        };
+                        // Keep UX safe: avoid huge keyboards/cards.
+                        if opts.len() > 20 {
+                            opts.truncate(20);
+                        }
+                        if opts.is_empty() {
+                            // Fallback: show text hints.
+                            let mut lines = Vec::new();
+                            lines.push(t_fmt!(
+                                "models.title",
+                                NAME = crate::command::agents::provider_display_name(&provider)
+                            ));
+                            lines.push(models::current_model_line(current.as_deref()));
+                            lines.push(t!("models.no_known_models").to_string());
+                            lines.push(t!("models.switch_hint_raw").to_string());
+                            return Ok(ChatCommandOutcome::Reply(lines.join("\n")));
+                        }
+                        return Ok(ChatCommandOutcome::SelectModel {
+                            provider,
+                            current,
+                            options: opts,
+                        });
+                    }
+
+                    let agent_session_id = active.agent_session.id.clone();
+                    let ctrl = active.controller.lock().await;
+                    let model_id = arg.trim().to_string();
+                    match ctrl.switch_model(&model_id).await {
+                        Ok(()) => {
+                            drop(ctrl);
+                            GLOBAL_CHANNEL_SESSIONS
+                                .refresh_agent_session_from_controller(
+                                    &agent_session_id,
+                                    &active.controller,
+                                )
+                                .await;
+                            Ok(ChatCommandOutcome::Reply(t_fmt!(
+                                "models.switched",
+                                NAME = provider_name,
+                                MODEL = model_id
+                            )))
+                        }
+                        Err(e) => Ok(ChatCommandOutcome::Reply(e.to_string())),
                     }
                 }
                 None => Ok(ChatCommandOutcome::Error(

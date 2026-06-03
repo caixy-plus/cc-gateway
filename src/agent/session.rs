@@ -125,6 +125,28 @@ impl AgentRuntime {
         }
     }
 
+    pub async fn set_model(&mut self, provider: &AgentProvider, model_id: &str) -> Result<()> {
+        match self {
+            AgentRuntime::Pi(session) => {
+                let Some((p, mid)) = crate::command::models::parse_provider_model_id(model_id)
+                else {
+                    anyhow::bail!("{}", crate::t!("models.pi_requires_provider_model"));
+                };
+                session.set_model(&p, &mid).await
+            }
+            AgentRuntime::OpenCode(session) => session.set_model(model_id).await,
+            AgentRuntime::Claude(_) | AgentRuntime::Cursor(_) => {
+                anyhow::bail!(
+                    "{}",
+                    crate::t_fmt!(
+                        "models.not_supported_platform_agent",
+                        NAME = crate::command::agents::provider_display_name(provider)
+                    )
+                )
+            }
+        }
+    }
+
     /// Start a fresh provider session (ACP `session/new`, Pi `new_session`, Claude respawn).
     /// Returns the new provider session id when the backend exposes one.
     pub async fn new_provider_session(

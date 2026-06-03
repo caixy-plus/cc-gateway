@@ -5,17 +5,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, info, warn};
 
 use crate::agent::event::AgentEvent;
 use crate::config::model::AgentConfig;
+
+type PendingRpc = std::collections::HashMap<String, oneshot::Sender<Value>>;
 
 pub struct PiRpcSession {
     child: Child,
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     is_busy: Arc<AtomicBool>,
     stderr_lines: Arc<StdMutex<Vec<String>>>,
+    pending_rpc: Arc<Mutex<PendingRpc>>,
 }
 
 impl PiRpcSession {
@@ -73,6 +76,7 @@ impl PiRpcSession {
 
         let stdin = Arc::new(Mutex::new(stdin));
         let is_busy = Arc::new(AtomicBool::new(false));
+        let pending_rpc: Arc<Mutex<PendingRpc>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         // Spawn stderr reader
         let stderr_lines = Arc::new(StdMutex::new(Vec::new()));
@@ -82,7 +86,8 @@ impl PiRpcSession {
         let tx = event_tx.clone();
         let busy = is_busy.clone();
         let stdin_clone = stdin.clone();
-        tokio::spawn(Self::stdout_reader(stdout, tx, busy, stdin_clone));
+        let pending = pending_rpc.clone();
+        tokio::spawn(Self::stdout_reader(stdout, tx, busy, stdin_clone, pending));
 
         Ok((
             Self {
@@ -90,6 +95,7 @@ impl PiRpcSession {
                 stdin,
                 is_busy,
                 stderr_lines,
+                pending_rpc,
             },
             None, // Pi RPC doesn't have a persistent session ID concept like Claude
         ))
@@ -138,6 +144,49 @@ impl PiRpcSession {
     pub async fn new_provider_session(&self) -> Result<Option<String>> {
         self.write_json(&json!({"type": "new_session"})).await?;
         Ok(None)
+    }
+
+    pub async fn get_available_models(&self) -> Result<Vec<String>> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending_rpc.lock().await;
+            pending.insert(id.clone(), tx);
+        }
+        self.write_json(&json!({"type": "get_available_models", "id": id}))
+            .await?;
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(15), rx)
+            .await
+            .context("Pi get_available_models timed out")?
+            .context("Pi get_available_models response channel closed")?;
+        let models = msg
+            .get("data")
+            .and_then(|d| d.get("models"))
+            .and_then(|m| m.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        // docs: Model objects; tolerate string ids too
+                        m.get("id")
+                            .or_else(|| m.get("modelId"))
+                            .or_else(|| m.get("name"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .or_else(|| m.as_str().map(|s| s.to_string()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok(models)
+    }
+
+    pub async fn set_model(&self, provider: &str, model_id: &str) -> Result<()> {
+        self.write_json(&json!({
+            "type": "set_model",
+            "provider": provider,
+            "modelId": model_id,
+        }))
+        .await
     }
 
     pub async fn stop(mut self) -> Result<()> {
@@ -190,6 +239,7 @@ impl PiRpcSession {
         tx: mpsc::UnboundedSender<AgentEvent>,
         is_busy: Arc<AtomicBool>,
         _stdin: Arc<Mutex<tokio::process::ChildStdin>>,
+        pending_rpc: Arc<Mutex<PendingRpc>>,
     ) {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
@@ -216,6 +266,11 @@ impl PiRpcSession {
                     // logging, but we can detect get_state responses for session id.
                     if let Some(cmd) = msg.get("command").and_then(|v| v.as_str()) {
                         debug!("Pi response for command: {}", cmd);
+                    }
+                    if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
+                        if let Some(tx) = pending_rpc.lock().await.remove(id) {
+                            let _ = tx.send(msg.clone());
+                        }
                     }
                 }
 

@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod builtin;
+pub mod models;
 pub mod router;
 pub(crate) mod workdir;
 

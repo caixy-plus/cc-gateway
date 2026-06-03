@@ -38,6 +38,7 @@ pub fn daemon_restart_field_paths() -> Vec<&'static str> {
         "feishu.app_secret",
         "telegram.enabled",
         "telegram.bot_token",
+        "telegram.proxy",
         "qq.enabled",
         "qq.app_id",
         "qq.app_secret",
@@ -155,6 +156,9 @@ fn telegram_restart_fields(
     }
     if before.bot_token != after.bot_token {
         restart_fields.push("telegram.bot_token".to_string());
+    }
+    if before.proxy != after.proxy {
+        restart_fields.push("telegram.proxy".to_string());
     }
     if before.require_pairing != after.require_pairing {
         live_fields.push("telegram.require_pairing".to_string());

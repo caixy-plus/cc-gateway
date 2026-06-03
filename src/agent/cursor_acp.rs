@@ -354,12 +354,14 @@ impl CursorAcpSession {
             .await
             .remove(request_id)
             .unwrap_or_else(|| Value::String(request_id.to_string()));
-        let option_id = if allow { "allow-once" } else { "reject-once" };
-        let id = id_value.as_u64().unwrap_or(0);
+        // ACP permission options use stable ids: `once` / `always` / `reject`.
+        // We only support the one-shot decision here.
+        let option_id = if allow { "once" } else { "reject" };
         self.client
             .write_json(json!({
                 "jsonrpc": "2.0",
-                "id": id,
+                // JSON-RPC ids can be string or number; echo it back as-is.
+                "id": id_value,
                 "result": { "outcome": { "outcome": "selected", "optionId": option_id } }
             }))
             .await
@@ -422,14 +424,38 @@ fn rpc_id_key(id: &Value) -> String {
 }
 
 fn extract_permission_label(params: &Value) -> Option<String> {
+    // Prefer stable tool identifiers (so we can auto-approve MCP send_file),
+    // then fall back to human-facing labels.
     params
         .get("toolCall")
-        .and_then(|v| v.get("title").or_else(|| v.get("name")))
+        .and_then(|v| {
+            v.get("name")
+                .or_else(|| v.get("toolName"))
+                .or_else(|| v.get("tool_name"))
+                .or_else(|| v.get("id"))
+        })
         .and_then(|v| v.as_str())
         .or_else(|| {
             params
                 .get("permission")
-                .and_then(|v| v.get("name").or_else(|| v.get("title")))
+                .and_then(|v| {
+                    v.get("name")
+                        .or_else(|| v.get("toolName"))
+                        .or_else(|| v.get("tool_name"))
+                        .or_else(|| v.get("id"))
+                })
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            params
+                .get("toolCall")
+                .and_then(|v| v.get("title"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            params
+                .get("permission")
+                .and_then(|v| v.get("title"))
                 .and_then(|v| v.as_str())
         })
         .or_else(|| params.get("title").and_then(|v| v.as_str()))
@@ -639,6 +665,28 @@ mod tests {
         let err = r#"{"code":-32602,"data":{"message":"Session \"abc\" not found"},"message":"Invalid params"}"#;
         assert!(is_cursor_session_not_found_error(err));
         assert!(!is_cursor_session_not_found_error("other error"));
+    }
+
+    #[test]
+    fn extracts_permission_tool_name_prefers_toolcall_name() {
+        let params = json!({
+            "toolCall": { "name": "mcp__cc-gateway__send_file", "title": "Send file" }
+        });
+        assert_eq!(
+            extract_permission_label(&params),
+            Some("mcp__cc-gateway__send_file".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_permission_tool_name_falls_back_to_title() {
+        let params = json!({
+            "toolCall": { "title": "cc-gateway send_file" }
+        });
+        assert_eq!(
+            extract_permission_label(&params),
+            Some("cc-gateway send_file".to_string())
+        );
     }
 
     #[tokio::test]

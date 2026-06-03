@@ -42,6 +42,7 @@ pub struct FeishuFileTarget {
 pub struct TelegramFileTarget {
     pub bot_token: String,
     pub chat_id: String,
+    pub proxy: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +137,8 @@ impl FileDelivery for TelegramFileTarget {
             .text("chat_id", self.chat_id.clone())
             .part("document", part);
 
-        let resp = reqwest::Client::new()
+        let client = crate::platform::telegram::build_http_client(&self.proxy);
+        let resp = client
             .post(telegram_send_document_url(&self.bot_token))
             .multipart(form)
             .send()

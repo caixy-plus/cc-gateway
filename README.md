@@ -29,8 +29,10 @@ The installer runs `cc-gateway init`, restarts the daemon, and prints documentat
 ### Windows (release binary)
 
 ```powershell
-irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/scripts/install-irm.ps1 | iex
 ```
+
+(Do not use `irm install.ps1 | iex`: that file has a UTF-8 BOM that can show as leading garbled text when piped; install still works.)
 
 ### From source (developers)
 

@@ -11,6 +11,7 @@ use crate::agent::session::{AgentRuntime, NewProviderSessionCtx};
 use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::runtime::protocol::{build_permission_allow, build_permission_deny, InputMessage};
+use crate::command::models;
 use crate::{t, t_fmt};
 
 /// Validate that a path is allowed.
@@ -168,6 +169,8 @@ pub struct AgentController {
     pending_resume_provider: Arc<RwLock<Option<AgentProvider>>>,
     pending_resume_record_id: Arc<RwLock<Option<String>>>,
     mcp_context: Arc<RwLock<Option<McpContext>>>,
+    /// Active model id when known (`--model` at spawn or after `/models` switch).
+    active_model_id: Arc<RwLock<Option<String>>>,
     /// Whether the agent is currently generating output (true) or idle/ready (false).
     is_busy: Arc<AtomicBool>,
 }
@@ -195,6 +198,7 @@ impl AgentController {
             pending_resume_provider: Arc::new(RwLock::new(None)),
             pending_resume_record_id: Arc::new(RwLock::new(None)),
             mcp_context: Arc::new(RwLock::new(None)),
+            active_model_id: Arc::new(RwLock::new(None)),
             is_busy: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -226,6 +230,11 @@ impl AgentController {
         };
         let config = self.config.config_for_provider(provider);
         let validated = ensure_under_home(&work_dir)?;
+
+        {
+            let mut model = self.active_model_id.write().await;
+            *model = models::extract_model_from_args(&extra_args);
+        }
 
         let resume_id = {
             let mut pending = self.pending_resume_session_id.write().await;
@@ -395,6 +404,10 @@ impl AgentController {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
         }
+        {
+            let mut model = self.active_model_id.write().await;
+            *model = None;
+        }
         // Unblock any active pollers (platforms/TUI) that are waiting for turn completion.
         let _ = self.event_tx.send(ControllerEvent::Done);
         // NOTE: we intentionally keep provider_session_id here so that a
@@ -428,6 +441,10 @@ impl AgentController {
         {
             let mut buf = self.message_buffer.lock().await;
             buf.clear();
+        }
+        {
+            let mut model = self.active_model_id.write().await;
+            *model = None;
         }
         // Unblock any active pollers that are waiting for turn completion.
         let _ = self.event_tx.send(ControllerEvent::Done);
@@ -586,6 +603,82 @@ impl AgentController {
     pub async fn get_work_dir(&self) -> String {
         let wd = self.work_dir.read().await;
         wd.clone()
+    }
+
+    /// Current model id when known (from spawn args or in-session switch).
+    pub async fn current_model_id(&self) -> Option<String> {
+        self.active_model_id.read().await.clone()
+    }
+
+    /// List models available for the current active provider, using provider-specific mechanisms.
+    ///
+    /// - OpenCode: run official CLI (`opencode models`)
+    /// - Pi: RPC `get_available_models`
+    /// - Claude/Cursor: not supported (platform-bound agents)
+    pub async fn list_available_models(&self) -> Result<Vec<String>> {
+        let provider_name = self.provider_name().await;
+        let provider = AgentProvider::parse_str(&provider_name);
+        if models::is_platform_bound_agent(&provider) {
+            anyhow::bail!(
+                "{}",
+                crate::t_fmt!(
+                    "models.not_supported_platform_agent",
+                    NAME = crate::command::agents::provider_display_name(&provider)
+                )
+            );
+        }
+        let config = self.config.config_for_provider(Some(provider.clone()));
+
+        match provider {
+            AgentProvider::Pi => {
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    if let AgentRuntime::Pi(pi) = session {
+                        return pi.get_available_models().await;
+                    }
+                }
+                Ok(vec![])
+            }
+            _ => models::list_models_via_cli(&provider, &config).await,
+        }
+    }
+
+    /// Switch model for the current provider.
+    ///
+    /// - Pi: RPC `set_model` (no restart)
+    /// - OpenCode: ACP `session/set_model` (no restart)
+    pub async fn switch_model(&self, model_id: &str) -> Result<()> {
+        let provider_name = self.provider_name().await;
+        let provider = AgentProvider::parse_str(&provider_name);
+        if models::is_platform_bound_agent(&provider) {
+            anyhow::bail!(
+                "{}",
+                crate::t_fmt!(
+                    "models.not_supported_platform_agent",
+                    NAME = crate::command::agents::provider_display_name(&provider)
+                )
+            );
+        }
+        match provider {
+            AgentProvider::Pi | AgentProvider::OpenCode => {
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.set_model(&provider, model_id).await?;
+                    drop(s);
+                    let mut active = self.active_model_id.write().await;
+                    *active = Some(model_id.to_string());
+                    return Ok(());
+                }
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            _ => anyhow::bail!(
+                "{}",
+                crate::t_fmt!(
+                    "models.not_supported",
+                    NAME = crate::command::agents::provider_display_name(&provider)
+                )
+            ),
+        }
     }
 
     /// Whether the agent is currently generating output (true) or ready for input (false).

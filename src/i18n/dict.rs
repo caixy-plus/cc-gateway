@@ -461,8 +461,56 @@ pub fn t(key: &str) -> &str {
 
         // command/builtin.rs
         "builtin.help" => match lang {
-            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /esc [msg]           Flush queued messages (Claude: best-effort)\n  /stop                Stop current generation (Claude: best-effort)\n  /clear               Clear session context\n  /status              Show agent status (ready / busy)\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
-            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /esc [消息]           强推排队消息（Claude：best-effort）\n  /stop                停止当前输出（Claude：best-effort）\n  /clear               清理会话上下文\n  /status              显示智能体状态（就绪 / 输出中）\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands:\n  /help                Show this help\n  /quit                Quit current agent session\n  /esc [msg]           Flush queued messages (Claude: best-effort)\n  /stop                Stop current generation (Claude: best-effort)\n  /clear               Clear session context\n  /models [id|n]       List/switch models for current agent\n  /status              Show agent status (ready / busy)\n  /cd <path>           Change working directory\n  /cd_default          Change to default directory\n  /agent [args...]     Start a new agent session\n  /agents              Pick this channel's default agent\n  /pwd                 Show current working directory\n  /ll                  List files in current directory\n  /mkdir <dirname>     Create a new directory\n  /show-thinking       Always show Thinking output when available\n  /hide-thinking       Hide Thinking output\n  /agent-history       Show recent agent sessions\nAny other text is sent directly to the active agent.",
+            Language::ZhCN => "cc-gateway 命令:\n  /help                显示此帮助\n  /quit                退出当前智能体会话\n  /esc [消息]           强推排队消息（Claude：best-effort）\n  /stop                停止当前输出（Claude：best-effort）\n  /clear               清理会话上下文\n  /models [id|序号]     列出/切换当前智能体模型\n  /status              显示智能体状态（就绪 / 输出中）\n  /cd <path>           更改工作目录\n  /cd_default          将工作目录更改为默认目录\n  /agent [args...]     启动新的智能体会话\n  /agents              选择本频道默认智能体\n  /pwd                 显示当前工作目录\n  /ll                  列出当前目录中的文件\n  /mkdir <目录名>       创建新目录\n  /show-thinking       始终显示可用的 Thinking 输出\n  /hide-thinking       隐藏 Thinking 输出\n  /agent-history       显示最近的智能体会话\n任何其他文本将直接发送给活动智能体。",
+        },
+        "models.title" => match lang {
+            Language::En => "Models for current agent: {NAME}",
+            Language::ZhCN => "当前智能体可用模型：{NAME}",
+        },
+        "models.current_active" => match lang {
+            Language::En => "Current model: {MODEL}",
+            Language::ZhCN => "当前模型：{MODEL}",
+        },
+        "models.current_default" => match lang {
+            Language::En => "Current model: (provider default — not set via cc-gateway)",
+            Language::ZhCN => "当前模型：（智能体默认，未通过 cc-gateway 指定）",
+        },
+        "models.no_known_models" => match lang {
+            Language::En => "(No curated model list for this agent in cc-gateway.)",
+            Language::ZhCN => "（cc-gateway 未内置该智能体的模型列表）",
+        },
+        "models.switch_hint_index" => match lang {
+            Language::En => "Switch: /models <number> (restarts the session with --model).",
+            Language::ZhCN => "切换：/models <序号>（会重启会话并追加 --model 参数）",
+        },
+        "models.switch_hint_raw" => match lang {
+            Language::En => "Switch: /models <model_id> (applied in the current session).",
+            Language::ZhCN => "切换：/models <model_id>（在当前会话内生效）",
+        },
+        "models.not_supported" => match lang {
+            Language::En => "Model switching is not supported for {NAME} in cc-gateway yet.",
+            Language::ZhCN => "cc-gateway 暂不支持为 {NAME} 切换模型。",
+        },
+        "models.not_supported_platform_agent" => match lang {
+            Language::En => "{NAME} is a platform-bound agent — model selection is managed by the vendor CLI, not cc-gateway. Use /agent with provider-specific flags if you need a different setup, or switch to OpenCode/Pi for in-session /models.",
+            Language::ZhCN => "{NAME} 是平台定制型智能体，模型由官方 CLI 管理，cc-gateway 不提供 /models 切换。如需更换配置请用 /agent 并带上对应参数，或改用 OpenCode/Pi 以使用会话内 /models。",
+        },
+        "models.invalid_index" => match lang {
+            Language::En => "Invalid model index.",
+            Language::ZhCN => "模型序号无效。",
+        },
+        "models.switched" => match lang {
+            Language::En => "Switched {NAME} model to: {MODEL}.",
+            Language::ZhCN => "已将 {NAME} 模型切换为：{MODEL}。",
+        },
+        "models.switch_failed" => match lang {
+            Language::En => "Failed to switch model: {ERR}",
+            Language::ZhCN => "切换模型失败：{ERR}",
+        },
+        "models.pi_requires_provider_model" => match lang {
+            Language::En => "Pi model id must be in the form: provider/model (e.g. anthropic/claude-sonnet-4-20250514).",
+            Language::ZhCN => "Pi 模型需使用 provider/model 格式（例如 anthropic/claude-sonnet-4-20250514）。",
         },
         "builtin.help_title" => match lang {
             Language::En => "cc-gateway commands:",
@@ -564,6 +612,14 @@ pub fn t(key: &str) -> &str {
             Language::En => "Choose the default agent for this chat:",
             Language::ZhCN => "选择本聊天的默认智能体：",
         },
+        "feishu.model_picker_title" => match lang {
+            Language::En => "Choose model",
+            Language::ZhCN => "选择模型",
+        },
+        "feishu.choose_model" => match lang {
+            Language::En => "Choose model for {NAME}:",
+            Language::ZhCN => "为 {NAME} 选择模型：",
+        },
         "feishu.select_agent_title" => match lang {
             Language::En => "Default Agent",
             Language::ZhCN => "默认智能体",
@@ -575,6 +631,10 @@ pub fn t(key: &str) -> &str {
         "telegram.choose_agent" => match lang {
             Language::En => "Choose the default agent for this chat:",
             Language::ZhCN => "选择本聊天的默认智能体：",
+        },
+        "telegram.choose_model" => match lang {
+            Language::En => "Choose model for {NAME}:",
+            Language::ZhCN => "为 {NAME} 选择模型：",
         },
         "builtin.help_any_text" => match lang {
             Language::En => "Any other text is sent directly to the active agent.",
@@ -1099,6 +1159,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Error: {ERR}",
             Language::ZhCN => "错误: {ERR}",
         },
+        "telegram.poll_network_hint" => match lang {
+            Language::En => "Hint: cannot reach api.telegram.org (network/proxy). Set `telegram.proxy` in config (e.g. http://127.0.0.1:7890) and restart the daemon.",
+            Language::ZhCN => "提示：无法连接 api.telegram.org（网络/代理问题）。可在 config.json 配置 `telegram.proxy`（如 http://127.0.0.1:7890）并重启 daemon。",
+        },
         "telegram.private_chat_only" => match lang {
             Language::En => "Please use in private chat.",
             Language::ZhCN => "请在私聊中使用。",
@@ -1143,6 +1207,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "This file type cannot be sent in QQ groups (images/videos/voice only). Use private chat (C2C) or send a PNG/JPG.",
             Language::ZhCN => "该文件类型无法发到 QQ 群（群聊仅支持图片/视频/语音富媒体）。请私聊发送，或改用 PNG/JPG 图片。",
         },
+        "qq.group_chat_unsupported" => match lang {
+            Language::En => "QQ group chat is not supported. Please DM (C2C) the bot instead.",
+            Language::ZhCN => "暂不支持 QQ 群聊通道，请改为私聊（C2C）机器人。",
+        },
         "telegram.permission_request" => match lang {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",
             Language::ZhCN => "权限请求: `{NAME}`\nID: `{ID}`",
@@ -1184,8 +1252,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "其他文本将直接发送给活动智能体。",
         },
         "telegram.help_text" => match lang {
-            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode).\nAny other text will be forwarded to the active agent.",
-            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode）。\n其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/models List/switch models\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode).\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/models 列出/切换模型\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode）。\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",

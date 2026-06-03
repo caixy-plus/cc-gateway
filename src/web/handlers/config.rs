@@ -140,6 +140,7 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             }
             config.telegram.enabled = c.enabled;
             config.telegram.require_pairing = c.require_pairing;
+            config.telegram.proxy = c.proxy;
         }
     }
     if let Some(v) = body.get("qq") {

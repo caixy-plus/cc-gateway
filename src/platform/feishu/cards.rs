@@ -202,6 +202,66 @@ pub fn build_agent_picker_card(
     })
 }
 
+pub fn build_model_picker_card(
+    models: &[String],
+    provider_name: &str,
+    chat_id: &str,
+    current_model: Option<&str>,
+) -> Value {
+    let mut elements: Vec<Value> = vec![json!({
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": crate::t_fmt!("feishu.choose_model", NAME = provider_name)
+        }
+    })];
+    if let Some(current) = current_model {
+        elements.push(json!({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": crate::t_fmt!("models.current_active", MODEL = current)
+            }
+        }));
+    } else {
+        elements.push(json!({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": crate::t!("models.current_default")
+            }
+        }));
+    }
+    for m in models.iter().take(20) {
+        let label = if current_model == Some(m.as_str()) {
+            format!("{m} ✓")
+        } else {
+            m.clone()
+        };
+        elements.push(json!({
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": label },
+            "type": "primary",
+            "behaviors": [{
+                "type": "callback",
+                "value": {
+                    "cmd": "set_model",
+                    "model_id": m,
+                    "chat_id": chat_id
+                }
+            }]
+        }));
+    }
+    json!({
+        "schema": "2.0",
+        "header": {
+            "title": { "tag": "plain_text", "content": crate::t!("feishu.model_picker_title") },
+            "template": "indigo"
+        },
+        "body": { "elements": elements }
+    })
+}
+
 /// Build a session-history card with resume / new-session / delete buttons.
 /// Matches main branch `build_session_history_card`.
 pub fn build_session_history_card(

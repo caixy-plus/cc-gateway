@@ -29,8 +29,10 @@ curl -fsSL https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.
 ### Windows（发布版二进制）
 
 ```powershell
-irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/caixy-plus/cc-gateway/main/scripts/install-irm.ps1 | iex
 ```
+
+（勿使用 `irm install.ps1 | iex`：该文件含 UTF-8 BOM，管道执行时控制台可能出现首行乱码；安装逻辑不受影响。）
 
 ### 从源码（开发者）
 

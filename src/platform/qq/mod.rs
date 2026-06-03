@@ -14,6 +14,7 @@ use tracing::{error, info, warn};
 use crate::command::router::CommandRouter;
 use crate::config::model::{AgentProfiles, QqConfig};
 use crate::platform::Platform;
+use crate::platform::inbound_media;
 use crate::runtime::controller::AgentController;
 use crate::runtime::event_poller::EventPollSink;
 use crate::session::channel_command::{
@@ -257,17 +258,23 @@ impl QqPlatform {
                 let Some(group_openid) = group_openid else {
                     return Ok(());
                 };
-                self.handle_inbound(QqChatTarget::Group { group_openid }, data)
-                    .await
+                // Align with Feishu: disable group channel; only DM (C2C) is supported.
+                let chat = QqChatTarget::Group { group_openid };
+                let _ = self
+                    .send_text(&chat, crate::t!("qq.group_chat_unsupported"))
+                    .await;
+                Ok(())
             }
             _ => Ok(()),
         }
     }
 
     async fn handle_inbound(&self, chat: QqChatTarget, data: &Value) -> Result<()> {
-        let Some(content) = api::extract_message_text(data) else {
+        let user_text = api::extract_message_text(data).unwrap_or_default();
+        let attachments = api::extract_inbound_attachments(data);
+        if user_text.trim().is_empty() && attachments.is_empty() {
             return Ok(());
-        };
+        }
 
         let channel_id = chat.channel_id();
         let approved =
@@ -281,6 +288,31 @@ impl QqPlatform {
             }
             return Ok(());
         }
+
+        // Download inbound attachments (best-effort) into `~/.cc-gateway/media/` and forward paths.
+        let mut saved = Vec::new();
+        for att in attachments {
+            match self.api.download_attachment(&att.url).await {
+                Ok((bytes, ct)) => {
+                    let item = if let Some(ref name) = att.name {
+                        inbound_media::save_bytes_to_media_dir_with_upstream_name(
+                            &bytes,
+                            name,
+                            ct.as_deref(),
+                        )
+                        .await
+                    } else {
+                        inbound_media::save_bytes_to_media_dir(&bytes, ct.as_deref()).await
+                    };
+                    match item {
+                        Ok(it) => saved.push(it),
+                        Err(e) => warn!("[QQ] Failed to save inbound attachment {}: {}", att.url, e),
+                    }
+                }
+                Err(e) => warn!("[QQ] Failed to download inbound attachment {}: {}", att.url, e),
+            }
+        }
+        let content = inbound_media::format_agent_message(&user_text, &saved);
 
         crate::web::state::broadcast_event(&channel_id, "qq", &channel_id, "user", &content);
 
@@ -351,6 +383,26 @@ impl QqPlatform {
                     let mark = if id == current.to_string() { " *" } else { "" };
                     lines.push(format!("- {}{}", name, mark));
                 }
+                self.send_text(chat, &lines.join("\n")).await?;
+            }
+            ChatCommandOutcome::SelectModel {
+                provider,
+                current,
+                options,
+            } => {
+                let mut lines = vec![crate::t_fmt!(
+                    "telegram.choose_model",
+                    NAME = crate::command::agents::provider_display_name(&provider)
+                )];
+                lines.push(crate::command::models::current_model_line(current.as_deref()));
+                for (i, m) in options.iter().enumerate() {
+                    lines.push(crate::command::models::format_model_list_entry(
+                        i,
+                        m,
+                        current.as_deref() == Some(m.as_str()),
+                    ));
+                }
+                lines.push(crate::t!("models.switch_hint_raw").to_string());
                 self.send_text(chat, &lines.join("\n")).await?;
             }
             ChatCommandOutcome::ListDir { dir, dirs } => {

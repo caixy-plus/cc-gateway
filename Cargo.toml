@@ -1,6 +1,6 @@
 [package]
 name = "cc-gateway"
-version = "1.8.2"
+version = "1.8.3"
 edition = "2021"
 authors = ["caixinyun"]
 description = "Gateway for local agent CLIs (Claude, Cursor, OpenCode, …) via Feishu/Lark, Telegram, QQ, WebUI, and CLI"
@@ -29,7 +29,7 @@ prost = "0.13"
 bytes = "1.7"
 
 # HTTP & WebSocket
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "socks"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 futures = "0.3"
 

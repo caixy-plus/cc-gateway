@@ -1,4 +1,8 @@
 ﻿#Requires -Version 5.1
+# NOTE (Windows): This file is UTF-8 with BOM for ".\install.ps1" on PS 5.1 / GBK consoles.
+# Do NOT pipe it directly (irm install.ps1 | iex) — the BOM may print as leading garbled text.
+# Use instead: irm .../scripts/install-irm.ps1 | iex
+# Or: $p="$env:TEMP\cc-gateway-install.ps1"; irm .../install.ps1 -OutFile $p; & $p
 $ErrorActionPreference = "Stop"
 
 $Repo = "caixy-plus/cc-gateway"
@@ -61,10 +65,14 @@ function Stop-AllCCGateway {
     # Step 3: Final check - fail if still running
     $procs = Get-Process -Name $Binary -ErrorAction SilentlyContinue
     if ($procs) {
-        Write-Msg "Failed to stop all cc-gateway processes after $maxRetries attempts. PIDs: $($procs.Id -join ', '). Aborting." "无法停止所有 cc-gateway 进程（尝试 $maxRetries 次后）。PID: $($procs.Id -join ', ')。中止安装。"
-        exit 1
+        $en = "Failed to stop all cc-gateway processes after $maxRetries attempts. PIDs: $($procs.Id -join ', '). Aborting."
+        $zh = "无法停止所有 cc-gateway 进程（尝试 $maxRetries 次后）。PID: $($procs.Id -join ', ')。中止安装。"
+        throw $(if ($lang -eq 'zh') { $zh } else { $en })
     }
 }
+
+$script:CcGatewayExitCode = 0
+try {
 
 # Detect architecture
 $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -86,7 +94,7 @@ try {
     Invoke-WebRequest -Uri $LatestUrl -OutFile $TempFile -UseBasicParsing
 } catch {
     Write-Msg "Failed to download: $_" "下载失败: $_"
-    exit 1
+    throw
 }
 
 # Extract
@@ -155,7 +163,10 @@ $docsScript = $null
 $docsTmp = $null
 if ($PSScriptRoot) {
     $candidate = Join-Path $PSScriptRoot "scripts\install-docs.ps1"
-    if (Test-Path $candidate) { $docsScript = $candidate }
+    if (Test-Path $candidate) {
+        Set-ScriptUtf8Bom $candidate
+        $docsScript = $candidate
+    }
 }
 if (-not $docsScript) {
     $docsTmp = Join-Path $env:TEMP "cc-gateway-install-docs.ps1"
@@ -180,3 +191,14 @@ if ($docsScript -and (Test-Path $docsScript)) {
 } else {
     Write-Msg "Documentation: https://github.com/$Repo/tree/main/docs/bots" "文档: https://github.com/$Repo/tree/main/docs/bots"
 }
+
+} catch {
+    if ($_.Exception.Message) {
+        Write-Msg "Install failed: $($_.Exception.Message)" "安装失败: $($_.Exception.Message)"
+    } else {
+        Write-Msg "Install failed." "安装失败。"
+    }
+    $script:CcGatewayExitCode = 1
+}
+
+exit $script:CcGatewayExitCode

@@ -35,7 +35,7 @@ pub(crate) struct TelegramVoice {
 }
 
 impl TelegramPlatform {
-    async fn download_telegram_file(&self, file_id: &str) -> Result<(Vec<u8>, String)> {
+    async fn download_telegram_file(&self, file_id: &str) -> Result<(Vec<u8>, String, String)> {
         let url = self.api_url("getFile");
         let resp = self
             .http_client
@@ -76,13 +76,21 @@ impl TelegramPlatform {
             .unwrap_or("application/octet-stream")
             .to_string();
         let bytes = file_resp.bytes().await?.to_vec();
-        Ok((bytes, content_type))
+        Ok((bytes, content_type, file_path.to_string()))
     }
 
     async fn save_telegram_file(&self, file_id: &str) -> Option<SavedInboundMedia> {
         match self.download_telegram_file(file_id).await {
-            Ok((bytes, content_type)) => {
-                match inbound_media::save_bytes_to_media_dir(&bytes, Some(&content_type)).await {
+            Ok((bytes, content_type, upstream_name)) => {
+                // Telegram downloads frequently return `application/octet-stream`;
+                // prefer the extension from `file_path` when available.
+                match inbound_media::save_bytes_to_media_dir_with_upstream_name(
+                    &bytes,
+                    &upstream_name,
+                    Some(&content_type),
+                )
+                .await
+                {
                     Ok(item) => Some(item),
                     Err(e) => {
                         warn!("Failed to save Telegram file {}: {}", file_id, e);

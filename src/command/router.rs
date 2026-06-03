@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::command::agents;
 use crate::command::builtin::BuiltinCommands;
+use crate::command::models;
 use crate::config::model::AgentProvider;
 use crate::runtime::controller::AgentController;
 use crate::runtime::protocol::{build_permission_allow, build_permission_deny};
@@ -51,6 +52,8 @@ pub enum CommandAction {
     StopGeneration,
     /// Clear current agent session context (restart fresh in same directory)
     ClearSession,
+    /// List or switch the current provider's models (session mode only).
+    Models { arg: String },
     /// Show current agent status (ready / generating output)
     Status,
     /// Forward regular text to the active Claude session
@@ -136,6 +139,9 @@ impl CommandRouter {
                 },
                 "/stop" => CommandAction::StopGeneration,
                 "/clear" => CommandAction::ClearSession,
+                "/models" => CommandAction::Models {
+                    arg: arg.to_string(),
+                },
                 "/status" => CommandAction::Status,
                 "/show-thinking" | "/show_thinking" => CommandAction::ShowThinking,
                 "/hide-thinking" | "/hide_thinking" => CommandAction::HideThinking,
@@ -305,6 +311,50 @@ impl CommandRouter {
                         Some(t!("builtin.context_cleared").to_string())
                     }
                     Err(e) => Some(t_fmt!("builtin.failed_clear", ERR = e)),
+                }
+            }
+            CommandAction::Models { arg } => {
+                let ctrl = self.controller.lock().await;
+                let provider = AgentProvider::parse_str(&ctrl.provider_name().await);
+                let provider_name = crate::command::agents::provider_display_name(&provider);
+                if models::is_platform_bound_agent(&provider) {
+                    return Some(t_fmt!(
+                        "models.not_supported_platform_agent",
+                        NAME = provider_name
+                    ));
+                }
+                if arg.trim().is_empty() {
+                    let mut lines = Vec::new();
+                    lines.push(t_fmt!("models.title", NAME = provider_name));
+                    let current = ctrl.current_model_id().await;
+                    lines.push(models::current_model_line(current.as_deref()));
+                    match ctrl.list_available_models().await {
+                        Ok(models) if models.is_empty() => {
+                            lines.push(t!("models.no_known_models").to_string());
+                            lines.push(t!("models.switch_hint_raw").to_string());
+                        }
+                        Ok(models) => {
+                            for (i, m) in models.iter().take(20).enumerate() {
+                                lines.push(models::format_model_list_entry(
+                                    i,
+                                    m,
+                                    current.as_deref() == Some(m.as_str()),
+                                ));
+                            }
+                            lines.push(t!("models.switch_hint_raw").to_string());
+                        }
+                        Err(e) => lines.push(e.to_string()),
+                    }
+                    return Some(lines.join("\n"));
+                }
+                let model_id = arg.trim().to_string();
+                match ctrl.switch_model(&model_id).await {
+                    Ok(()) => Some(t_fmt!(
+                        "models.switched",
+                        NAME = provider_name,
+                        MODEL = model_id
+                    )),
+                    Err(e) => Some(e.to_string()),
                 }
             }
             CommandAction::Status => {

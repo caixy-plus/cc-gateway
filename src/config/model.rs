@@ -114,6 +114,8 @@ pub struct FeishuConfig {
 pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: String,
+    /// Optional HTTP/SOCKS proxy for Telegram Bot API only (e.g. `http://127.0.0.1:7890`).
+    pub proxy: String,
     /// Require WebUI admin approval before allowing new chats to interact.
     pub require_pairing: bool,
 }
@@ -381,6 +383,7 @@ impl Default for TelegramConfig {
         Self {
             enabled: false,
             bot_token: "${TELEGRAM_BOT_TOKEN}".to_string(),
+            proxy: String::new(),
             require_pairing: true,
         }
     }

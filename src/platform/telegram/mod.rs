@@ -22,6 +22,26 @@ use crate::t_fmt;
 mod inbound;
 use inbound::InboundContent;
 
+/// Build an HTTP client for Telegram Bot API. Proxy applies to Telegram only.
+pub(crate) fn build_http_client(proxy: &str) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(45));
+    let proxy = proxy.trim();
+    if !proxy.is_empty() {
+        match reqwest::Proxy::all(proxy) {
+            Ok(p) => {
+                info!("[Telegram] Bot API proxy enabled");
+                builder = builder.proxy(p);
+            }
+            Err(e) => {
+                warn!("[Telegram] Invalid proxy URL, ignored: {}", e);
+            }
+        }
+    }
+    builder
+        .build()
+        .expect("failed to build Telegram HTTP client")
+}
+
 // ---------------------------------------------------------------------------
 // Output buffering policy (Telegram)
 // ---------------------------------------------------------------------------
@@ -64,6 +84,10 @@ enum TelegramCallbackAction {
         chat_id: String,
         request_id: String,
         allow: bool,
+    },
+    SetModel {
+        chat_id: String,
+        model_id: String,
     },
 }
 
@@ -240,15 +264,13 @@ impl TelegramPlatform {
         agent_settings: C,
         show_thinking: bool,
     ) -> Self {
+        let http_client = build_http_client(&config.proxy);
         Self {
             config,
             default_dir: default_dir.to_string(),
             agent_settings: agent_settings.into(),
             show_thinking,
-            http_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(45))
-                .build()
-                .expect("failed to build Telegram HTTP client"),
+            http_client,
             channels: Arc::new(DashMap::new()),
             offset: Arc::new(AtomicI64::new(0)),
             callbacks: Arc::new(DashMap::new()),
@@ -263,6 +285,25 @@ impl TelegramPlatform {
         )
     }
 
+    fn sanitize_error_message(message: &str, bot_token: &str) -> String {
+        if bot_token.is_empty() {
+            return message.to_string();
+        }
+        message.replace(bot_token, "***")
+    }
+
+    fn format_poll_error(err: &anyhow::Error, bot_token: &str) -> String {
+        let detail = Self::sanitize_error_message(&format!("{err:#}"), bot_token);
+        if detail.contains("timed out") || detail.contains("timeout") {
+            format!(
+                "{detail}\n{}",
+                crate::t!("telegram.poll_network_hint")
+            )
+        } else {
+            detail
+        }
+    }
+
     pub(crate) fn mcp_context_for_chat(
         &self,
         chat_id: &str,
@@ -272,6 +313,7 @@ impl TelegramPlatform {
                 crate::runtime::file_delivery::TelegramFileTarget {
                     bot_token: self.config.bot_token.clone(),
                     chat_id: chat_id.to_string(),
+                    proxy: self.config.proxy.clone(),
                 },
             ),
         }
@@ -441,6 +483,35 @@ impl TelegramPlatform {
         let token = format!("cg:{}", id);
         self.callbacks.insert(token.clone(), action);
         token
+    }
+
+    fn model_reply_markup(
+        &self,
+        chat_id: &str,
+        models: &[String],
+        current: Option<&str>,
+    ) -> Value {
+        let mut rows: Vec<Vec<Value>> = Vec::new();
+        for chunk in models.chunks(2) {
+            let mut row: Vec<Value> = Vec::new();
+            for m in chunk {
+                let label = if current == Some(m.as_str()) {
+                    format!("{m} ✓")
+                } else {
+                    m.clone()
+                };
+                let cb = self.register_callback(TelegramCallbackAction::SetModel {
+                    chat_id: chat_id.to_string(),
+                    model_id: m.clone(),
+                });
+                row.push(json!({
+                    "text": label,
+                    "callback_data": cb,
+                }));
+            }
+            rows.push(row);
+        }
+        json!({ "inline_keyboard": rows })
     }
 
     pub(crate) fn directory_reply_markup(&self, chat_id: &str, dirs: &[(String, String)]) -> Value {
@@ -705,6 +776,23 @@ impl TelegramPlatform {
             ChatCommandOutcome::SelectAgent { current, options } => {
                 let markup = self.agent_reply_markup(&chat_id_str, &options, &current);
                 self.send_message_with_markup(chat_id, crate::t!("telegram.choose_agent"), markup)
+                    .await?;
+            }
+            ChatCommandOutcome::SelectModel {
+                provider,
+                current,
+                options,
+            } => {
+                let mut title = crate::t_fmt!(
+                    "telegram.choose_model",
+                    NAME = crate::command::agents::provider_display_name(&provider)
+                );
+                title.push('\n');
+                title.push_str(&crate::command::models::current_model_line(
+                    current.as_deref(),
+                ));
+                let markup = self.model_reply_markup(&chat_id_str, &options, current.as_deref());
+                self.send_message_with_markup(chat_id, &title, markup)
                     .await?;
             }
             ChatCommandOutcome::ListDir { dir, dirs } => {
@@ -1010,6 +1098,47 @@ impl TelegramPlatform {
                     .edit_message_text(chat_id, message_id, action_text)
                     .await;
             }
+            TelegramCallbackAction::SetModel { chat_id: action_chat_id, model_id } => {
+                if action_chat_id != chat_id_str {
+                    let _ = self
+                        .answer_callback_query(
+                            &callback_query.id,
+                            Some(crate::t!("telegram.callback_expired")),
+                        )
+                        .await;
+                    return Ok(());
+                }
+                let runtime = self.get_channel(&chat_id_str).await;
+                let executor = ChatCommandExecutor::new(
+                    &self.default_dir,
+                    self.agent_settings.clone(),
+                    self.show_thinking,
+                );
+                let mut context = ChatCommandContext::new(
+                    "telegram",
+                    runtime.channel_session.id.clone(),
+                    format!("Telegram {}", chat_id),
+                    runtime.channel_session.work_dir.clone(),
+                    runtime.active_agent.clone(),
+                )
+                .with_mcp_context(self.mcp_context_for_chat(&chat_id_str));
+                let outcome = executor
+                    .execute(
+                        &mut context,
+                        crate::command::router::CommandAction::Models { arg: model_id },
+                    )
+                    .await?;
+                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
+                    rt.active_agent = context.active_agent.clone();
+                    rt.channel_session.work_dir = context.channel_work_dir.clone();
+                }
+                match outcome {
+                    ChatCommandOutcome::Reply(text) | ChatCommandOutcome::Error(text) => {
+                        let _ = self.edit_message_text(chat_id, message_id, &text).await;
+                    }
+                    _ => {}
+                }
+            }
         }
 
         Ok(())
@@ -1156,7 +1285,10 @@ impl Platform for TelegramPlatform {
                         crate::platform::status::ConnectionState::Disconnected,
                     );
                     connected_logged = false;
-                    error!("[Telegram] getUpdates error: {}", e);
+                    error!(
+                        "[Telegram] getUpdates error: {}",
+                        Self::format_poll_error(&e, &self.config.bot_token)
+                    );
                     sleep(Duration::from_secs(5)).await;
                 }
             }

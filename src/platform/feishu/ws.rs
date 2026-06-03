@@ -544,6 +544,23 @@ impl FeishuPlatform {
                     .await;
                 self.on_processing_complete(&message_id, true).await;
             }
+            ChatCommandOutcome::SelectModel {
+                provider,
+                current,
+                options,
+            } => {
+                let provider_name = crate::command::agents::provider_display_name(&provider);
+                let card = crate::platform::feishu::cards::build_model_picker_card(
+                    &options,
+                    provider_name,
+                    &chat_id,
+                    current.as_deref(),
+                );
+                let _ = self
+                    .send_interactive_card(&receive_id_type, &receive_id, &card)
+                    .await;
+                self.on_processing_complete(&message_id, true).await;
+            }
             ChatCommandOutcome::ListDir { dir, dirs } => {
                 if dirs.is_empty() {
                     let _ = self
@@ -899,6 +916,48 @@ impl FeishuPlatform {
                                 .send_text_message(&receive_id_type, &receive_id, &err_text)
                                 .await;
                         }
+                    }
+                }
+            }
+
+            Some("set_model") => {
+                let model_id = user_value
+                    .get("model_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if model_id.trim().is_empty() {
+                    return;
+                }
+                let runtime = self
+                    .get_channel(chat_id, &receive_id_type, &receive_id)
+                    .await;
+                if let Some(ref active) = runtime.active_agent {
+                    let ctrl = active.controller.lock().await;
+                    let provider =
+                        crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
+                    let result = ctrl.switch_model(&model_id).await;
+                    let title = crate::t!("feishu.model_picker_title");
+                    let card = match result {
+                        Ok(()) => {
+                            let text = crate::t_fmt!(
+                                "models.switched",
+                                NAME = crate::command::agents::provider_display_name(&provider),
+                                MODEL = model_id
+                            );
+                            crate::platform::feishu::cards::build_result_card(title, &text, true)
+                        }
+                        Err(e) => {
+                            let text = crate::t_fmt!("models.switch_failed", ERR = e);
+                            crate::platform::feishu::cards::build_result_card(title, &text, false)
+                        }
+                    };
+                    if let Some(mid) = open_message_id {
+                        let _ = self.update_interactive_card(mid, &card).await;
+                    } else {
+                        let _ = self
+                            .send_interactive_card(&receive_id_type, &receive_id, &card)
+                            .await;
                     }
                 }
             }

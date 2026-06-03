@@ -12,6 +12,13 @@ pub struct SavedInboundMedia {
     pub is_image: bool,
 }
 
+fn ext_is_image(ext: &str) -> bool {
+    matches!(
+        ext,
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg"
+    )
+}
+
 pub fn content_type_to_extension(content_type: &str) -> &'static str {
     let base = content_type
         .split(';')
@@ -40,6 +47,27 @@ fn resolve_extension(content_type: Option<&str>) -> &'static str {
     content_type.map(content_type_to_extension).unwrap_or("bin")
 }
 
+fn extension_from_filename(filename: &str) -> Option<String> {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    if ext.is_empty() {
+        return None;
+    }
+    // Keep it safe and predictable for on-disk filenames.
+    if !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    if ext.len() > 10 {
+        return None;
+    }
+    Some(ext)
+}
+
 /// Gateway-assigned on-disk name: `{uuid}.{ext}`.
 pub fn generate_storage_filename(content_type: Option<&str>) -> String {
     let ext = resolve_extension(content_type);
@@ -49,6 +77,15 @@ pub fn generate_storage_filename(content_type: Option<&str>) -> String {
 
 fn is_image_content_type(content_type: Option<&str>) -> bool {
     content_type.is_some_and(|ct| ct.starts_with("image/"))
+}
+
+fn is_image_from_metadata(filename: Option<&str>, content_type: Option<&str>) -> bool {
+    if is_image_content_type(content_type) {
+        return true;
+    }
+    filename
+        .and_then(extension_from_filename)
+        .is_some_and(|ext| ext_is_image(&ext))
 }
 
 /// Write bytes into `~/.cc-gateway/media/` with a unique storage filename.
@@ -71,6 +108,36 @@ pub async fn save_bytes_to_media_dir(
     Ok(SavedInboundMedia {
         path,
         is_image: is_image_content_type(content_type),
+    })
+}
+
+/// Like [`save_bytes_to_media_dir`], but try to preserve a useful extension from an upstream filename.
+///
+/// This is important for platforms where `Content-Type` is often `application/octet-stream`
+/// (e.g. Telegram file download), but the upstream `file_path` contains a real extension.
+pub async fn save_bytes_to_media_dir_with_upstream_name(
+    bytes: &[u8],
+    upstream_name: &str,
+    content_type: Option<&str>,
+) -> Result<SavedInboundMedia> {
+    let dir = media_dir();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .with_context(|| format!("Failed to create media dir {:?}", dir))?;
+
+    let ext = extension_from_filename(upstream_name)
+        .unwrap_or_else(|| resolve_extension(content_type).to_string());
+    let id = uuid::Uuid::new_v4();
+    let filename = format!("{id}.{ext}");
+    let path = dir.join(&filename);
+
+    tokio::fs::write(&path, bytes)
+        .await
+        .with_context(|| format!("Failed to write media file {:?}", path))?;
+
+    Ok(SavedInboundMedia {
+        path,
+        is_image: is_image_from_metadata(Some(upstream_name), content_type),
     })
 }
 
@@ -110,6 +177,17 @@ mod tests {
         assert!(a.ends_with(".png"));
         let stem = a.strip_suffix(".png").unwrap();
         assert!(uuid::Uuid::parse_str(stem).is_ok());
+    }
+
+    #[test]
+    fn filename_extension_parsing_is_sanitized() {
+        assert_eq!(
+            extension_from_filename("foo.PDF").as_deref(),
+            Some("pdf")
+        );
+        assert_eq!(extension_from_filename("noext"), None);
+        assert_eq!(extension_from_filename("bad.ext!"), None);
+        assert_eq!(extension_from_filename("x.veryveryverylongext"), None);
     }
 
     #[test]

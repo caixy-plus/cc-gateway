@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tracing::warn;
 const TOKEN_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
 const API_BASE: &str = "https://api.sgroup.qq.com";
 const API_BASE_SANDBOX: &str = "https://sandbox.api.sgroup.qq.com";
@@ -41,6 +42,14 @@ pub struct GatewayBotResponse {
     pub url: String,
     #[serde(default)]
     pub shards: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QqInboundAttachment {
+    pub url: String,
+    /// Optional upstream name (filename or path) used to preserve extensions on disk.
+    pub name: Option<String>,
+    pub content_type: Option<String>,
 }
 
 impl QqApiClient {
@@ -244,6 +253,30 @@ impl QqApiClient {
         }
         Ok(())
     }
+
+    /// Download an attachment URL (best-effort). Some URLs may be public; others may require auth.
+    pub async fn download_attachment(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
+        let token = self.access_token().await?;
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", self.auth_header(&token))
+            .send()
+            .await
+            .with_context(|| format!("QQ attachment download failed for {}", url))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("QQ attachment download HTTP {}: {}", status, body);
+        }
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(';').next().unwrap_or(s).to_string());
+        let bytes = resp.bytes().await?.to_vec();
+        Ok((bytes, content_type))
+    }
 }
 
 /// Serializable chat target for MCP `send_file` (`McpDeliveryTarget::Qq`).
@@ -318,6 +351,60 @@ pub fn extract_message_text(d: &Value) -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
+/// Extract inbound attachment URLs from a dispatch event `d` object (best-effort).
+///
+/// QQ may include attachments/rich media in various shapes depending on event type and message kind.
+/// We support a few common patterns to avoid losing user-uploaded files.
+pub fn extract_inbound_attachments(d: &Value) -> Vec<QqInboundAttachment> {
+    let mut out = Vec::new();
+
+    // Official v2 event payload:
+    // `attachments: [{ url, filename, content_type, ... voice_wav_url? ... }]`
+    if let Some(arr) = d.get("attachments").and_then(|v| v.as_array()) {
+        for a in arr {
+            // Prefer `voice_wav_url` for voice so the agent gets a standard format.
+            let url = a
+                .get("voice_wav_url")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| a.get("url").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if url.is_empty() {
+                continue;
+            }
+            let name = a
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let content_type = a
+                .get("content_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            out.push(QqInboundAttachment {
+                url,
+                name,
+                content_type,
+            });
+        }
+    }
+
+    // Strict mode: do not attempt to download from non-standard payload shapes.
+    // If the payload hints there might be attachments but the official field is missing,
+    // emit a warning so operators can inspect the raw event.
+    if out.is_empty()
+        && (d.get("media").is_some()
+            || d.get("file_info").is_some()
+            || d.get("url").is_some()
+            || d.get("download_url").is_some())
+    {
+        warn!("QQ inbound payload missing attachments[]; attachment download skipped (strict mode)");
+    }
+
+    out
+}
+
 pub fn split_text_chunks(text: &str, max_chars: usize) -> Vec<String> {
     if text.chars().count() <= max_chars {
         return vec![text.to_string()];
@@ -344,6 +431,42 @@ mod tests {
     fn extracts_content_from_event_payload() {
         let d = json!({ "content": "hello qq" });
         assert_eq!(extract_message_text(&d).as_deref(), Some("hello qq"));
+    }
+
+    #[test]
+    fn extracts_attachments_from_event_payload() {
+        let d = json!({
+            "attachments": [
+                { "url": "https://example.com/a.png", "filename": "a.png", "content_type": "image/png" },
+                { "url": "https://example.com/b.pdf", "filename": "b.pdf", "content_type": "file" }
+            ]
+        });
+        let items = extract_inbound_attachments(&d);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].url, "https://example.com/a.png");
+        assert_eq!(items[0].name.as_deref(), Some("a.png"));
+        assert_eq!(items[0].content_type.as_deref(), Some("image/png"));
+        assert_eq!(items[1].url, "https://example.com/b.pdf");
+        assert_eq!(items[1].name.as_deref(), Some("b.pdf"));
+    }
+
+    #[test]
+    fn prefers_voice_wav_url_for_voice() {
+        let d = json!({
+            "attachments": [
+                {
+                    "url": "https://example.com/voice.silk",
+                    "voice_wav_url": "https://example.com/voice.wav",
+                    "filename": "voice.silk",
+                    "content_type": "voice"
+                }
+            ]
+        });
+        let items = extract_inbound_attachments(&d);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].url, "https://example.com/voice.wav");
+        assert_eq!(items[0].name.as_deref(), Some("voice.silk"));
+        assert_eq!(items[0].content_type.as_deref(), Some("voice"));
     }
 
     #[test]
