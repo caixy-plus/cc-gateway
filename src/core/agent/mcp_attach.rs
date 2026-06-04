@@ -128,10 +128,7 @@ pub fn build_acp_mcp_servers(mcp_context: Option<&McpContext>) -> Result<Value> 
 }
 
 /// Cursor ACP reads MCP from project `.cursor/mcp.json`; also pass stdio servers on session/new.
-pub async fn prepare_cursor_mcp(
-    work_dir: &str,
-    mcp_context: Option<&McpContext>,
-) -> Result<Value> {
+pub async fn prepare_cursor_mcp(work_dir: &str, mcp_context: Option<&McpContext>) -> Result<Value> {
     let Some(ctx) = mcp_context else {
         return Ok(json!([]));
     };

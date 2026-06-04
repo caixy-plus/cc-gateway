@@ -52,6 +52,10 @@ pub enum CommandAction {
     StopGeneration,
     /// Clear current agent session context (restart fresh in same directory)
     ClearSession,
+    /// Compact conversation context (provider-specific; optional focus hint)
+    CompactSession { arg: String },
+    /// Initialize agent memory files (e.g. Claude `/init` → CLAUDE.md)
+    InitSessionMemory { arg: String },
     /// List or switch the current provider's models (session mode only).
     Models { arg: String },
     /// Show current agent status (ready / generating output)
@@ -153,6 +157,12 @@ impl CommandRouter {
                 },
                 "/stop" => CommandAction::StopGeneration,
                 "/clear" => CommandAction::ClearSession,
+                "/compact" => CommandAction::CompactSession {
+                    arg: arg.to_string(),
+                },
+                "/init" => CommandAction::InitSessionMemory {
+                    arg: arg.to_string(),
+                },
                 "/models" | "/model" => CommandAction::Models {
                     arg: arg.to_string(),
                 },
@@ -307,6 +317,60 @@ impl CommandRouter {
                     Err(e) => Some(t_fmt!("builtin.failed_clear", ERR = e)),
                 }
             }
+            CommandAction::CompactSession { arg } => {
+                let ctrl = self.controller.lock().await;
+                let provider =
+                    crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
+                if !crate::command::agents::provider_supports_context_compact(&provider) {
+                    return Some(t_fmt!(
+                        "builtin.compact_not_supported",
+                        NAME = crate::command::agents::provider_display_name(&provider)
+                    ));
+                }
+                let hint = arg.trim();
+                if matches!(provider, AgentProvider::Claude) {
+                    let text = if hint.is_empty() {
+                        "/compact".to_string()
+                    } else {
+                        format!("/compact {hint}")
+                    };
+                    let _ = ctrl.send_stop_generation().await;
+                    match ctrl.send_message(&text).await {
+                        Ok(()) => None,
+                        Err(e) => Some(t_fmt!("builtin.failed_compact", ERR = e)),
+                    }
+                } else {
+                    let instructions = if hint.is_empty() { None } else { Some(hint) };
+                    match ctrl.compact_session(instructions).await {
+                        Ok(summary) => {
+                            Some(crate::command::agents::compact_success_message(&summary))
+                        }
+                        Err(e) => Some(t_fmt!("builtin.failed_compact", ERR = e)),
+                    }
+                }
+            }
+            CommandAction::InitSessionMemory { arg } => {
+                let ctrl = self.controller.lock().await;
+                let provider =
+                    crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
+                if !crate::command::agents::provider_supports_memory_init(&provider) {
+                    return Some(t_fmt!(
+                        "builtin.init_not_supported",
+                        NAME = crate::command::agents::provider_display_name(&provider)
+                    ));
+                }
+                let hint = arg.trim();
+                let text = if hint.is_empty() {
+                    "/init".to_string()
+                } else {
+                    format!("/init {hint}")
+                };
+                let _ = ctrl.send_stop_generation().await;
+                match ctrl.send_message(&text).await {
+                    Ok(()) => None,
+                    Err(e) => Some(t_fmt!("builtin.failed_init", ERR = e)),
+                }
+            }
             CommandAction::Models { arg } => {
                 let ctrl = self.controller.lock().await;
                 let provider = AgentProvider::parse_str(&ctrl.provider_name().await);
@@ -341,12 +405,12 @@ impl CommandRouter {
                     }
                     return Some(lines.join("\n"));
                 }
-                let model_id = arg.trim().to_string();
-                match ctrl.switch_model(&model_id).await {
-                    Ok(()) => Some(t_fmt!(
+                let model_arg = arg.trim().to_string();
+                match ctrl.switch_model(&model_arg).await {
+                    Ok(canonical) => Some(t_fmt!(
                         "models.switched",
                         NAME = provider_name,
-                        MODEL = model_id
+                        MODEL = canonical
                     )),
                     Err(e) => Some(e.to_string()),
                 }
@@ -415,9 +479,7 @@ impl CommandRouter {
                     Err(e) => return Some(e.to_string()),
                 };
 
-                let items = match crate::command::builtin::list_directory_items(
-                    &target,
-                ) {
+                let items = match crate::command::builtin::list_directory_items(&target) {
                     Ok(items) => items,
                     Err(e) => return Some(t_fmt!("builtin.failed_list_dir", ERR = e)),
                 };
@@ -427,7 +489,9 @@ impl CommandRouter {
                     .filter(|(name, is_dir)| *is_dir && !name.starts_with('.'))
                     .collect();
 
-                Some(crate::command::builtin::format_directory_list(&target, &dirs))
+                Some(crate::command::builtin::format_directory_list(
+                    &target, &dirs,
+                ))
             }
             CommandAction::MakeDir(path) => {
                 let ctrl = self.controller.lock().await;
@@ -466,8 +530,7 @@ impl CommandRouter {
                     return Some(agents::format_provider_picker_message(&profiles, &current));
                 };
                 let name = agents::provider_display_name(&selected);
-                match GLOBAL_CHANNEL_SESSIONS.set_channel_default_provider(&channel_id, selected)
-                {
+                match GLOBAL_CHANNEL_SESSIONS.set_channel_default_provider(&channel_id, selected) {
                     Ok(()) => Some(t_fmt!("builtin.channel_agent_set", NAME = name)),
                     Err(e) => Some(t_fmt!("builtin.failed_set_channel_agent", ERR = e)),
                 }
@@ -481,11 +544,8 @@ impl CommandRouter {
                 let profiles = ctrl.agent_profiles().clone();
                 let channel_id = self.channel_id.clone();
                 let resolved_provider = match channel_id.as_ref() {
-                    Some(channel_id) => GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
-                        channel_id,
-                        &profiles,
-                        provider,
-                    ),
+                    Some(channel_id) => GLOBAL_CHANNEL_SESSIONS
+                        .resolve_start_provider(channel_id, &profiles, provider),
                     None => provider.unwrap_or_else(|| profiles.default.clone()),
                 };
                 let dir = if let Some(p) = work_dir {
@@ -516,14 +576,15 @@ impl CommandRouter {
                 ctrl.set_show_thinking(false);
                 Some(t!("builtin.thinking_disabled").to_string())
             }
-            CommandAction::ShowAgentHistory { arg } => {
-                Some(self.builtin.agent_history(&arg).await)
-            }
+            CommandAction::ShowAgentHistory { arg } => Some(self.builtin.agent_history(&arg).await),
             CommandAction::UnknownCommand(_) => Some(self.builtin.help_text()),
             CommandAction::ForwardToAgent(text) => {
                 let ctrl = self.controller.lock().await;
                 if !ctrl.is_session_active().await {
-                    return Some(crate::i18n::dict::tfmt("forward.no_session", &[("MSG", &text)]));
+                    return Some(crate::i18n::dict::tfmt(
+                        "forward.no_session",
+                        &[("MSG", &text)],
+                    ));
                 }
                 match ctrl.send_message(&text).await {
                     Ok(()) => None,
@@ -550,10 +611,7 @@ impl CommandRouter {
                     Err(e) => Some(t_fmt!("controller.failed_permission", ERR = e)),
                 }
             }
-            CommandAction::PermissionDeny {
-                request_id,
-                reason,
-            } => {
+            CommandAction::PermissionDeny { request_id, reason } => {
                 let ctrl = self.controller.lock().await;
                 let id = match request_id {
                     Some(id) => id,
@@ -599,6 +657,32 @@ mod tests {
             .test_set_active_with_provider_session_id("test-session".into())
             .await;
         (CommandRouter::new(ctrl.clone(), default_dir), ctrl)
+    }
+
+    #[tokio::test]
+    async fn compact_routes_in_active_session() {
+        let (router, _) = router_with_active_session("/tmp").await;
+        assert!(matches!(
+            router.route("/compact").await,
+            CommandAction::CompactSession { ref arg } if arg.is_empty()
+        ));
+        assert!(matches!(
+            router.route("/compact keep API changes").await,
+            CommandAction::CompactSession { ref arg } if arg == "keep API changes"
+        ));
+    }
+
+    #[tokio::test]
+    async fn init_routes_in_active_session() {
+        let (router, _) = router_with_active_session("/tmp").await;
+        assert!(matches!(
+            router.route("/init").await,
+            CommandAction::InitSessionMemory { ref arg } if arg.is_empty()
+        ));
+        assert!(matches!(
+            router.route("/init focus on tests").await,
+            CommandAction::InitSessionMemory { ref arg } if arg == "focus on tests"
+        ));
     }
 
     #[tokio::test]

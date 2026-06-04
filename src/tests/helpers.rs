@@ -57,7 +57,8 @@ impl TestEnv {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let work_dir = manifest.join("test_work_dir");
         std::fs::create_dir_all(&work_dir).expect("create repo test_work_dir");
-        std::fs::create_dir_all(manifest.join(".cc-gateway")).expect("create .cc-gateway under repo");
+        std::fs::create_dir_all(manifest.join(".cc-gateway"))
+            .expect("create .cc-gateway under repo");
 
         let previous_home = std::env::var("HOME").ok();
         let previous_userprofile = std::env::var("USERPROFILE").ok();
@@ -270,9 +271,9 @@ while IFS= read -r line || [ -n "$line" ]; do
     *'"type":"get_available_models"'*)
       req_id=$(extract_json_str id "$line")
       if [ -n "$req_id" ]; then
-        printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"id":"fake-model"}]}}\n' "$req_id"
+        printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"provider":"anthropic","id":"fake-model"}]}}\n' "$req_id"
       else
-        printf '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"fake-model"}]}}\n'
+        printf '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"anthropic","id":"fake-model"}]}}\n'
       fi
       ;;
     *'"type":"abort"'*)

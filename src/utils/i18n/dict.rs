@@ -435,6 +435,8 @@ pub fn t(key: &str) -> &str {
                 "  /esc [msg]                Flush queued messages (best-effort)\n",
                 "  /stop                     Stop current generation (best-effort)\n",
                 "  /clear                    Clear session context\n",
+                "  /compact [hint]           Compact conversation context (Claude, Pi)\n",
+                "  /init [hint]              Initialize project memory (CLAUDE.md; Claude only)\n",
                 "  /models|/model [id|n]     List or switch models\n",
                 "  /status                   Show agent status (ready / busy)\n",
                 "  /show_thinking            Always show Thinking output\n",
@@ -450,6 +452,8 @@ pub fn t(key: &str) -> &str {
                 "  /esc [消息]               强推排队消息（best-effort）\n",
                 "  /stop                     停止当前输出（best-effort）\n",
                 "  /clear                    清理会话上下文\n",
+                "  /compact [提示]           压缩会话上下文（Claude、Pi）\n",
+                "  /init [提示]              初始化项目记忆文件（CLAUDE.md；仅 Claude）\n",
                 "  /models|/model [id|序号]  列出 / 切换模型\n",
                 "  /status                   显示智能体状态（就绪 / 输出中）\n",
                 "  /show_thinking            始终显示 Thinking 输出\n",
@@ -662,6 +666,30 @@ pub fn t(key: &str) -> &str {
         "builtin.failed_stop_generation" => match lang {
             Language::En => "Failed to stop generation: {ERR}",
             Language::ZhCN => "停止输出失败: {ERR}",
+        },
+        "builtin.compact_ok" => match lang {
+            Language::En => "Context compaction started.",
+            Language::ZhCN => "已开始压缩会话上下文。",
+        },
+        "builtin.compact_ok_with_summary" => match lang {
+            Language::En => "Context compacted.\n\n{SUMMARY}",
+            Language::ZhCN => "会话上下文已压缩。\n\n{SUMMARY}",
+        },
+        "builtin.compact_not_supported" => match lang {
+            Language::En => "{NAME} does not support /compact in cc-gateway. Use Claude or Pi, or start a new session with /clear.",
+            Language::ZhCN => "{NAME} 暂不支持 /compact。请使用 Claude 或 Pi，或用 /clear 开启新会话。",
+        },
+        "builtin.failed_compact" => match lang {
+            Language::En => "Failed to compact context: {ERR}",
+            Language::ZhCN => "压缩上下文失败: {ERR}",
+        },
+        "builtin.init_not_supported" => match lang {
+            Language::En => "{NAME} does not support /init in cc-gateway. Use Claude to generate or update CLAUDE.md in the project.",
+            Language::ZhCN => "{NAME} 暂不支持 /init。请使用 Claude 在当前项目生成或更新 CLAUDE.md 记忆文件。",
+        },
+        "builtin.failed_init" => match lang {
+            Language::En => "Failed to run /init: {ERR}",
+            Language::ZhCN => "执行 /init 失败: {ERR}",
         },
         "builtin.context_cleared" => match lang {
             Language::En => "Context cleared.",

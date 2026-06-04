@@ -131,7 +131,7 @@ impl AgentRuntime {
         }
     }
 
-    pub async fn set_model(&mut self, provider: &AgentProvider, model_id: &str) -> Result<()> {
+    pub async fn set_model(&mut self, provider: &AgentProvider, model_id: &str) -> Result<String> {
         match self {
             AgentRuntime::Pi(session) => {
                 let Some((p, mid)) = crate::command::models::parse_provider_model_id(model_id)
@@ -140,7 +140,10 @@ impl AgentRuntime {
                 };
                 session.set_model(&p, &mid).await
             }
-            AgentRuntime::OpenCode(session) => session.set_model(model_id).await,
+            AgentRuntime::OpenCode(session) => {
+                session.set_model(model_id).await?;
+                Ok(model_id.to_string())
+            }
             AgentRuntime::Claude(_) | AgentRuntime::Cursor(_) => {
                 anyhow::bail!(
                     "{}",
@@ -155,6 +158,36 @@ impl AgentRuntime {
 
     /// Start a fresh provider session (ACP `session/new`, Pi `new_session`, Claude respawn).
     /// Returns the new provider session id when the backend exposes one.
+    pub async fn compact_context(&mut self, instructions: Option<&str>) -> Result<String> {
+        match self {
+            AgentRuntime::Claude(session) => {
+                let text = match instructions.filter(|s| !s.trim().is_empty()) {
+                    Some(hint) => format!("/compact {hint}"),
+                    None => "/compact".to_string(),
+                };
+                session
+                    .send(crate::runtime::protocol::build_user_message(&text))
+                    .await?;
+                Ok(String::new())
+            }
+            AgentRuntime::Pi(session) => session.compact_context(instructions).await,
+            AgentRuntime::Cursor(_) => anyhow::bail!(
+                "{}",
+                crate::t_fmt!(
+                    "builtin.compact_not_supported",
+                    NAME = crate::command::agents::provider_display_name(&AgentProvider::Cursor)
+                )
+            ),
+            AgentRuntime::OpenCode(_) => anyhow::bail!(
+                "{}",
+                crate::t_fmt!(
+                    "builtin.compact_not_supported",
+                    NAME = crate::command::agents::provider_display_name(&AgentProvider::OpenCode)
+                )
+            ),
+        }
+    }
+
     pub async fn new_provider_session(
         &mut self,
         ctx: &NewProviderSessionCtx<'_>,

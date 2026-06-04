@@ -468,7 +468,6 @@ impl FeishuPlatform {
             .map(|c| c.work_dir)
             .unwrap_or_else(|| runtime.channel_session.work_dir.clone());
         let mut context = ChatCommandContext::new(
-            "feishu",
             runtime.channel_session.id.clone(),
             format!("Feishu {}", chat_id),
             channel_work_dir,
@@ -944,11 +943,11 @@ impl FeishuPlatform {
                     let result = ctrl.switch_model(&model_id).await;
                     let title = crate::t!("feishu.model_picker_title");
                     let card = match result {
-                        Ok(()) => {
+                        Ok(canonical) => {
                             let text = crate::t_fmt!(
                                 "models.switched",
                                 NAME = crate::command::agents::provider_display_name(&provider),
-                                MODEL = model_id
+                                MODEL = canonical
                             );
                             crate::platform::feishu::cards::build_result_card(title, &text, true)
                         }

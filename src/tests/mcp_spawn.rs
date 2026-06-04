@@ -8,7 +8,7 @@ use crate::db;
 use crate::runtime::file_delivery::{FeishuFileTarget, McpDeliveryTarget};
 use crate::runtime::mcp_server::McpContext;
 use crate::session::channel_manager::{
-    CreateAndStartAgentSessionArgs, GLOBAL_CHANNEL_SESSIONS, StartAgentSessionForPlatformArgs,
+    CreateAndStartAgentSessionArgs, StartAgentSessionForPlatformArgs, GLOBAL_CHANNEL_SESSIONS,
 };
 
 use super::helpers::TestEnv;
@@ -74,7 +74,10 @@ async fn cursor_prepare_writes_project_mcp_json() -> Result<()> {
 
     let servers = prepare_cursor_mcp(dir.to_str().unwrap(), Some(&ctx)).await?;
     let path = dir.join(".cursor/mcp.json");
-    assert!(path.is_file(), "Cursor should load MCP from .cursor/mcp.json");
+    assert!(
+        path.is_file(),
+        "Cursor should load MCP from .cursor/mcp.json"
+    );
     let body = std::fs::read_to_string(&path)?;
     assert!(body.contains("cc-gateway"));
     assert!(servers.as_array().is_some_and(|a| !a.is_empty()));

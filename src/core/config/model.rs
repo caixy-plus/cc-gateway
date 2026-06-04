@@ -353,51 +353,6 @@ impl AgentProfiles {
     }
 }
 
-#[cfg(test)]
-mod pi_cli_args_tests {
-    use super::*;
-
-    #[test]
-    fn strip_pi_cli_args_removes_no_session_silently() {
-        assert_eq!(
-            strip_pi_cli_args("--no-session --provider anthropic"),
-            "--provider anthropic"
-        );
-        assert_eq!(strip_pi_cli_args("--no-session"), "");
-    }
-
-    #[test]
-    fn strip_pi_cli_args_removes_unsupported_and_no_session() {
-        assert_eq!(
-            strip_pi_cli_args("--no-session --yolo --force"),
-            ""
-        );
-    }
-
-    #[test]
-    fn pi_normalized_strips_no_session_from_profile_default_args() {
-        let mut profiles = AgentProfiles::default();
-        profiles.pi.default_args = Some("--no-session --provider openai".to_string());
-        profiles.pi.enabled = true;
-        let cfg = profiles.config_for_provider(Some(AgentProvider::Pi));
-        assert!(!cfg.default_args.contains("--no-session"));
-        assert!(cfg.default_args.contains("--provider"));
-    }
-
-    #[test]
-    fn filter_pi_cli_tokens_strips_no_session_from_extra_args() {
-        let tokens = vec![
-            "--no-session".to_string(),
-            "--model".to_string(),
-            "gpt-4".to_string(),
-        ];
-        assert_eq!(
-            filter_pi_cli_tokens(&tokens),
-            vec!["--model".to_string(), "gpt-4".to_string()]
-        );
-    }
-}
-
 /// Gateway-level aliases in `default_args` that must not be forwarded to provider CLIs.
 struct GatewayDefaultArgsSemantics {
     yolo: bool,
@@ -479,5 +434,47 @@ impl Default for FeishuConfig {
             app_secret: "${FEISHU_APP_SECRET}".to_string(),
             require_pairing: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod pi_cli_args_tests {
+    use super::*;
+
+    #[test]
+    fn strip_pi_cli_args_removes_no_session_silently() {
+        assert_eq!(
+            strip_pi_cli_args("--no-session --provider anthropic"),
+            "--provider anthropic"
+        );
+        assert_eq!(strip_pi_cli_args("--no-session"), "");
+    }
+
+    #[test]
+    fn strip_pi_cli_args_removes_unsupported_and_no_session() {
+        assert_eq!(strip_pi_cli_args("--no-session --yolo --force"), "");
+    }
+
+    #[test]
+    fn pi_normalized_strips_no_session_from_profile_default_args() {
+        let mut profiles = AgentProfiles::default();
+        profiles.pi.default_args = Some("--no-session --provider openai".to_string());
+        profiles.pi.enabled = true;
+        let cfg = profiles.config_for_provider(Some(AgentProvider::Pi));
+        assert!(!cfg.default_args.contains("--no-session"));
+        assert!(cfg.default_args.contains("--provider"));
+    }
+
+    #[test]
+    fn filter_pi_cli_tokens_strips_no_session_from_extra_args() {
+        let tokens = vec![
+            "--no-session".to_string(),
+            "--model".to_string(),
+            "gpt-4".to_string(),
+        ];
+        assert_eq!(
+            filter_pi_cli_tokens(&tokens),
+            vec!["--model".to_string(), "gpt-4".to_string()]
+        );
     }
 }

@@ -21,10 +21,29 @@ fn reply_response(text: &str) -> WebuiMessageHttpResult {
     }
 }
 
+/// Echo slash input and gateway replies as chat bubbles (`user` / `assistant`), not centered `system` hints.
+fn broadcast_slash_user(session_id: &str, user_message: &str) {
+    if user_message.starts_with('/') {
+        broadcast_event(session_id, "webui", session_id, "user", user_message);
+    }
+}
+
+fn broadcast_assistant_reply(session_id: &str, text: &str) {
+    if !text.is_empty() {
+        broadcast_event(session_id, "webui", session_id, "assistant", text);
+    }
+}
+
+fn broadcast_command_reply(session_id: &str, user_message: &str, text: &str) {
+    broadcast_slash_user(session_id, user_message);
+    broadcast_assistant_reply(session_id, text);
+}
+
 pub(crate) async fn deliver_chat_outcome(
     state: &AppState,
     channel_id: &str,
     session_id: &str,
+    user_message: &str,
     outcome: ChatCommandOutcome,
 ) -> WebuiMessageHttpResult {
     match outcome {
@@ -36,11 +55,11 @@ pub(crate) async fn deliver_chat_outcome(
         | ChatCommandOutcome::WorkDirChanged { message: text, .. }
         | ChatCommandOutcome::CurrentDir { message: text, .. }
         | ChatCommandOutcome::DirCreated { message: text, .. } => {
-            broadcast_event(session_id, "webui", session_id, "system", &text);
+            broadcast_command_reply(session_id, user_message, &text);
             reply_response(&text)
         }
         ChatCommandOutcome::Stopped { message } => {
-            broadcast_event(session_id, "webui", session_id, "system", &message);
+            broadcast_command_reply(session_id, user_message, &message);
             WebuiMessageHttpResult {
                 status: StatusCode::OK,
                 body: json!({
@@ -52,7 +71,7 @@ pub(crate) async fn deliver_chat_outcome(
             }
         }
         ChatCommandOutcome::Started { message } => {
-            broadcast_event(session_id, "webui", session_id, "system", &message);
+            broadcast_command_reply(session_id, user_message, &message);
             WebuiMessageHttpResult {
                 status: StatusCode::OK,
                 body: json!({ "response": message, "status": "started" }).to_string(),
@@ -60,7 +79,7 @@ pub(crate) async fn deliver_chat_outcome(
         }
         ChatCommandOutcome::ListDir { dir, dirs } => {
             let text = outcome_text::format_list_dir(&dir, &dirs);
-            broadcast_event(session_id, "webui", session_id, "system", &text);
+            broadcast_command_reply(session_id, user_message, &text);
             reply_response(&text)
         }
         ChatCommandOutcome::SelectAgent {
@@ -68,7 +87,7 @@ pub(crate) async fn deliver_chat_outcome(
             options: _,
         } => {
             let text = outcome_text::format_select_agent(&state.agent_settings, &current);
-            broadcast_event(session_id, "webui", session_id, "system", &text);
+            broadcast_command_reply(session_id, user_message, &text);
             reply_response(&text)
         }
         ChatCommandOutcome::SelectModel {
@@ -77,19 +96,19 @@ pub(crate) async fn deliver_chat_outcome(
             options,
         } => {
             let text = outcome_text::format_select_model(&provider, current.as_deref(), &options);
-            broadcast_event(session_id, "webui", session_id, "system", &text);
+            broadcast_command_reply(session_id, user_message, &text);
             reply_response(&text)
         }
         ChatCommandOutcome::History { sessions } => {
             let text = outcome_text::format_history(&sessions);
-            broadcast_event(session_id, "webui", session_id, "system", &text);
+            broadcast_command_reply(session_id, user_message, &text);
             reply_response(&text)
         }
         ChatCommandOutcome::ForwardToAgent { active, text } => {
             let ctrl = active.controller.lock().await;
             if let Err(e) = ctrl.send_message(&text).await {
                 let msg = crate::t_fmt!("forward.failed_send", ERR = e);
-                broadcast_event(session_id, "webui", session_id, "system", &msg);
+                broadcast_command_reply(session_id, user_message, &msg);
                 return WebuiMessageHttpResult {
                     status: StatusCode::INTERNAL_SERVER_ERROR,
                     body: json_error("webui.forward_failed", msg).to_string(),

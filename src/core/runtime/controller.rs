@@ -296,12 +296,12 @@ impl AgentController {
             let mut pending = self.pending_resume_session_id.write().await;
             pending.take().filter(|id| !id.trim().is_empty())
         };
-        let resume_id = if crate::command::agents::provider_supports_session_resume(&config.provider)
-        {
-            resume_id
-        } else {
-            None
-        };
+        let resume_id =
+            if crate::command::agents::provider_supports_session_resume(&config.provider) {
+                resume_id
+            } else {
+                None
+            };
 
         let mcp_ctx = {
             let ctx = self.mcp_context.read().await;
@@ -520,6 +520,38 @@ impl AgentController {
     /// Stops in-flight generation (best-effort), then calls provider-specific
     /// `session/new` (or equivalent). Updates `provider_session_id` when a new id
     /// is returned. The gateway agent record and subprocess stay alive.
+    /// Compact conversation context (Claude `/compact`, Pi RPC `compact`).
+    pub async fn compact_session(&self, instructions: Option<&str>) -> Result<String> {
+        let _ = self.send_stop_generation().await;
+
+        let provider_name = self.provider_name().await;
+        let provider = AgentProvider::parse_str(&provider_name);
+        if !crate::command::agents::provider_supports_context_compact(&provider) {
+            anyhow::bail!(
+                "{}",
+                crate::t_fmt!(
+                    "builtin.compact_not_supported",
+                    NAME = crate::command::agents::provider_display_name(&provider)
+                )
+            );
+        }
+
+        let state = self.session_state.read().await.clone();
+        match state {
+            SessionState::Inactive | SessionState::Starting => {
+                anyhow::bail!("{}", t!("controller.no_active_session"))
+            }
+            SessionState::Active => {
+                let mut s = self.session.write().await;
+                if let Some(ref mut session) = *s {
+                    session.compact_context(instructions).await
+                } else {
+                    anyhow::bail!("{}", t!("controller.no_active_session"))
+                }
+            }
+        }
+    }
+
     pub async fn clear_session(&self) -> Result<Option<String>> {
         let _ = self.send_stop_generation().await;
 
@@ -668,8 +700,20 @@ impl AgentController {
         wd.clone()
     }
 
-    /// Current model id when known (from spawn args or in-session switch).
+    /// Current model id when known (from spawn args, in-session switch, or Pi `get_state`).
     pub async fn current_model_id(&self) -> Option<String> {
+        let provider_name = self.provider_name().await;
+        let provider = AgentProvider::parse_str(&provider_name);
+        if matches!(provider, AgentProvider::Pi) {
+            let mut s = self.session.write().await;
+            if let Some(AgentRuntime::Pi(pi)) = s.as_mut() {
+                if let Ok(Some(id)) = pi.active_model_id().await {
+                    let mut cached = self.active_model_id.write().await;
+                    *cached = Some(id.clone());
+                    return Some(id);
+                }
+            }
+        }
         self.active_model_id.read().await.clone()
     }
 
@@ -708,7 +752,7 @@ impl AgentController {
     ///
     /// - Pi: RPC `set_model` (no restart)
     /// - OpenCode: ACP `session/set_model` (no restart)
-    pub async fn switch_model(&self, model_id: &str) -> Result<()> {
+    pub async fn switch_model(&self, model_arg: &str) -> Result<String> {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
         if models::is_platform_bound_agent(&provider) {
@@ -720,15 +764,17 @@ impl AgentController {
                 )
             );
         }
+        let options = self.list_available_models().await?;
+        let resolved = models::resolve_model_arg(model_arg, &options)?;
         match provider {
             AgentProvider::Pi | AgentProvider::OpenCode => {
                 let mut s = self.session.write().await;
                 if let Some(ref mut session) = *s {
-                    session.set_model(&provider, model_id).await?;
+                    let canonical = session.set_model(&provider, &resolved).await?;
                     drop(s);
                     let mut active = self.active_model_id.write().await;
-                    *active = Some(model_id.to_string());
-                    return Ok(());
+                    *active = Some(canonical.clone());
+                    return Ok(canonical);
                 }
                 anyhow::bail!("{}", t!("controller.no_active_session"))
             }

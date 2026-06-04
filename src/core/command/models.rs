@@ -163,6 +163,67 @@ pub fn parse_provider_model_id(model_id: &str) -> Option<(String, String)> {
     Some((provider.to_string(), rest.to_string()))
 }
 
+/// Canonical catalog id (same shape as OpenCode CLI `provider/model` lines).
+pub fn canonical_model_id(provider: &str, model_id: &str) -> String {
+    format!("{}/{}", provider.trim(), model_id.trim())
+}
+
+/// Parse a Pi RPC `Model` JSON value into `(provider, modelId)`.
+pub fn pi_model_from_json(value: &serde_json::Value) -> Option<(String, String)> {
+    if let Some(s) = value.as_str() {
+        return parse_provider_model_id(s).map(|(p, id)| (p, id));
+    }
+    let provider = value
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let model_id = value
+        .get("id")
+        .or_else(|| value.get("modelId"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some((provider.to_string(), model_id.to_string()))
+}
+
+pub fn canonical_from_pi_model_json(value: &serde_json::Value) -> Option<String> {
+    pi_model_from_json(value).map(|(p, id)| canonical_model_id(&p, &id))
+}
+
+/// Resolve `/models <arg>` against the latest model list (1-based index or `provider/model` id).
+pub fn resolve_model_arg(arg: &str, options: &[String]) -> Result<String> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        anyhow::bail!("{}", crate::t!("models.invalid_index"));
+    }
+    if options.iter().any(|o| o == arg) {
+        return Ok(arg.to_string());
+    }
+    if let Ok(index) = arg.parse::<usize>() {
+        if index == 0 || index > options.len() {
+            anyhow::bail!("{}", crate::t!("models.invalid_index"));
+        }
+        return Ok(options[index - 1].clone());
+    }
+    if parse_provider_model_id(arg).is_some() {
+        let suffix_matches: Vec<_> = options
+            .iter()
+            .filter(|o| o.as_str() == arg || o.ends_with(&format!("/{arg}")))
+            .collect();
+        if suffix_matches.len() == 1 {
+            return Ok(suffix_matches[0].clone());
+        }
+        if suffix_matches.is_empty() {
+            return Ok(arg.to_string());
+        }
+    }
+    anyhow::bail!(
+        "{}",
+        crate::t_fmt!("models.switch_failed", ERR = arg)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +256,39 @@ gemini-3-flash
         assert!(is_platform_bound_agent(&AgentProvider::Cursor));
         assert!(!is_platform_bound_agent(&AgentProvider::OpenCode));
         assert!(!is_platform_bound_agent(&AgentProvider::Pi));
+    }
+
+    #[test]
+    fn canonical_model_id_formats_provider_slash_model() {
+        assert_eq!(
+            canonical_model_id("anthropic", "claude-sonnet-4"),
+            "anthropic/claude-sonnet-4"
+        );
+    }
+
+    #[test]
+    fn resolve_model_arg_accepts_index_and_canonical_id() {
+        let options = vec![
+            "openai/gpt-4".to_string(),
+            "anthropic/claude-sonnet-4".to_string(),
+        ];
+        assert_eq!(
+            resolve_model_arg("2", &options).unwrap(),
+            "anthropic/claude-sonnet-4"
+        );
+        assert_eq!(
+            resolve_model_arg("anthropic/claude-sonnet-4", &options).unwrap(),
+            "anthropic/claude-sonnet-4"
+        );
+    }
+
+    #[test]
+    fn pi_model_from_json_reads_provider_and_id() {
+        let m = serde_json::json!({"provider": "anthropic", "id": "claude-sonnet-4"});
+        assert_eq!(
+            canonical_from_pi_model_json(&m).as_deref(),
+            Some("anthropic/claude-sonnet-4")
+        );
     }
 
     #[test]

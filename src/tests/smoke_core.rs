@@ -2,7 +2,7 @@
 //!
 //! WebUI HTTP equivalent: `webui_session::webui_core_claude_session_flow_in_test_work_dir`.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -92,8 +92,7 @@ async fn poll_agent_reply(
             max_chars: POLL_MAX_CHARS,
             min_time_flush_chars: 0,
         };
-        let mut sink =
-            BufferedSink::with_policy(CollectSink::default(), policy);
+        let mut sink = BufferedSink::with_policy(CollectSink::default(), policy);
         GLOBAL_CHANNEL_SESSIONS
             .send_and_poll_active_runtime_buffered(active, prompt, &mut sink)
             .await?;
@@ -140,9 +139,9 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
         .get_or_create_platform_channel("webui", "core-flow", root.to_str().unwrap())
         .await;
 
-    let executor = ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_agent_profiles(), false);
+    let executor =
+        ChatCommandExecutor::new(root.to_str().unwrap(), env.fake_agent_profiles(), false);
     let mut context = ChatCommandContext::new(
-        "webui",
         channel.id.clone(),
         "core flow".to_string(),
         channel.work_dir.clone(),
@@ -182,7 +181,11 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
 
     let router = active.router.clone();
     let outcome = execute_via_router(&router, &executor, &mut context, &quick_prompt).await?;
-    let ChatCommandOutcome::ForwardToAgent { active: fwd_active, text } = outcome else {
+    let ChatCommandOutcome::ForwardToAgent {
+        active: fwd_active,
+        text,
+    } = outcome
+    else {
         anyhow::bail!("expected ForwardToAgent for chat message");
     };
     let reply = poll_agent_reply(&fwd_active, &text).await?;
@@ -216,10 +219,7 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
             ctrl.is_session_active().await,
             "session should stay active after /stop"
         );
-        assert!(
-            !ctrl.is_busy(),
-            "should not be busy after /stop when idle"
-        );
+        assert!(!ctrl.is_busy(), "should not be busy after /stop when idle");
     }
     assert!(
         controller_session_active(&active).await,
@@ -350,7 +350,9 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
         "delete first session from agent-history flow"
     );
     assert!(
-        GLOBAL_CHANNEL_SESSIONS.get_agent_session(&first_session_id).is_none(),
+        GLOBAL_CHANNEL_SESSIONS
+            .get_agent_session(&first_session_id)
+            .is_none(),
         "deleted session should be gone"
     );
     assert!(
@@ -364,14 +366,13 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
 }
 
 fn idle_router(
-    default_dir: &PathBuf,
+    default_dir: &Path,
     profiles: &crate::config::model::AgentProfiles,
 ) -> crate::command::router::CommandRouter {
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    let ctrl = Arc::new(Mutex::new(crate::runtime::controller::AgentController::new(
-        profiles.clone(),
-        false,
-    )));
+    let ctrl = Arc::new(Mutex::new(
+        crate::runtime::controller::AgentController::new(profiles.clone(), false),
+    ));
     crate::command::router::CommandRouter::new(ctrl, default_dir.to_str().unwrap())
 }

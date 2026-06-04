@@ -60,6 +60,14 @@ pub fn coalesce_streaming_history(events: Vec<serde_json::Value>) -> Vec<serde_j
         if content.is_empty() {
             continue;
         }
+        if let Some(last) = out.last() {
+            let last_role = last.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let last_content = last.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            // Legacy double-writes (sync append + bus recorder) left duplicate user lines.
+            if last_role == role && last_content == content && role == "user" {
+                continue;
+            }
+        }
         let mergeable = role == "assistant" || role == "thinking";
         if mergeable {
             if let Some(last) = out.last_mut() {
@@ -111,7 +119,9 @@ pub fn start_recorder() {
     });
 }
 
-fn resolve_agent_session_for_event(event: &Event) -> Option<crate::session::channel_model::AgentSession> {
+fn resolve_agent_session_for_event(
+    event: &Event,
+) -> Option<crate::session::channel_model::AgentSession> {
     // event.session_id may be:
     // - WebUI: AgentSession.id
     // - Feishu/Telegram/QQ: chat_id (ChannelSession.channel_id)
@@ -122,9 +132,10 @@ fn resolve_agent_session_for_event(event: &Event) -> Option<crate::session::chan
     if let Some(s) = GLOBAL_CHANNEL_SESSIONS.get_active_agent_session(&event.session_id) {
         return Some(s);
     }
-    let channel = GLOBAL_CHANNEL_SESSIONS.list_channels().into_iter().find(|c| {
-        c.channel_id == event.session_id && c.platform == event.platform
-    })?;
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .list_channels()
+        .into_iter()
+        .find(|c| c.channel_id == event.session_id && c.platform == event.platform)?;
     GLOBAL_CHANNEL_SESSIONS
         .get_active_agent_session(&channel.id)
         .or_else(|| {
@@ -156,9 +167,41 @@ fn get_history_dir() -> anyhow::Result<PathBuf> {
     Ok(home.join(".cc-gateway").join("history"))
 }
 
+/// Delete `~/.cc-gateway/history/{agent_session_id}.jsonl` when a session record is removed.
+pub fn delete_session_history(agent_session_id: &str) {
+    if agent_session_id.is_empty() {
+        return;
+    }
+    let Ok(dir) = get_history_dir() else {
+        return;
+    };
+    let path = dir.join(format!("{}.jsonl", agent_session_id));
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                "[History] Failed to delete history file {}: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coalesce_streaming_history_dedupes_adjacent_duplicate_user_lines() {
+        let events = vec![
+            serde_json::json!({"role": "user", "content": "你好"}),
+            serde_json::json!({"role": "user", "content": "你好"}),
+            serde_json::json!({"role": "assistant", "content": "hi"}),
+        ];
+        let merged = coalesce_streaming_history(events);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0]["content"], "你好");
+    }
 
     #[test]
     fn coalesce_streaming_history_merges_adjacent_assistant_chunks() {
@@ -201,10 +244,24 @@ mod tests {
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
         let resolved = resolve_agent_session_for_event(&event);
-        assert_eq!(resolved.as_ref().map(|s| s.id.as_str()), Some(session.id.as_str()));
+        assert_eq!(
+            resolved.as_ref().map(|s| s.id.as_str()),
+            Some(session.id.as_str())
+        );
 
         GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
         // HOME restoration + temp-dir cleanup handled by TestEnv::drop.
+    }
+
+    #[test]
+    fn delete_session_history_removes_jsonl_file() {
+        let id = uuid::Uuid::new_v4().to_string();
+        append_session_history(&id, "user", "hi").expect("append");
+        let path = get_history_dir().unwrap().join(format!("{id}.jsonl"));
+        assert!(path.is_file());
+        delete_session_history(&id);
+        assert!(!path.exists());
+        delete_session_history(&id);
     }
 
     #[test]

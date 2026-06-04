@@ -560,7 +560,9 @@ mod tests {
     fn turn_text_buffer_take_prefix_bytes_splits_utf8_safe() {
         let mut buf = TurnTextBuffer::default();
         buf.push("段落一。\n\n段落二继续");
-        let first = buf.take_prefix_bytes(flush_boundary_pos(buf.as_str())).unwrap();
+        let first = buf
+            .take_prefix_bytes(flush_boundary_pos(buf.as_str()))
+            .unwrap();
         assert_eq!(first, "段落一。\n\n");
         assert_eq!(buf.inner, "段落二继续");
     }

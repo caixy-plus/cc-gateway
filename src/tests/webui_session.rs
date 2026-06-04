@@ -39,9 +39,8 @@ async fn webui_send(
         ),
     )
     .await;
-    let json = serde_json::from_str(&body).unwrap_or_else(|_| {
-        panic!("webui send should return JSON, status={status}, body={body}")
-    });
+    let json = serde_json::from_str(&body)
+        .unwrap_or_else(|_| panic!("webui send should return JSON, status={status}, body={body}"));
     (status, json)
 }
 
@@ -239,16 +238,13 @@ async fn webui_start_stop_start_without_chat_succeeds() -> Result<()> {
         serde_json::from_str::<serde_json::Value>(&body)?["status"],
         "started"
     );
-    assert!(
-        GLOBAL_CHANNEL_SESSIONS
-            .get_agent_session(&session_id)
-            .unwrap()
-            .provider_session_id
-            .is_some()
-    );
+    assert!(GLOBAL_CHANNEL_SESSIONS
+        .get_agent_session(&session_id)
+        .unwrap()
+        .provider_session_id
+        .is_some());
 
-    let (status, _) =
-        short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
+    let (status, _) = short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         !GLOBAL_CHANNEL_SESSIONS
@@ -359,8 +355,7 @@ async fn webui_resume_after_chat_passes_claude_resume_flag() -> Result<()> {
         .join(format!("{}.jsonl", session_id));
     assert!(history_path.is_file(), "gateway history should exist");
 
-    let (status, _) =
-        short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
+    let (status, _) = short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, _) = short_timeout(
@@ -505,6 +500,74 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_history_records_user_message_once_after_send() -> Result<()> {
+    use std::sync::Once;
+
+    static START_RECORDER: Once = Once::new();
+    START_RECORDER.call_once(crate::history::recorder::start_recorder);
+
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-history-dedupe");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
+        .await?;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_agent_session_for_platform(
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "History dedupe".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
+        )
+        .await?;
+    let session_id = active.agent_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
+
+    let user_text = "你好";
+    let (status, _) = webui_send(&state, &session_id, user_text).await;
+    assert_eq!(status, StatusCode::OK);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let (status, body) = handle_get_history(Path(session_id.clone())).await;
+    assert_eq!(status, StatusCode::OK);
+    let history = serde_json::from_str::<serde_json::Value>(&body)?["history"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let user_lines: Vec<_> = history
+        .iter()
+        .filter(|line| line["role"] == "user" && line["content"] == user_text)
+        .collect();
+    assert_eq!(
+        user_lines.len(),
+        1,
+        "user message should appear once in history after refresh, got {user_lines:?}"
+    );
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -> Result<()> {
     let env = TestEnv::new();
@@ -558,6 +621,78 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
     assert!(GLOBAL_CHANNEL_SESSIONS
         .get_agent_session(&session_id)
         .is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_delete_session_removes_history_jsonl() -> Result<()> {
+    use std::sync::Once;
+
+    static START_RECORDER: Once = Once::new();
+    START_RECORDER.call_once(crate::history::recorder::start_recorder);
+
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-delete-history");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
+        .await?;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_agent_session_for_platform(
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "Delete history file".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
+        )
+        .await?;
+    let session_id = active.agent_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&runtime.channel_session.id, active);
+
+    let (status, _) = webui_send(&state, &session_id, "hello").await;
+    assert_eq!(status, StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let history_file = env
+        .home()
+        .join(".cc-gateway")
+        .join("history")
+        .join(format!("{session_id}.jsonl"));
+    assert!(
+        history_file.is_file(),
+        "history file should exist before delete"
+    );
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
+
+    let (status, body) = handle_delete_session(Path(session_id.clone())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body)?["status"],
+        "deleted"
+    );
+    assert!(
+        !history_file.exists(),
+        "history jsonl should be removed when session is deleted"
+    );
 
     Ok(())
 }
@@ -853,7 +988,11 @@ async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
     db::init_schema()?;
 
     let root = env.repo_work_dir();
-    assert!(root.is_dir(), "test_work_dir should exist at {}", root.display());
+    assert!(
+        root.is_dir(),
+        "test_work_dir should exist at {}",
+        root.display()
+    );
 
     let state = AppState {
         agent_settings: env.fake_agent_profiles(),
@@ -977,7 +1116,9 @@ async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
             .is_none(),
         "WebUI runtime should drop active agent after /quit"
     );
-    let stored = GLOBAL_CHANNEL_SESSIONS.get_agent_session(&session_id).unwrap();
+    let stored = GLOBAL_CHANNEL_SESSIONS
+        .get_agent_session(&session_id)
+        .unwrap();
     assert!(!stored.active);
     assert!(stored.stopped_at.is_some());
 
@@ -1001,11 +1142,9 @@ async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
         provider_id,
         "WebUI resume should pass stored provider session id to claude"
     );
-    assert!(
-        GLOBAL_CHANNEL_SESSIONS
-            .get_webui_active_agent(&channel_id, &session_id)
-            .is_some()
-    );
+    assert!(GLOBAL_CHANNEL_SESSIONS
+        .get_webui_active_agent(&channel_id, &session_id)
+        .is_some());
 
     let mut rx = EVENT_BUS.subscribe();
     let (status, _) = short_timeout(
@@ -1096,16 +1235,12 @@ async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
         serde_json::from_str::<serde_json::Value>(&body)?["status"],
         "deleted"
     );
-    assert!(
-        GLOBAL_CHANNEL_SESSIONS
-            .get_agent_session(&session_id)
-            .is_none()
-    );
-    assert!(
-        GLOBAL_CHANNEL_SESSIONS
-            .get_agent_session(&session_id_2)
-            .is_some()
-    );
+    assert!(GLOBAL_CHANNEL_SESSIONS
+        .get_agent_session(&session_id)
+        .is_none());
+    assert!(GLOBAL_CHANNEL_SESSIONS
+        .get_agent_session(&session_id_2)
+        .is_some());
 
     Ok(())
 }

@@ -5,9 +5,7 @@ use anyhow::Result;
 use crate::config::model::AgentProvider;
 use crate::db;
 use crate::history::recorder::append_session_history;
-use crate::session::channel_manager::{
-    GLOBAL_CHANNEL_SESSIONS, StartAgentSessionForPlatformArgs,
-};
+use crate::session::channel_manager::{StartAgentSessionForPlatformArgs, GLOBAL_CHANNEL_SESSIONS};
 
 use super::helpers::{create_fake_pi_cli, TestEnv};
 

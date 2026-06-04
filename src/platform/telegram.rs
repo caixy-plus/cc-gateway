@@ -290,12 +290,7 @@ impl TelegramPlatform {
         format!("{chat_id}:{message_id}")
     }
 
-    async fn set_message_reaction(
-        &self,
-        chat_id: i64,
-        message_id: i64,
-        emoji: &str,
-    ) -> Result<()> {
+    async fn set_message_reaction(&self, chat_id: i64, message_id: i64, emoji: &str) -> Result<()> {
         let url = self.api_url("setMessageReaction");
         let payload = json!({
             "chat_id": chat_id,
@@ -839,7 +834,6 @@ impl TelegramPlatform {
             self.show_thinking,
         );
         let mut context = ChatCommandContext::new(
-            "telegram",
             runtime.channel_session.id.clone(),
             format!("Telegram {}", chat_id),
             runtime.channel_session.work_dir.clone(),
@@ -1224,7 +1218,6 @@ impl TelegramPlatform {
                     self.show_thinking,
                 );
                 let mut context = ChatCommandContext::new(
-                    "telegram",
                     runtime.channel_session.id.clone(),
                     format!("Telegram {}", chat_id),
                     runtime.channel_session.work_dir.clone(),

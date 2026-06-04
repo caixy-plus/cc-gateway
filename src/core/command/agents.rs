@@ -76,6 +76,33 @@ pub fn provider_supports_session_resume(provider: &AgentProvider) -> bool {
     !matches!(provider, AgentProvider::Pi)
 }
 
+/// Whether the provider supports manual context compaction (`/compact`).
+pub fn provider_supports_context_compact(provider: &AgentProvider) -> bool {
+    matches!(provider, AgentProvider::Claude | AgentProvider::Pi)
+}
+
+/// Whether the provider supports initializing project memory files (`/init`, e.g. Claude `CLAUDE.md`).
+pub fn provider_supports_memory_init(provider: &AgentProvider) -> bool {
+    matches!(provider, AgentProvider::Claude)
+}
+
+/// User-visible message after a successful `/compact`.
+pub fn compact_success_message(summary: &str) -> String {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return t!("builtin.compact_ok").to_string();
+    }
+    const MAX_CHARS: usize = 240;
+    let len = summary.chars().count();
+    let display = if len > MAX_CHARS {
+        let prefix: String = summary.chars().take(MAX_CHARS).collect();
+        format!("{prefix}...")
+    } else {
+        summary.to_string()
+    };
+    t_fmt!("builtin.compact_ok_with_summary", SUMMARY = display)
+}
+
 /// Message shown when a session is restarted (e.g. user clicks "Restart Session" or `/agent-history N`).
 pub fn session_restarted_message(provider: &AgentProvider, dir: &str) -> String {
     if matches!(provider, AgentProvider::Pi) {
@@ -219,6 +246,22 @@ mod tests {
     fn pi_does_not_support_provider_session_resume() {
         assert!(!provider_supports_session_resume(&AgentProvider::Pi));
         assert!(provider_supports_session_resume(&AgentProvider::Claude));
+    }
+
+    #[test]
+    fn context_compact_supported_only_for_claude_and_pi() {
+        assert!(provider_supports_context_compact(&AgentProvider::Claude));
+        assert!(provider_supports_context_compact(&AgentProvider::Pi));
+        assert!(!provider_supports_context_compact(&AgentProvider::Cursor));
+        assert!(!provider_supports_context_compact(&AgentProvider::OpenCode));
+    }
+
+    #[test]
+    fn memory_init_supported_only_for_claude() {
+        assert!(provider_supports_memory_init(&AgentProvider::Claude));
+        assert!(!provider_supports_memory_init(&AgentProvider::Pi));
+        assert!(!provider_supports_memory_init(&AgentProvider::Cursor));
+        assert!(!provider_supports_memory_init(&AgentProvider::OpenCode));
     }
 
     #[test]

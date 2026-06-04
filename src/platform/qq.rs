@@ -339,7 +339,6 @@ impl QqPlatform {
             self.show_thinking,
         );
         let mut context = ChatCommandContext::new(
-            "qq",
             runtime.channel_session.id.clone(),
             chat.title_label(),
             runtime.channel_session.work_dir.clone(),

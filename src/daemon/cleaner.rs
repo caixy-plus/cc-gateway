@@ -187,14 +187,7 @@ fn session_last_updated_at(session: &AgentSession) -> DateTime<Utc> {
 }
 
 fn remove_agent_session_record(session: &AgentSession) {
-    let file_id = &session.id;
-    if let Some(home) = dirs::home_dir() {
-        let history_file = home
-            .join(".cc-gateway")
-            .join("history")
-            .join(format!("{}.jsonl", file_id));
-        let _ = std::fs::remove_file(&history_file);
-    }
+    crate::history::recorder::delete_session_history(&session.id);
     crate::db::delete_agent_session(&session.id);
 }
 

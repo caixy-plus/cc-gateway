@@ -122,11 +122,7 @@ impl PiRpcSession {
             }
         }
 
-        let provider_session_id = session
-            .session_file_from_state()
-            .await
-            .ok()
-            .flatten();
+        let provider_session_id = session.session_file_from_state().await.ok().flatten();
 
         Ok((session, provider_session_id))
     }
@@ -171,7 +167,11 @@ impl PiRpcSession {
         {
             anyhow::bail!(
                 "{}",
-                crate::t_fmt!("pi.session_resume_failed", PATH = session_path, ERR = "cancelled")
+                crate::t_fmt!(
+                    "pi.session_resume_failed",
+                    PATH = session_path,
+                    ERR = "cancelled"
+                )
             );
         }
         Ok(())
@@ -193,7 +193,11 @@ impl PiRpcSession {
         self.rpc_command_with_timeout(payload, PI_RPC_TIMEOUT).await
     }
 
-    async fn rpc_command_with_timeout(&self, mut payload: Value, timeout: Duration) -> Result<Value> {
+    async fn rpc_command_with_timeout(
+        &self,
+        mut payload: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let id = uuid::Uuid::new_v4().to_string();
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("id".to_string(), json!(id));
@@ -206,7 +210,11 @@ impl PiRpcSession {
         self.write_json(&payload).await?;
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(msg)) => {
-                if !msg.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if !msg
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     let err = msg
                         .get("error")
                         .and_then(|v| v.as_str())
@@ -265,6 +273,32 @@ impl PiRpcSession {
         self.write_json(&response).await
     }
 
+    /// Manually compact conversation context (`{"type":"compact"}` RPC).
+    pub async fn compact_context(&self, custom_instructions: Option<&str>) -> Result<String> {
+        let mut payload = json!({ "type": "compact" });
+        if let Some(hint) = custom_instructions.filter(|s| !s.trim().is_empty()) {
+            payload["customInstructions"] = json!(hint);
+        }
+        let msg = self.rpc_command(payload).await?;
+        if !msg
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            let err = msg
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Pi compact failed");
+            anyhow::bail!("{}", err);
+        }
+        Ok(msg
+            .get("data")
+            .and_then(|d| d.get("summary"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+
     /// Reset Pi context via `new_session` and return the new session file path.
     pub async fn new_provider_session(&self) -> Result<Option<String>> {
         let msg = self.rpc_command(json!({"type": "new_session"})).await?;
@@ -289,28 +323,42 @@ impl PiRpcSession {
             .and_then(|m| m.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|m| {
-                        // docs: Model objects; tolerate string ids too
-                        m.get("id")
-                            .or_else(|| m.get("modelId"))
-                            .or_else(|| m.get("name"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| m.as_str().map(|s| s.to_string()))
-                    })
+                    .filter_map(crate::command::models::canonical_from_pi_model_json)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         Ok(models)
     }
 
-    pub async fn set_model(&self, provider: &str, model_id: &str) -> Result<()> {
-        self.write_json(&json!({
-            "type": "set_model",
-            "provider": provider,
-            "modelId": model_id,
-        }))
-        .await
+    /// Switch model via RPC and return the canonical `provider/model` id Pi applied.
+    pub async fn set_model(&self, provider: &str, model_id: &str) -> Result<String> {
+        let msg = self
+            .rpc_command(json!({
+                "type": "set_model",
+                "provider": provider,
+                "modelId": model_id,
+            }))
+            .await?;
+        let data = msg
+            .get("data")
+            .ok_or_else(|| anyhow::anyhow!("Pi set_model response missing data"))?;
+        crate::command::models::canonical_from_pi_model_json(data).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                crate::t_fmt!(
+                    "models.switch_failed",
+                    ERR = format!("{provider}/{model_id}")
+                )
+            )
+        })
+    }
+
+    /// Active model from Pi session state (`get_state`), when available.
+    pub async fn active_model_id(&self) -> Result<Option<String>> {
+        let data = self.get_state().await?;
+        Ok(data
+            .get("model")
+            .and_then(crate::command::models::canonical_from_pi_model_json))
     }
 
     pub async fn stop(mut self) -> Result<()> {
@@ -664,7 +712,11 @@ fn pi_session_resume_error(session_path: &str, err: &str) -> anyhow::Error {
     };
     anyhow::anyhow!(
         "{}",
-        crate::t_fmt!("pi.session_resume_failed", PATH = session_path, ERR = detail)
+        crate::t_fmt!(
+            "pi.session_resume_failed",
+            PATH = session_path,
+            ERR = detail
+        )
     )
 }
 
@@ -712,10 +764,7 @@ mod tests {
     #[test]
     fn extract_session_file_reads_session_file_field() {
         let data = json!({"sessionFile": "/tmp/s.jsonl", "sessionId": "abc"});
-        assert_eq!(
-            extract_session_file(&data).as_deref(),
-            Some("/tmp/s.jsonl")
-        );
+        assert_eq!(extract_session_file(&data).as_deref(), Some("/tmp/s.jsonl"));
         assert!(extract_session_file(&json!({})).is_none());
     }
 }

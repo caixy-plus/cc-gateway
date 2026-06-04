@@ -351,6 +351,7 @@ impl ChannelManager {
         }
         self.agent_sessions.remove(id);
         crate::db::delete_agent_session(id);
+        crate::history::recorder::delete_session_history(id);
         true
     }
 
@@ -738,7 +739,9 @@ impl ChannelManager {
         {
             let ctrl = controller.lock().await;
             if should_try_provider_resume(&existing, &spawn_provider) && resume_same_provider {
-                if let Some(sid) = existing.resume_provider_session_id().filter(|s| !s.is_empty())
+                if let Some(sid) = existing
+                    .resume_provider_session_id()
+                    .filter(|s| !s.is_empty())
                 {
                     ctrl.set_pending_resume_session_id(Some(sid)).await;
                 }
@@ -821,7 +824,9 @@ impl ChannelManager {
             ctrl.set_linked_agent_record_id(Some(existing.id.clone()))
                 .await;
             if should_try_provider_resume(&existing, &stored_provider) {
-                if let Some(sid) = existing.resume_provider_session_id().filter(|s| !s.is_empty())
+                if let Some(sid) = existing
+                    .resume_provider_session_id()
+                    .filter(|s| !s.is_empty())
                 {
                     ctrl.set_pending_resume_session_id(Some(sid)).await;
                 }
@@ -1090,10 +1095,7 @@ impl ChannelManager {
 }
 
 /// Whether to pass `--resume` / ACP `session/load` when restarting a gateway session record.
-fn should_try_provider_resume(
-    agent_session: &AgentSession,
-    provider: &AgentProvider,
-) -> bool {
+fn should_try_provider_resume(agent_session: &AgentSession, provider: &AgentProvider) -> bool {
     let has_provider_id = agent_session
         .resume_provider_session_id()
         .is_some_and(|s| !s.is_empty());

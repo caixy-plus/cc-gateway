@@ -489,7 +489,6 @@ pub async fn handle_send_message(
         .unwrap_or_else(|| active.agent_session.work_dir.clone());
 
     let mut context = ChatCommandContext::new(
-        "webui",
         channel_id.clone(),
         active.agent_session.title.clone(),
         channel_work_dir,
@@ -522,8 +521,14 @@ pub async fn handle_send_message(
         ensure_webui_poller_task(&channel_id, &session_id, a.controller.clone()).await;
     }
 
-    let http =
-        super::webui_outcome::deliver_chat_outcome(&state, &channel_id, &session_id, outcome).await;
+    let http = super::webui_outcome::deliver_chat_outcome(
+        &state,
+        &channel_id,
+        &session_id,
+        &message,
+        outcome,
+    )
+    .await;
     (http.status, http.body)
 }
 
@@ -722,7 +727,6 @@ pub async fn handle_permission(
         .unwrap_or_else(|| active.agent_session.work_dir.clone());
 
     let mut context = ChatCommandContext::new(
-        "webui",
         channel_id.clone(),
         active.agent_session.title.clone(),
         channel_work_dir,

@@ -27,7 +27,6 @@ impl Default for SessionStopKind {
 
 #[derive(Clone)]
 pub(crate) struct ChatCommandContext {
-    pub(crate) platform: String,
     pub(crate) channel_id: String,
     pub(crate) title: String,
     pub(crate) channel_work_dir: String,
@@ -38,14 +37,12 @@ pub(crate) struct ChatCommandContext {
 
 impl ChatCommandContext {
     pub(crate) fn new(
-        platform: impl Into<String>,
         channel_id: String,
         title: String,
         channel_work_dir: String,
         active_agent: Option<ActiveAgentRuntime>,
     ) -> Self {
         Self {
-            platform: platform.into(),
             channel_id,
             title,
             channel_work_dir,
@@ -349,8 +346,8 @@ impl ChatCommandExecutor {
                     return Ok(ChatCommandOutcome::History { sessions });
                 }
                 if let Ok(idx) = arg.parse::<usize>() {
-                    let sessions =
-                        GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&context.channel_id, Some(10));
+                    let sessions = GLOBAL_CHANNEL_SESSIONS
+                        .list_agent_sessions_by_channel(&context.channel_id, Some(10));
                     if idx == 0 || idx > sessions.len() {
                         return Ok(ChatCommandOutcome::Error(
                             t!("builtin.invalid_history_index").to_string(),
@@ -494,6 +491,73 @@ impl ChatCommandExecutor {
                     t!("controller.no_active_session").to_string(),
                 )),
             },
+            CommandAction::InitSessionMemory { arg } => match context.active_agent.as_ref() {
+                Some(active) => {
+                    let provider = active.agent_session.stored_provider();
+                    if !crate::command::agents::provider_supports_memory_init(&provider) {
+                        return Ok(ChatCommandOutcome::Reply(t_fmt!(
+                            "builtin.init_not_supported",
+                            NAME = crate::command::agents::provider_display_name(&provider)
+                        )));
+                    }
+                    let hint = arg.trim();
+                    let text = if hint.is_empty() {
+                        "/init".to_string()
+                    } else {
+                        format!("/init {hint}")
+                    };
+                    let ctrl = active.controller.lock().await;
+                    let _ = ctrl.send_stop_generation().await;
+                    drop(ctrl);
+                    Ok(ChatCommandOutcome::ForwardToAgent {
+                        active: active.clone(),
+                        text,
+                    })
+                }
+                None => Ok(ChatCommandOutcome::Error(
+                    t!("controller.no_active_session").to_string(),
+                )),
+            },
+            CommandAction::CompactSession { arg } => match context.active_agent.as_ref() {
+                Some(active) => {
+                    let provider = active.agent_session.stored_provider();
+                    if !crate::command::agents::provider_supports_context_compact(&provider) {
+                        return Ok(ChatCommandOutcome::Reply(t_fmt!(
+                            "builtin.compact_not_supported",
+                            NAME = crate::command::agents::provider_display_name(&provider)
+                        )));
+                    }
+                    let hint = arg.trim();
+                    if matches!(provider, crate::config::model::AgentProvider::Claude) {
+                        let text = if hint.is_empty() {
+                            "/compact".to_string()
+                        } else {
+                            format!("/compact {hint}")
+                        };
+                        let ctrl = active.controller.lock().await;
+                        let _ = ctrl.send_stop_generation().await;
+                        drop(ctrl);
+                        return Ok(ChatCommandOutcome::ForwardToAgent {
+                            active: active.clone(),
+                            text,
+                        });
+                    }
+                    let instructions = if hint.is_empty() { None } else { Some(hint) };
+                    let ctrl = active.controller.lock().await;
+                    match ctrl.compact_session(instructions).await {
+                        Ok(summary) => Ok(ChatCommandOutcome::Reply(
+                            crate::command::agents::compact_success_message(&summary),
+                        )),
+                        Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
+                            "builtin.failed_compact",
+                            ERR = e
+                        ))),
+                    }
+                }
+                None => Ok(ChatCommandOutcome::Error(
+                    t!("controller.no_active_session").to_string(),
+                )),
+            },
             CommandAction::Models { arg } => match context.active_agent.as_ref() {
                 Some(active) => {
                     let provider = active.agent_session.stored_provider();
@@ -538,9 +602,9 @@ impl ChatCommandExecutor {
 
                     let agent_session_id = active.agent_session.id.clone();
                     let ctrl = active.controller.lock().await;
-                    let model_id = arg.trim().to_string();
-                    match ctrl.switch_model(&model_id).await {
-                        Ok(()) => {
+                    let model_arg = arg.trim().to_string();
+                    match ctrl.switch_model(&model_arg).await {
+                        Ok(canonical) => {
                             drop(ctrl);
                             GLOBAL_CHANNEL_SESSIONS
                                 .refresh_agent_session_from_controller(
@@ -551,7 +615,7 @@ impl ChatCommandExecutor {
                             Ok(ChatCommandOutcome::Reply(t_fmt!(
                                 "models.switched",
                                 NAME = provider_name,
-                                MODEL = model_id
+                                MODEL = canonical
                             )))
                         }
                         Err(e) => Ok(ChatCommandOutcome::Reply(e.to_string())),
@@ -587,13 +651,8 @@ impl ChatCommandExecutor {
                         }
                     }
                 };
-                // Record before returning so resume logic sees user history even when
-                // platforms broadcast to EVENT_BUS before the runtime is active.
-                let _ = crate::history::recorder::append_session_history(
-                    &active.agent_session.id,
-                    "user",
-                    &text,
-                );
+                // User lines are recorded once via platform `broadcast_event` → history recorder.
+                // Do not append here (WebUI/bots would duplicate on refresh).
                 Ok(ChatCommandOutcome::ForwardToAgent { active, text })
             }
             CommandAction::PermissionAllow { request_id } => {
