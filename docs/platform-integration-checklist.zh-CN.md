@@ -34,26 +34,26 @@
 
 | # | 项 | 文件 / 说明 |
 |---|-----|-------------|
-| A1 | `GatewayConfig` 配置结构 | `src/config/model.rs` |
+| A1 | `GatewayConfig` 配置结构 | `src/core/config/model.rs` |
 | A2 | `Default` + `runtime_defaults()` | `model.rs` |
-| A3 | 重启策略字段 | `src/config/restart_policy.rs` |
+| A3 | 重启策略字段 | `src/core/config/restart_policy.rs` |
 | A4 | 平台模块 `src/platform/<name>/` | 实现 `Platform` |
-| A5 | `pub mod <name>` | `src/platform/mod.rs` |
+| A5 | `pub mod <name>` | `src/platform.rs` |
 | A6 | Daemon 启动 + pairing | `src/daemon/engine.rs` |
 | A7 | 连接状态 | `src/platform/status.rs` |
-| A8 | `SessionSource` | `channel_model.rs`、`db/mod.rs`、`channel_manager.rs` |
+| A8 | `SessionSource` | `src/core/session/channel_model.rs`、`src/database.rs`、`channel_manager.rs` |
 | A9 | `with_mcp_context` | 平台入站处理 |
-| A10 | `McpDeliveryTarget` + `FileDelivery` | `runtime/file_delivery.rs` |
-| A11 | `EventPollSink` | 平台 `mod.rs` |
-| A12 | `spawn_deliver_listener`（如需） | `platform/mod.rs` |
-| A13 | Web 配置读写 / 平台列表 | `web/handlers/config.rs` |
-| A14 | Init 向导 | `config/wizard.rs` |
-| A15 | i18n 中英文 | `src/i18n/dict.rs` |
-| A16 | 测试 | `src/tests/`、`tests/mod.rs` |
+| A10 | `McpDeliveryTarget` + `FileDelivery` | `src/core/runtime/file_delivery.rs` |
+| A11 | `EventPollSink` | 平台根文件 `platform/<name>.rs` |
+| A12 | `spawn_deliver_listener`（如需） | `platform.rs` |
+| A13 | Web 配置读写 / 平台列表 | `src/api/web/handlers/config.rs` |
+| A14 | Init 向导 | `src/core/config/wizard.rs` |
+| A15 | i18n 中英文 | `src/utils/i18n/dict.rs` |
+| A16 | 测试 | `src/tests/`、`tests.rs` |
 
 ## B. Platform Reference Docs（必填）
 
-在 [CLAUDE.md § Platform Reference Docs](../CLAUDE.md#platform-reference-docs) 增加 **`#### <平台>`**，包含：
+在 [docs/platform-reference.md](platform-reference.md) 增加 **`## <平台>`**，包含：
 
 - 开发者控制台  
 - 鉴权文档  
@@ -99,4 +99,4 @@
 
 ## 智能体（非聊天平台）
 
-见 [CLAUDE.md § Adding a New Agent Provider](../CLAUDE.md#adding-a-new-agent-provider)，更新 registry、`docs/config`、README，一般**不需要** `docs/bots/`。
+见 [docs/adding-agent-provider.md](adding-agent-provider.md)，更新 registry、`docs/config`、README，一般**不需要** `docs/bots/`。

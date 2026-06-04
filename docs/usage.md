@@ -1,46 +1,16 @@
 # Usage Guide
 
-## Interactive Mode
+## WebUI and chat bots
 
-Run `cc-gateway` without any subcommand to enter interactive chat mode:
-
-```sh
-$ cc-gateway
-cc-gateway interactive mode  Type '/help' for commands, '/quit' to exit.
-
-cc-gateway> /agent
-agent session started in: /Users/you/Workspace
-
-💬 ~/Workspace ▶ hello Claude
-Hello! How can I help you today?
-
-💬 ~/Workspace ▶ /quit
-agent session stopped.
-
-cc-gateway> /quit
-```
-
-### Command Completion
-
-Press `Tab` after typing `/` to see a list of available commands with inline descriptions.
-
-### Session Switching
-
-- `/agent` — enters agent session mode. The prompt changes to `💬 ~/Workspace ▶`
-- In session mode, everything you type goes directly to the active agent
-- `/quit` — stops the session and returns to gateway mode
-- When not in a session, `/quit` exits the program entirely
-
-### Directory Navigation
+Use the daemon plus WebUI or a connected platform (Feishu, Telegram, QQ) to talk to agents. See [docs/bots/README.md](bots/README.md) for platform setup.
 
 ```sh
-cc-gateway> /cd ~/Projects/my-app
-Working directory changed to: /Users/you/Projects/my-app
-
-cc-gateway> /ll
-# Opens an interactive TUI directory picker
-# Use ↑↓ to navigate, Enter to cd, q to cancel
+cc-gateway init
+cc-gateway start
+cc-gateway webui
 ```
+
+Gateway commands (`/agent`, `/cd`, `/ll`, …) work in WebUI and in bot chats. `/ll` is an interactive card on Feishu and a text list on Telegram/QQ/WebUI.
 
 ## Daemon Mode
 
@@ -86,7 +56,7 @@ Setup: [bots/feishu.md](bots/feishu.md). Once the daemon is running with Feishu 
 
 1. Open Feishu and find your bot
 2. Send messages directly — they are forwarded to Claude Code when a session is active
-3. Use gateway commands just like in CLI mode: `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/help`, `/quit`
+3. Use gateway commands: `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/help`, `/quit`
 
 Each chat (group or private) gets its own isolated Claude subprocess, so messages from different chats never mix.
 
@@ -105,7 +75,7 @@ Setup: [bots/telegram.md](bots/telegram.md). Once the daemon is running with Tel
 
 1. Open Telegram and find your bot
 2. Send messages directly — they are forwarded to Claude Code
-3. Use the same gateway commands as in CLI mode
+3. Use the same gateway commands as in WebUI
 
 Each chat gets its own isolated agent subprocess. Telegram uses long-polling (`getUpdates`) only.
 
@@ -115,7 +85,7 @@ Setup: [bots/qq.md](bots/qq.md). Once the daemon is running with QQ configured:
 
 1. **Private (C2C):** DM the bot directly.
 2. **Group:** @ the bot when sending a message.
-3. Use the same gateway commands as CLI (`/agent`, `/cd`, `/help`, …).
+3. Use the same gateway commands (`/agent`, `/cd`, `/help`, …).
 4. `/ll` and agent selection are **plain text** (no interactive cards).
 
 Each QQ channel (`u:…` / `g:…`) has its own isolated agent session. Restart the daemon after changing QQ credentials or `sandbox`.

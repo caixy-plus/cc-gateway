@@ -44,7 +44,7 @@ print_install_docs() {
     _doc_msg "  Telegram bot setup:                ${telegram}" "  Telegram 机器人:                     ${telegram}"
     _doc_msg "  QQ official bot setup:             ${qq}" "  QQ 官方机器人:                       ${qq}"
     _doc_msg "  Configuration reference:           ${config}" "  配置字段说明:                        ${config}"
-    _doc_msg "  Usage guide (CLI & daemon):        ${usage}" "  使用指南（CLI / 守护进程）:          ${usage}"
+    _doc_msg "  Usage guide (daemon & WebUI):      ${usage}" "  使用指南（守护进程 / WebUI）:        ${usage}"
     _doc_msg "  Platform integration checklist:    ${checklist}" "  平台接入检查清单:                    ${checklist}"
 
     if [ -n "$root" ] && [ -d "$root/docs/bots" ]; then

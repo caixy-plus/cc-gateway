@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Gateway for controlling local agent CLIs (Claude Code, Cursor, Pi, OpenCode, …) via **Feishu/Lark**, **Telegram**, **QQ**, **WebUI**, and an interactive **CLI**.
+Gateway for controlling local agent CLIs (Claude Code, Cursor, Pi, OpenCode, …) via **Feishu/Lark**, **Telegram**, **QQ**, and **WebUI**.
 
 ## Features
 
@@ -11,9 +11,8 @@ Gateway for controlling local agent CLIs (Claude Code, Cursor, Pi, OpenCode, …
 - **Multi-provider** — Pluggable agent backends (`claude`, `cursor`, `pi`, `opencode`, …); pick per chat with `/agents`
 - **Per-chat isolation** — Each chat/channel gets its own agent subprocess; messages never mix across chats
 - **Pairing** — Optional WebUI approval for new chats before they can use the bot (recommended)
-- **Local CLI** — Interactive REPL with Tab completion and inline hints for `/` commands
 - **WebUI** — Browser dashboard for sessions, pairing, settings, and live events
-- **Directory tools** — `/ll` (TUI in CLI, interactive card in Feishu, text list elsewhere)
+- **Directory tools** — `/ll` (interactive card in Feishu, text list on Telegram/QQ/WebUI)
 - **Daemon mode** — `start` / `stop` / `restart` / `log`; single instance via port binding
 
 ## Installation
@@ -77,13 +76,7 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
    cc-gateway webui
    ```
 
-4. **Chat from CLI**
-
-   ```sh
-   cc-gateway
-   cc-gateway> /agent
-   💬 ~/Workspace ▶ review the changes in src/main.rs
-   ```
+4. **Chat from WebUI or a connected bot** — use `/agent` in the WebUI message box or in Feishu/Telegram/QQ after pairing.
 
 5. **Stop when done**
 
@@ -95,7 +88,7 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
 
 | Command | Description |
 |---------|-------------|
-| `cc-gateway` | Interactive CLI chat mode |
+| `cc-gateway` | Show help (same as `cc-gateway --help`) |
 | `cc-gateway init` | Interactive setup wizard (config + optional bot credentials) |
 | `cc-gateway start` | Start the gateway daemon |
 | `cc-gateway stop` | Stop the gateway daemon |
@@ -110,19 +103,19 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
 
 ## Gateway Commands (in chat)
 
-Available in CLI, WebUI, and connected bots (after pairing if enabled):
+Available in WebUI and connected bots (after pairing if enabled):
 
 | Command | Description |
 |---------|-------------|
 | `/help` | List gateway commands |
-| `/quit` | Stop active agent session (no session → exit CLI) |
+| `/quit` | Stop active agent session |
 | `/cd <path>` | Change working directory |
 | `/cd_default` | Reset working directory to `default_dir` |
 | `/agent [provider] [args...]` | Start or restart agent session |
 | `/agents [provider]` | Set this channel's default agent |
 | `/agent-history [n]` | List recent sessions; resume by index |
 | `/pwd` | Show current working directory |
-| `/ll` | Pick directory (TUI / Feishu card / text list) |
+| `/ll` | Pick directory (Feishu card / text list) |
 | `/mkdir <name>` | Create a directory |
 | `/show-thinking` / `/hide-thinking` | Toggle Thinking output |
 | `/stop` / `/clear` / `/status` / `/esc` | Control active generation (where supported) |
@@ -131,7 +124,7 @@ Available in CLI, WebUI, and connected bots (after pairing if enabled):
 
 ### Session mode
 
-After `/agent`, the prompt becomes `💬 ~/Workspace ▶`. Plain text is forwarded to the agent; gateway commands still work. `/quit` returns to gateway mode (or exits the CLI when no session was active).
+After `/agent`, plain text is forwarded to the agent; gateway commands still work. `/quit` stops the active session.
 
 ## Documentation
 
@@ -139,7 +132,7 @@ After `/agent`, the prompt becomes `💬 ~/Workspace ▶`. Plain text is forward
 |-------|---------|------|
 | Bot setup overview | [docs/bots/README.md](docs/bots/README.md) | [docs/bots/README.zh-CN.md](docs/bots/README.zh-CN.md) |
 | Configuration | [docs/config.md](docs/config.md) | [docs/config.zh-CN.md](docs/config.zh-CN.md) |
-| Usage (CLI & daemon) | [docs/usage.md](docs/usage.md) | [docs/usage.zh-CN.md](docs/usage.zh-CN.md) |
+| Usage (daemon & WebUI) | [docs/usage.md](docs/usage.md) | [docs/usage.zh-CN.md](docs/usage.zh-CN.md) |
 | **Release (tag & CI)** | [docs/release.md](docs/release.md) | [docs/release.zh-CN.md](docs/release.zh-CN.md) |
 | Developer guide | [CLAUDE.md](CLAUDE.md) | — |
 
@@ -151,7 +144,7 @@ Install scripts print these links again at the end of setup.
 User (Feishu/Lark)  <--->  cc-gateway daemon  <--->  Agent CLIs (local)
 User (Telegram)     <--->  cc-gateway daemon  <--->  claude / cursor / pi / …
 User (QQ)           <--->  cc-gateway daemon
-User (CLI / WebUI)  <--->  cc-gateway daemon
+User (WebUI)        <--->  cc-gateway daemon
 ```
 
 The gateway spawns provider CLIs as child processes and bridges chat traffic to them (e.g. Claude **stream-json** on stdio, Cursor/OpenCode **ACP**, Pi **JSON-RPC**). See [CLAUDE.md](CLAUDE.md) for protocol details.

@@ -13,6 +13,7 @@ use crate::session::channel_command::{
     ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
 };
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+use crate::session::chat_flow;
 
 use super::WsClientConfig;
 
@@ -35,7 +36,11 @@ type WsWrite = std::sync::Arc<
 >;
 
 impl FeishuPlatform {
-    pub async fn run_websocket(&self, ws_url: &str, client_config: WsClientConfig) -> Result<()> {
+    pub(crate) async fn run_websocket(
+        &self,
+        ws_url: &str,
+        client_config: WsClientConfig,
+    ) -> Result<()> {
         info!("Connecting to Feishu WebSocket: {}", ws_url);
         crate::platform::status::set_state(
             "feishu",
@@ -457,7 +462,6 @@ impl FeishuPlatform {
             CommandRouter::new(dummy, &self.default_dir)
         };
 
-        let action = router.route(&content).await;
         let mcp_ctx = self.mcp_context_for_receive(&receive_id, &receive_id_type);
         let channel_work_dir = GLOBAL_CHANNEL_SESSIONS
             .get_channel(&runtime.channel_session.id)
@@ -477,20 +481,21 @@ impl FeishuPlatform {
             self.show_thinking
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
-        let outcome = match executor.execute(&mut context, action).await {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                let _ = self
-                    .send_text_message(
-                        &receive_id_type,
-                        &receive_id,
-                        &crate::t_fmt!("feishu.error_generic", ERR = e),
-                    )
-                    .await;
-                self.on_processing_complete(&message_id, false).await;
-                return;
-            }
-        };
+        let outcome =
+            match chat_flow::route_and_execute(&router, &executor, &mut context, &content).await {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    let _ = self
+                        .send_text_message(
+                            &receive_id_type,
+                            &receive_id,
+                            &crate::t_fmt!("feishu.error_generic", ERR = e),
+                        )
+                        .await;
+                    self.on_processing_complete(&message_id, false).await;
+                    return;
+                }
+            };
 
         if let Some(mut entry) = self.channels.get_mut(&chat_id) {
             entry.active_agent = context.active_agent.clone();
@@ -1089,6 +1094,7 @@ impl FeishuPlatform {
                                 .load(std::sync::atomic::Ordering::Relaxed),
                             Some(effective_dir.to_string()),
                             Some(mcp_ctx),
+                            None,
                         )
                         .await
                     {

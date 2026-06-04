@@ -1,4 +1,5 @@
 /target
+/test_work_dir/
 **/*.rs.bk
 Cargo.lock
 .DS_Store
@@ -7,3 +8,8 @@ Cargo.lock
 .claude/
 .idea/
 .playwright-cli/
+
+# Local runtime + test artifacts (never commit)
+/.cc-gateway/
+/.tmp*/
+/claude

@@ -7,14 +7,12 @@ use std::time::{Duration, SystemTime};
 use tracing::{error, info, warn};
 
 use crate::config::model::effective_session_retention_per_channel;
-use crate::session::channel_model::{AgentSession, ChannelSession, SessionSource};
+use crate::session::channel_model::AgentSession;
 use chrono::{DateTime, Utc};
 
 fn clamp_session_retention_per_channel(max_per_channel: usize) -> usize {
     effective_session_retention_per_channel(max_per_channel as u64)
 }
-
-const CANONICAL_TUI_CHANNEL_ID: &str = "tui";
 
 /// Trim log file to retain at most `max_lines` lines.
 /// Returns `true` if trimming was performed.
@@ -131,24 +129,22 @@ pub fn clean_old_media_files(retention_days: u64) -> Result<usize> {
     Ok(removed)
 }
 
-/// Known cc-gateway subcommands that are NOT the TUI interactive mode.
 const MANAGEMENT_SUBCMDS: &[&str] = &[
     "_daemon", "start", "stop", "restart", "status", "log", "enable", "disable",
 ];
 
 /// Parse `ps -eo args` output and classify each cc-gateway process.
-/// Returns (tui_count, daemon_count, mgmt_count).
-fn classify_cc_gateway_processes() -> (usize, usize, usize) {
+/// Returns (daemon_count, mgmt_count).
+fn classify_cc_gateway_processes() -> (usize, usize) {
     let output = match std::process::Command::new("ps")
         .args(["-eo", "args"])
         .output()
     {
         Ok(o) => o,
-        Err(_) => return (0, 0, 0),
+        Err(_) => return (0, 0),
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut tui = 0usize;
     let mut daemon = 0usize;
     let mut mgmt = 0usize;
 
@@ -168,31 +164,20 @@ fn classify_cc_gateway_processes() -> (usize, usize, usize) {
         }
 
         let args: Vec<&str> = line.split_whitespace().collect();
-        if args.len() == 1 {
-            // Just the binary — TUI interactive mode
-            tui += 1;
-        } else if args[1] == "_daemon" {
+        if args.len() >= 2 && args[1] == "_daemon" {
             daemon += 1;
-        } else if MANAGEMENT_SUBCMDS.contains(&args[1]) {
+        } else if args.len() >= 2 && MANAGEMENT_SUBCMDS.contains(&args[1]) {
             mgmt += 1;
         }
-        // else: unknown subcommand, ignore
     }
 
-    (tui, daemon, mgmt)
-}
-
-/// Check whether a `cc-gateway` TUI process is currently running.
-/// The TUI process is `cc-gateway` launched with no arguments (interactive mode).
-pub fn is_tui_running() -> bool {
-    let (tui, _, _) = classify_cc_gateway_processes();
-    tui > 0
+    (daemon, mgmt)
 }
 
 /// Check whether the `cc-gateway` daemon process is currently running.
 #[allow(dead_code)]
 pub fn is_daemon_running() -> bool {
-    let (_, daemon, _) = classify_cc_gateway_processes();
+    let (daemon, _) = classify_cc_gateway_processes();
     daemon > 0
 }
 
@@ -257,72 +242,6 @@ pub(crate) fn select_sessions_to_keep(sessions: &[AgentSession], max: usize) -> 
     keep_set
 }
 
-fn ensure_canonical_tui_channel(channels: &[ChannelSession]) -> String {
-    if let Some(channel) = channels
-        .iter()
-        .filter(|c| c.platform == "tui" && c.channel_id == CANONICAL_TUI_CHANNEL_ID)
-        .min_by_key(|c| c.created_at)
-    {
-        return channel.id.clone();
-    }
-
-    let channel = ChannelSession {
-        id: uuid::Uuid::new_v4().to_string(),
-        title: "tui tui".to_string(),
-        source: SessionSource::Tui,
-        platform: "tui".to_string(),
-        channel_id: CANONICAL_TUI_CHANNEL_ID.to_string(),
-        work_dir: shellexpand::tilde("~").to_string(),
-        default_provider: None,
-        created_at: Utc::now(),
-    };
-    let id = channel.id.clone();
-    crate::db::insert_channel_session(&channel);
-    id
-}
-
-/// Merge orphan TUI channels into the canonical `tui` channel without deleting Claude sessions.
-pub fn consolidate_stale_tui_channels_when(tui_running: bool) -> usize {
-    if tui_running {
-        return 0;
-    }
-
-    let channels = crate::db::load_all_channel_sessions();
-    let canonical_id = ensure_canonical_tui_channel(&channels);
-    let mut removed_channels = 0usize;
-
-    for channel in channels {
-        if channel.platform != "tui" || channel.id == canonical_id {
-            continue;
-        }
-
-        let reassigned = crate::db::reassign_agent_sessions_channel(&channel.id, &canonical_id);
-        if reassigned > 0 {
-            info!(
-                "Reassigned {} TUI Claude sessions from channel {} to canonical {}",
-                reassigned,
-                &channel.id[..channel.id.len().min(8)],
-                &canonical_id[..canonical_id.len().min(8)]
-            );
-        }
-
-        crate::db::delete_channel_session(&channel.id);
-        removed_channels += 1;
-        info!(
-            "Removed stale TUI channel {} (channel_id={})",
-            &channel.id[..channel.id.len().min(8)],
-            channel.channel_id
-        );
-    }
-
-    removed_channels
-}
-
-/// Merge orphan TUI channels when the interactive TUI process is not running.
-pub fn consolidate_stale_tui_channels() -> usize {
-    consolidate_stale_tui_channels_when(is_tui_running())
-}
-
 fn prune_agent_sessions(sessions: &[AgentSession], keep: &HashSet<String>) -> usize {
     let mut removed = 0usize;
     for session in sessions {
@@ -369,7 +288,6 @@ pub fn clean_excess_sessions(max_per_channel: usize) -> usize {
 pub struct CleanupCycleResult {
     pub log_trimmed: bool,
     pub media_removed: usize,
-    pub tui_channels_consolidated: usize,
     pub excess_sessions_removed: usize,
 }
 
@@ -387,7 +305,7 @@ fn normalize_log_limits(max_lines: usize, max_size_mb: usize) -> (usize, usize) 
     (max_lines, max_size_mb)
 }
 
-/// Run one cleanup cycle: trim logs, purge old media, prune TUI and excess sessions.
+/// Run one cleanup cycle: trim logs, purge old media, prune excess sessions.
 pub fn run_cleanup_cycle(
     log_path: &str,
     max_lines: usize,
@@ -403,12 +321,10 @@ pub fn run_cleanup_cycle(
         0
     };
     let max_sessions_per_channel = clamp_session_retention_per_channel(max_sessions_per_channel);
-    let tui_channels_consolidated = consolidate_stale_tui_channels();
     let excess_sessions_removed = clean_excess_sessions(max_sessions_per_channel);
     Ok(CleanupCycleResult {
         log_trimmed,
         media_removed,
-        tui_channels_consolidated,
         excess_sessions_removed,
     })
 }
@@ -447,12 +363,6 @@ pub fn start_background_task(
                         info!(
                             "Background media cleanup removed {} files",
                             result.media_removed
-                        );
-                    }
-                    if result.tui_channels_consolidated > 0 {
-                        info!(
-                            "Background TUI channel consolidation removed {} stale channels",
-                            result.tui_channels_consolidated
                         );
                     }
                     if result.excess_sessions_removed > 0 {

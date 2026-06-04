@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::config::model::{AgentProfiles, FeishuConfig};
-use crate::platform::feishu::FeishuPlatform;
+use crate::config::model::AgentProfiles;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -12,7 +11,8 @@ pub(crate) struct TestEnv {
     previous_home: Option<String>,
     previous_userprofile: Option<String>,
     previous_path: Option<String>,
-    root: tempfile::TempDir,
+    _root: tempfile::TempDir,
+    home: PathBuf,
 }
 
 impl TestEnv {
@@ -37,17 +37,56 @@ impl TestEnv {
         std::env::set_var("PATH", &new_path);
         std::fs::create_dir_all(root.path().join(".cc-gateway")).unwrap();
         GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+        let home = root.path().to_path_buf();
         Self {
             _lock: lock,
             previous_home,
             previous_userprofile,
             previous_path,
-            root,
+            _root: root,
+            home,
         }
     }
 
+    /// Use `$CARGO_MANIFEST_DIR` as HOME and ensure `./test_work_dir` exists at repo root.
+    pub(crate) fn new_with_repo_work_dir() -> Self {
+        let lock = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let work_dir = manifest.join("test_work_dir");
+        std::fs::create_dir_all(&work_dir).expect("create repo test_work_dir");
+        std::fs::create_dir_all(manifest.join(".cc-gateway")).expect("create .cc-gateway under repo");
+
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        let previous_path = std::env::var("PATH").ok();
+        std::env::set_var("HOME", &manifest);
+        std::env::set_var("USERPROFILE", &manifest);
+        // Isolate from the developer's real `claude` on PATH — only the fake script in the repo root.
+        std::env::set_var("PATH", manifest.as_os_str());
+        GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+        let fake_claude = create_fake_agent_cli(&manifest);
+        let _ = fake_claude;
+
+        let root = tempfile::tempdir_in(&manifest).expect("scratch temp dir for TestEnv");
+        Self {
+            _lock: lock,
+            previous_home,
+            previous_userprofile,
+            previous_path,
+            _root: root,
+            home: manifest,
+        }
+    }
+
+    pub(crate) fn repo_work_dir(&self) -> PathBuf {
+        self.home.join("test_work_dir")
+    }
+
     pub(crate) fn home(&self) -> &Path {
-        self.root.path()
+        &self.home
     }
 
     pub(crate) fn fake_agent_profiles(&self) -> AgentProfiles {
@@ -86,18 +125,68 @@ pub(crate) fn create_fake_agent_cli(home: &Path) -> PathBuf {
         &script,
         r#"#!/bin/sh
 session_id="fake-session"
+resume_used="none"
+memory_file="$HOME/.cc-gateway/.test_claude_memory"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--resume" ]; then
     shift
     session_id="$1"
+    resume_used="$1"
+  elif [ "$1" = "--mcp-config" ]; then
+    shift
+    printf '%s' "$1" > "$HOME/.cc-gateway/.test_last_mcp_config"
   fi
   shift || true
 done
+mkdir -p "$HOME/.cc-gateway"
+printf '%s' "$resume_used" > "$HOME/.cc-gateway/.test_last_resume"
 mkdir -p "$HOME/.claude/sessions"
 printf '{"sessionId":"%s"}\n' "$session_id" > "$HOME/.claude/sessions/$$.json"
+recall=""
+agent_id="${CC_GATEWAY_TEST_AGENT_SESSION_ID:-}"
+if [ -z "$agent_id" ] && [ -f "$HOME/.cc-gateway/.test_agent_session_id" ]; then
+  agent_id=$(cat "$HOME/.cc-gateway/.test_agent_session_id")
+fi
+if [ "$resume_used" != "none" ]; then
+  if [ -f "$memory_file" ]; then
+    recall=$(cat "$memory_file")
+  fi
+  if [ -n "$agent_id" ]; then
+    hist="$HOME/.cc-gateway/history/${agent_id}.jsonl"
+    if [ -s "$hist" ]; then
+      recall=$(tail -1 "$hist")
+    fi
+  fi
+fi
 while IFS= read -r line; do
-  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fake reply"}]}}\n'
-  printf '{"type":"result","result":"fake reply","usage":{"input_tokens":1,"output_tokens":2}}\n'
+  if [ "$resume_used" != "none" ] && [ -n "$agent_id" ]; then
+    hist="$HOME/.cc-gateway/history/${agent_id}.jsonl"
+    if [ -s "$hist" ]; then
+      recall=$(tail -1 "$hist")
+    fi
+  fi
+  case "$line" in
+    *'"type":"interrupt"'*|*'"type": "interrupt"'*)
+      ;;
+    *)
+      if [ -n "$line" ]; then
+        printf '%s' "$line" > "$memory_file"
+      fi
+      ;;
+  esac
+  if [ -n "$recall" ]; then
+    recall_content=$(printf '%s' "$recall" | sed -n 's/.*"content":"\([^"]*\)".*/\1/p')
+    if [ -n "$recall_content" ]; then
+      text="recalled: $recall_content"
+    else
+      text="recalled: $recall"
+    fi
+    recall=""
+  else
+    text="fake reply"
+  fi
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$text"
+  printf '{"type":"result","result":"%s","usage":{"input_tokens":1,"output_tokens":2}}\n' "$text"
 done
 "#,
     )
@@ -107,6 +196,113 @@ done
     perms.set_mode(0o755);
     std::fs::set_permissions(&script, perms).unwrap();
     script
+}
+
+#[cfg(not(windows))]
+pub(crate) fn create_fake_pi_cli(home: &Path) -> PathBuf {
+    let script = home.join("pi");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+printf '%s\n' "$@" > "$HOME/.cc-gateway/.test_pi_argv" 2>/dev/null || true
+session_file="$HOME/.cc-gateway/.test_pi_session_file"
+mkdir -p "$HOME/.cc-gateway/sessions"
+default="$HOME/.cc-gateway/sessions/default.jsonl"
+if [ ! -f "$session_file" ]; then
+  printf '%s' "$default" > "$session_file"
+fi
+touch "$(cat "$session_file")" 2>/dev/null || true
+
+extract_json_str() {
+  key="$1"
+  line="$2"
+  printf '%s' "$line" | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
+}
+
+while IFS= read -r line || [ -n "$line" ]; do
+  [ -z "$line" ] && continue
+  case "$line" in
+    *'"type":"get_state"'*|*'"type": "get_state"'*)
+      req_id=$(extract_json_str id "$line")
+      sf=$(cat "$session_file")
+      sid=$(basename "$sf" .jsonl)
+      if [ -n "$req_id" ]; then
+        printf '{"type":"response","id":"%s","command":"get_state","success":true,"data":{"sessionFile":"%s","sessionId":"%s"}}\n' "$req_id" "$sf" "$sid"
+      else
+        printf '{"type":"response","command":"get_state","success":true,"data":{"sessionFile":"%s","sessionId":"%s"}}\n' "$sf" "$sid"
+      fi
+      ;;
+    *'"type":"switch_session"'*)
+      path=$(extract_json_str sessionPath "$line")
+      if [ -f "$HOME/.cc-gateway/.test_pi_fail_switch" ]; then
+        req_id=$(extract_json_str id "$line")
+        if [ -n "$req_id" ]; then
+          printf '{"type":"response","id":"%s","command":"switch_session","success":false,"error":"session file missing"}\n' "$req_id"
+        else
+          printf '{"type":"response","command":"switch_session","success":false,"error":"session file missing"}\n'
+        fi
+        continue
+      fi
+      if [ -n "$path" ]; then
+        mkdir -p "$(dirname "$path")"
+        touch "$path"
+        printf '%s' "$path" > "$session_file"
+        printf '%s' "$path" > "$HOME/.cc-gateway/.test_last_pi_switch_session"
+      fi
+      req_id=$(extract_json_str id "$line")
+      if [ -n "$req_id" ]; then
+        printf '{"type":"response","id":"%s","command":"switch_session","success":true,"data":{"cancelled":false}}\n' "$req_id"
+      else
+        printf '{"type":"response","command":"switch_session","success":true,"data":{"cancelled":false}}\n'
+      fi
+      ;;
+    *'"type":"new_session"'*)
+      new="$HOME/.cc-gateway/sessions/new-$$.jsonl"
+      touch "$new"
+      printf '%s' "$new" > "$session_file"
+      req_id=$(extract_json_str id "$line")
+      if [ -n "$req_id" ]; then
+        printf '{"type":"response","id":"%s","command":"new_session","success":true,"data":{"cancelled":false}}\n' "$req_id"
+      else
+        printf '{"type":"response","command":"new_session","success":true,"data":{"cancelled":false}}\n'
+      fi
+      ;;
+    *'"type":"get_available_models"'*)
+      req_id=$(extract_json_str id "$line")
+      if [ -n "$req_id" ]; then
+        printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"id":"fake-model"}]}}\n' "$req_id"
+      else
+        printf '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"fake-model"}]}}\n'
+      fi
+      ;;
+    *'"type":"abort"'*)
+      req_id=$(extract_json_str id "$line")
+      if [ -n "$req_id" ]; then
+        printf '{"type":"response","id":"%s","command":"abort","success":true}\n' "$req_id"
+      else
+        printf '{"type":"response","command":"abort","success":true}\n'
+      fi
+      ;;
+    *'"type":"prompt"'*)
+      printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"fake pi reply"}}'
+      printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"done","reason":"stop"}}'
+      printf '%s\n' '{"type":"agent_end"}'
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&script).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script, perms).unwrap();
+    script
+}
+
+#[cfg(windows)]
+pub(crate) fn create_fake_pi_cli(home: &Path) -> PathBuf {
+    create_fake_agent_cli(home)
 }
 
 #[cfg(windows)]
@@ -142,46 +338,4 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     )
     .unwrap();
     cmd
-}
-
-pub(crate) fn feishu_platform(default_dir: &str) -> FeishuPlatform {
-    FeishuPlatform::new(
-        FeishuConfig {
-            enabled: true,
-            app_id: "app-id".to_string(),
-            app_secret: "app-secret".to_string(),
-            require_pairing: false,
-        },
-        default_dir,
-        AgentProfiles::default(),
-        false,
-    )
-}
-
-pub(crate) fn feishu_text_event(
-    message_id: &str,
-    chat_id: &str,
-    chat_type: &str,
-    sender_open_id: &str,
-    text: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "header": {
-            "event_type": "im.message.receive_v1"
-        },
-        "event": {
-            "sender": {
-                "sender_id": {
-                    "open_id": sender_open_id
-                }
-            },
-            "message": {
-                "message_id": message_id,
-                "message_type": "text",
-                "chat_id": chat_id,
-                "chat_type": chat_type,
-                "content": serde_json::json!({"text": text}).to_string()
-            }
-        }
-    })
 }

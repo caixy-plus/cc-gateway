@@ -586,7 +586,7 @@ pub fn disable_card_buttons(card: &Value) -> Value {
                 )
             }
         }
-        Value::Array(arr) => Value::Array(arr.iter().map(|v| disable_card_buttons(v)).collect()),
+        Value::Array(arr) => Value::Array(arr.iter().map(disable_card_buttons).collect()),
         other => other.clone(),
     }
 }

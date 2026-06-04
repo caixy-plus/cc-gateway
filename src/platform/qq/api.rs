@@ -367,7 +367,11 @@ pub fn extract_inbound_attachments(d: &Value) -> Vec<QqInboundAttachment> {
                 .get("voice_wav_url")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.trim().is_empty())
-                .or_else(|| a.get("url").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()))
+                .or_else(|| {
+                    a.get("url")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                })
                 .unwrap_or("")
                 .trim()
                 .to_string();
@@ -399,7 +403,9 @@ pub fn extract_inbound_attachments(d: &Value) -> Vec<QqInboundAttachment> {
             || d.get("url").is_some()
             || d.get("download_url").is_some())
     {
-        warn!("QQ inbound payload missing attachments[]; attachment download skipped (strict mode)");
+        warn!(
+            "QQ inbound payload missing attachments[]; attachment download skipped (strict mode)"
+        );
     }
 
     out

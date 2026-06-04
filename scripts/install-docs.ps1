@@ -1,4 +1,4 @@
-﻿# Shared documentation links printed after install / install_local.
+# Shared documentation links printed after install / install_local.
 # Dot-sourced by install.ps1, install_local.ps1
 
 function Print-InstallDocs {
@@ -32,7 +32,7 @@ function Print-InstallDocs {
     Write-Msg "  Telegram bot setup:                $telegram" "  Telegram 机器人:                     $telegram"
     Write-Msg "  QQ official bot setup:             $qq" "  QQ 官方机器人:                       $qq"
     Write-Msg "  Configuration reference:           $config" "  配置字段说明:                        $config"
-    Write-Msg "  Usage guide (CLI & daemon):        $usage" "  使用指南（CLI / 守护进程）:          $usage"
+    Write-Msg "  Usage guide (daemon & WebUI):      $usage" "  使用指南（守护进程 / WebUI）:        $usage"
     Write-Msg "  Platform integration checklist:    $checklist" "  平台接入检查清单:                    $checklist"
 
     if ($LocalRepoRoot -and (Test-Path "$LocalRepoRoot\docs\bots")) {

@@ -1,46 +1,16 @@
 # 使用指南
 
-## 交互模式
+## WebUI 与聊天机器人
 
-不携带任何子命令运行 `cc-gateway` 即可进入交互式聊天模式:
-
-```sh
-$ cc-gateway
-cc-gateway 交互模式  输入 '/help' 查看命令，'/quit' 退出。
-
-cc-gateway> /agent
-智能体会话已启动于: /Users/you/Workspace
-
-💬 ~/Workspace ▶ hello Claude
-Hello! How can I help you today?
-
-💬 ~/Workspace ▶ /quit
-智能体会话已停止。
-
-cc-gateway> /quit
-```
-
-### 命令补全
-
-输入 `/` 后按 `Tab` 查看可用命令列表及行内描述。
-
-### 会话切换
-
-- `/agent` — 进入智能体会话模式。提示符变为 `💬 ~/Workspace ▶`
-- 在会话模式下，你输入的所有内容直接发送给当前智能体
-- `/quit` — 停止会话并返回网关模式
-- 未进入会话时，`/quit` 直接退出程序
-
-### 目录导航
+通过守护进程 + WebUI 或已接入的平台（飞书、Telegram、QQ）与智能体对话。平台配置见 [bots/README.zh-CN.md](bots/README.zh-CN.md)。
 
 ```sh
-cc-gateway> /cd ~/Projects/my-app
-工作目录已更改为: /Users/you/Projects/my-app
-
-cc-gateway> /ll
-# 打开交互式 TUI 目录选择器
-# 使用 ↑↓ 导航, Enter 确认, q 取消
+cc-gateway init
+cc-gateway start
+cc-gateway webui
 ```
+
+网关命令（`/agent`、`/cd`、`/ll` 等）在 WebUI 与各机器人聊天中可用。飞书 `/ll` 为交互卡片；Telegram、QQ、WebUI 为文本列表。
 
 ## 守护进程模式
 
@@ -86,7 +56,7 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 1. 打开飞书并找到你的机器人
 2. 直接发送消息 — 当会话激活时它们会被转发给 Claude Code
-3. 使用与 CLI 模式相同的网关命令: `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/help`, `/quit`
+3. 使用网关命令: `/cd`, `/agent`, `/agents`, `/agent-history`, `/pwd`, `/ll`, `/help`, `/quit`
 
 每个聊天 (群聊或私聊) 都有独立的 Claude 子进程，不同聊天的消息不会相互混淆。
 
@@ -105,7 +75,7 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 1. 打开 Telegram 并找到你的机器人
 2. 直接发送消息 — 它们会被转发给 Claude Code
-3. 使用与 CLI 模式相同的网关命令
+3. 使用相同的网关命令
 
 每个聊天都有独立的智能体子进程。Telegram 仅使用长轮询 (`getUpdates`)。
 
@@ -115,7 +85,7 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 1. **私聊（C2C）：** 直接与机器人对话。
 2. **群聊：** 发送消息时需 **@ 机器人**。
-3. 网关命令与 CLI 相同（`/agent`、`/cd`、`/help` 等）。
+3. 网关命令与 WebUI 相同（`/agent`、`/cd`、`/help` 等）。
 4. `/ll`、选智能体等为 **纯文本**（无消息卡片）。
 
 每个 QQ 频道（`u:…` / `g:…`）独立会话。修改 QQ 凭证或 `sandbox` 后需重启守护进程。

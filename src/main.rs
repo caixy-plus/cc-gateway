@@ -1,32 +1,12 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
-
-mod agent;
-mod cli;
-mod command;
-mod config;
-mod daemon;
-mod db;
-mod history;
-mod i18n;
-mod platform;
-mod prompt;
-mod runtime;
-mod session;
-mod uninstall;
-mod update;
-mod utils;
-mod web;
-
-#[cfg(test)]
-mod tests;
-
-use cli::interactive::run_interactive;
 
 #[derive(Parser)]
 #[command(name = "cc-gateway")]
-#[command(about = "Gateway for controlling Claude Code via Feishu/Lark and CLI")]
+#[command(
+    about = "Gateway for controlling local agent CLIs via Feishu/Lark, Telegram, QQ, and WebUI"
+)]
 #[command(version)]
 struct Args {
     #[command(subcommand)]
@@ -116,60 +96,61 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    i18n::init();
     let args = Args::parse();
+    let Some(command) = args.command else {
+        Args::command().print_help()?;
+        return Ok(());
+    };
 
-    match args.command {
-        None => {
-            // No subcommand: enter interactive mode (same as Feishu bot)
-            run_interactive().await?;
+    cc_gateway::i18n::init();
+
+    match command {
+        Commands::Start { config } => {
+            cc_gateway::daemon::start(config).await?;
         }
-        Some(Commands::Start { config }) => {
-            daemon::start(config).await?;
+        Commands::Stop => {
+            cc_gateway::daemon::stop().await?;
         }
-        Some(Commands::Stop) => {
-            daemon::stop().await?;
+        Commands::Restart { config } => {
+            cc_gateway::daemon::restart(config).await?;
         }
-        Some(Commands::Restart { config }) => {
-            daemon::restart(config).await?;
+        Commands::Daemon { config } => {
+            cc_gateway::daemon::run(config).await?;
         }
-        Some(Commands::Daemon { config }) => {
-            daemon::run(config).await?;
+        Commands::Log { follow, lines } => {
+            cc_gateway::daemon::log(follow, lines).await?;
         }
-        Some(Commands::Log { follow, lines }) => {
-            daemon::log(follow, lines).await?;
+        Commands::Status => {
+            cc_gateway::daemon::status().await?;
         }
-        Some(Commands::Status) => {
-            daemon::status().await?;
+        Commands::Enable => {
+            cc_gateway::daemon::enable().await?;
         }
-        Some(Commands::Enable) => {
-            daemon::enable().await?;
+        Commands::Disable => {
+            cc_gateway::daemon::disable().await?;
         }
-        Some(Commands::Disable) => {
-            daemon::disable().await?;
+        Commands::Init => {
+            cc_gateway::config::wizard::run_init_config()?;
         }
-        Some(Commands::Init) => {
-            config::wizard::run_init_config()?;
+        Commands::Webui { config } => {
+            cc_gateway::daemon::webui(config).await?;
         }
-        Some(Commands::Webui { config }) => {
-            daemon::webui(config).await?;
+        Commands::WebuiToken { refresh } => {
+            cc_gateway::daemon::webui_token(refresh).await?;
         }
-        Some(Commands::WebuiToken { refresh }) => {
-            daemon::webui_token(refresh).await?;
-        }
-        Some(Commands::Update {
+        Commands::Update {
             check,
             force,
             yes,
             config,
-        }) => {
-            update::run(check, force, yes, config).await?;
+        } => {
+            cc_gateway::update::run(check, force, yes, config).await?;
         }
-        Some(Commands::Uninstall { yes, keep_data }) => {
-            uninstall::run(yes, keep_data)?;
+        Commands::Uninstall { yes, keep_data } => {
+            cc_gateway::uninstall::run(yes, keep_data)?;
         }
-        Some(Commands::McpServer) => {
-            runtime::mcp_server::run_mcp_server().await?;
+        Commands::McpServer => {
+            cc_gateway::runtime::mcp_server::run_mcp_server().await?;
         }
     }
 

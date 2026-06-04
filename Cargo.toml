@@ -1,13 +1,17 @@
 [package]
 name = "cc-gateway"
-version = "1.8.4"
+version = "1.8.5"
 edition = "2021"
 authors = ["caixinyun"]
-description = "Gateway for local agent CLIs (Claude, Cursor, OpenCode, …) via Feishu/Lark, Telegram, QQ, WebUI, and CLI"
+description = "Gateway for local agent CLIs (Claude, Cursor, OpenCode, …) via Feishu/Lark, Telegram, QQ, and WebUI"
 license = "MIT"
 repository = "https://github.com/caixy-plus/cc-gateway"
 keywords = ["claude", "claude-code", "feishu", "lark", "telegram", "qq", "opencode", "gateway"]
 categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "cc_gateway"
+path = "src/lib.rs"
 
 [[bin]]
 name = "cc-gateway"
@@ -52,12 +56,7 @@ once_cell = "1.20"
 base64 = "0.22"
 dashmap = "6.1"
 
-# Interactive CLI (for cc-gateway without args)
-rustyline = "14.0"
-crossterm = "0.28"
-ratatui = "0.29"
-
-# Open URLs in default browser
+# Open URLs in default browser (webui command)
 open = "5"
 
 # Path expansion

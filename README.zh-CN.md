@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-通过 **飞书/Lark**、**Telegram**、**QQ**、**WebUI** 与交互式 **CLI**，在本地运行并远程驱动多种智能体 CLI（Claude Code、Cursor、Pi、OpenCode 等）。
+通过 **飞书/Lark**、**Telegram**、**QQ** 与 **WebUI**，在本地运行并远程驱动多种智能体 CLI（Claude Code、Cursor、Pi、OpenCode 等）。
 
 ## 功能特性
 
@@ -11,9 +11,8 @@
 - **多智能体** — 可插拔后端（`claude`、`cursor`、`pi`、`opencode` 等），用 `/agents` 按聊天指定默认智能体
 - **聊天隔离** — 每个聊天/频道独立子进程，消息互不串线
 - **配对放行** — 可在 WebUI 中批准新聊天后再允许使用（建议开启）
-- **本地 CLI** — 交互式命令行，支持 `/` 命令 Tab 补全与行内提示
 - **WebUI** — 浏览器管理会话、配对、设置与实时事件
-- **目录工具** — `/ll`（CLI 为 TUI，飞书为卡片，其他平台为文本列表）
+- **目录工具** — `/ll`（飞书为交互卡片，Telegram/QQ/WebUI 为文本列表）
 - **守护进程** — `start` / `stop` / `restart` / `log`，端口绑定保证单实例
 
 ## 安装
@@ -77,13 +76,7 @@ cd cc-gateway
    cc-gateway webui
    ```
 
-4. **在 CLI 中对话**
-
-   ```sh
-   cc-gateway
-   cc-gateway> /agent
-   💬 ~/Workspace ▶ 请审查 src/main.rs 的改动
-   ```
+4. **在 WebUI 或已接入的机器人中对话** — 配对后在 WebUI 输入框或飞书/Telegram/QQ 中使用 `/agent`。
 
 5. **停止服务**
 
@@ -95,7 +88,7 @@ cd cc-gateway
 
 | 命令 | 说明 |
 |------|------|
-| `cc-gateway` | 交互式 CLI 聊天模式 |
+| `cc-gateway` | 显示帮助（同 `cc-gateway --help`） |
 | `cc-gateway init` | 交互式配置向导（含可选机器人凭证） |
 | `cc-gateway start` | 启动网关守护进程 |
 | `cc-gateway stop` | 停止网关守护进程 |
@@ -110,19 +103,19 @@ cd cc-gateway
 
 ## 网关命令（聊天内）
 
-在 CLI、WebUI 及已接入的机器人中可用（若开启配对须先放行）：
+在 WebUI 及已接入的机器人中可用（若开启配对须先放行）：
 
 | 命令 | 说明 |
 |------|------|
 | `/help` | 显示命令列表 |
-| `/quit` | 结束当前智能体会话（无会话时退出 CLI） |
+| `/quit` | 结束当前智能体会话 |
 | `/cd <路径>` | 更改工作目录 |
 | `/cd_default` | 恢复为 `default_dir` |
 | `/agent [provider] [参数...]` | 启动或重启智能体会话 |
 | `/agents [provider]` | 设置本频道默认智能体 |
 | `/agent-history [n]` | 列出最近会话；按序号恢复 |
 | `/pwd` | 显示当前工作目录 |
-| `/ll` | 选择目录（TUI / 飞书卡片 / 文本列表） |
+| `/ll` | 选择目录（飞书卡片 / 文本列表） |
 | `/mkdir <名称>` | 创建目录 |
 | `/show-thinking` / `/hide-thinking` | 开关 Thinking 输出 |
 | `/stop` / `/clear` / `/status` / `/esc` | 控制当前生成（视平台支持） |
@@ -131,7 +124,7 @@ cd cc-gateway
 
 ### 会话模式
 
-执行 `/agent` 后提示符变为 `💬 ~/Workspace ▶`，普通文本会转发给智能体；网关命令仍可使用。`/quit` 返回网关模式（CLI 下若无活动会话则退出程序）。
+执行 `/agent` 后，普通文本会转发给智能体；网关命令仍可使用。`/quit` 结束当前会话。
 
 ## 文档
 
@@ -151,7 +144,7 @@ cd cc-gateway
 用户 (飞书/Lark)  <-->  cc-gateway 守护进程  <-->  本地智能体 CLI
 用户 (Telegram)   <-->  cc-gateway 守护进程  <-->  claude / cursor / pi / …
 用户 (QQ)         <-->  cc-gateway 守护进程
-用户 (CLI/WebUI)  <-->  cc-gateway 守护进程
+用户 (WebUI)      <-->  cc-gateway 守护进程
 ```
 
 网关以子进程方式拉起各 provider CLI，并桥接聊天消息（例如 Claude 的 **stream-json**、Cursor/OpenCode 的 **ACP**、Pi 的 **JSON-RPC**）。协议细节见 [CLAUDE.md](CLAUDE.md)。

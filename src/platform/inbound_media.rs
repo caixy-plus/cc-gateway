@@ -13,10 +13,7 @@ pub struct SavedInboundMedia {
 }
 
 fn ext_is_image(ext: &str) -> bool {
-    matches!(
-        ext,
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg"
-    )
+    matches!(ext, "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg")
 }
 
 pub fn content_type_to_extension(content_type: &str) -> &'static str {
@@ -181,10 +178,7 @@ mod tests {
 
     #[test]
     fn filename_extension_parsing_is_sanitized() {
-        assert_eq!(
-            extension_from_filename("foo.PDF").as_deref(),
-            Some("pdf")
-        );
+        assert_eq!(extension_from_filename("foo.PDF").as_deref(), Some("pdf"));
         assert_eq!(extension_from_filename("noext"), None);
         assert_eq!(extension_from_filename("bad.ext!"), None);
         assert_eq!(extension_from_filename("x.veryveryverylongext"), None);

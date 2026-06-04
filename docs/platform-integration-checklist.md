@@ -34,26 +34,26 @@ Document any intentional **No** in your platform’s `docs/bots/<id>.md`.
 
 | # | Item | Files / notes |
 |---|------|----------------|
-| A1 | Config struct on `GatewayConfig` | `src/config/model.rs` |
+| A1 | Config struct on `GatewayConfig` | `src/core/config/model.rs` |
 | A2 | `Default` + `runtime_defaults()` disable until init | `model.rs` |
-| A3 | Restart policy fields | `src/config/restart_policy.rs` |
+| A3 | Restart policy fields | `src/core/config/restart_policy.rs` |
 | A4 | Platform module `src/platform/<name>/` | `impl Platform` |
-| A5 | `pub mod <name>` | `src/platform/mod.rs` |
+| A5 | `pub mod <name>` | `src/platform.rs` |
 | A6 | Daemon startup + pairing flag | `src/daemon/engine.rs` |
 | A7 | Connection status | `src/platform/status.rs` |
-| A8 | `SessionSource` variant | `channel_model.rs`, `db/mod.rs`, `channel_manager.rs` |
+| A8 | `SessionSource` variant | `src/core/session/channel_model.rs`, `src/database.rs`, `channel_manager.rs` |
 | A9 | `ChatCommandContext::with_mcp_context` | Platform inbound handler |
-| A10 | `McpDeliveryTarget::<Platform>` + `FileDelivery` | `runtime/file_delivery.rs` |
-| A11 | `EventPollSink` (incl. permission / confirm / question) | Platform `mod.rs` |
-| A12 | Deliver listener (if text push needed) | `platform/mod.rs` → `spawn_deliver_listener` |
-| A13 | Web config save / mask secrets / platforms API | `web/handlers/config.rs` |
-| A14 | Init wizard menu entry | `config/wizard.rs` |
-| A15 | i18n keys (EN + ZhCN) | `src/i18n/dict.rs` |
-| A16 | Tests | `src/tests/<name>_*.rs`, `tests/mod.rs` |
+| A10 | `McpDeliveryTarget::<Platform>` + `FileDelivery` | `src/core/runtime/file_delivery.rs` |
+| A11 | `EventPollSink` (incl. permission / confirm / question) | Platform root `platform/<name>.rs` |
+| A12 | Deliver listener (if text push needed) | `platform.rs` → `spawn_deliver_listener` |
+| A13 | Web config save / mask secrets / platforms API | `src/api/web/handlers/config.rs` |
+| A14 | Init wizard menu entry | `src/core/config/wizard.rs` |
+| A15 | i18n keys (EN + ZhCN) | `src/utils/i18n/dict.rs` |
+| A16 | Tests | `src/tests/<name>_*.rs`, `tests.rs` |
 
 ## B. Platform Reference Docs (required)
 
-Add a **`#### <Platform>`** subsection under [CLAUDE.md § Platform Reference Docs](../CLAUDE.md#platform-reference-docs) with:
+Add a **`## <Platform>`** subsection under [docs/platform-reference.md](platform-reference.md) with:
 
 - Developer console URL  
 - Auth / token docs  
@@ -99,7 +99,7 @@ Add a **`#### <Platform>`** subsection under [CLAUDE.md § Platform Reference Do
 
 ## Agent provider checklist (short)
 
-For **agents** (not chat platforms), see [CLAUDE.md § Adding a New Agent Provider](../CLAUDE.md#adding-a-new-agent-provider) and update:
+For **agents** (not chat platforms), see [docs/adding-agent-provider.md](adding-agent-provider.md) and update:
 
 - `agent_registry.rs`, `config/model.rs`, `docs/config.md`, README provider list  
 - No `docs/bots/` unless platform-specific  
