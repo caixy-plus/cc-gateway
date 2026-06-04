@@ -4,7 +4,7 @@
 
 Use this checklist when integrating a new chat bot (Feishu/Lark, Telegram, QQ, Discord, Slack, etc.). **Full checklist (do not skip items):** [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md).
 
-Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling), **QQ** (OpenAPI v2 Gateway WebSocket). Unlike agents, there is **no** `platform_registry` yet — several files still use explicit `feishu` / `telegram` / `qq` match arms (noted below). **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) and [Platform Reference Docs](platform-reference.md).
+Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling), **QQ** (OpenAPI v2 Gateway WebSocket). Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) drives daemon startup, connection status, `GET /api/platforms`, pairing flags, config restart policy, and `SessionSource` mapping — add a `PlatformDef` entry plus `src/platform/<name>/`. Typed per-platform sections live under **`platforms.<id>`** in `config.json`; WebUI Settings render from `GET /api/platforms` field schema (Phase 2). **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) and [Platform Reference Docs](platform-reference.md).
 
 ## 1. Architecture (what you are building)
 
@@ -155,4 +155,4 @@ Pairing REST (`/api/pairing/*`) is platform-agnostic; config save for `require_p
 
 ## 10. Future improvement
 
-A `platform_registry` (like `config/agent_registry.rs`) could drive `DaemonEngine`, `status.rs`, `handle_get_platforms`, and WebUI settings from one list. Until then, grep for existing platform names when adding a new one.
+Register the platform in **`platform_registry.rs`** (`PLATFORM_DEFS`: id, `SessionSource`, transport, capabilities, config hooks, `spawn`). Grep existing `feishu` / `telegram` / `qq` for remaining match arms (WebUI config POST, wizard prompts, MCP delivery, platform module).

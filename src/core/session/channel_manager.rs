@@ -192,12 +192,7 @@ impl ChannelManager {
                 return c.clone();
             }
         }
-        let source = match platform {
-            "feishu" => SessionSource::Feishu,
-            "telegram" => SessionSource::Telegram,
-            "qq" => SessionSource::Qq,
-            _ => SessionSource::WebUI,
-        };
+        let source = crate::config::platform_registry::session_source_for_platform(platform);
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = Utc::now();
         let channel = ChannelSession {

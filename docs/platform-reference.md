@@ -65,10 +65,11 @@ Agents can call the gateway MCP tool **`send_file`** (see `core/runtime/mcp_serv
 
 | Platform | MCP `send_file` | Notes |
 |----------|-----------------|-------|
-| **Feishu** | Yes | Upload + `send_file_message` (`FeishuFileTarget`) |
-| **Telegram** | Yes | `sendDocument` multipart (`TelegramFileTarget`) |
-| **QQ** | **Yes** (limited) | Rich media upload + `msg_type` 7 (`QqFileTarget`). **Group:** image/video/voice only. **C2C:** also generic files (`file_type` 4). No inbound media forwarding yet. |
-| **CLI / WebUI** | N/A | No chat delivery target |
+| **Feishu** | Yes | Images: `im/v1/images` (`image_type=message`) + `msg_type=image` with `image_key` (inline preview). Other files: `im/v1/files` + `msg_type=file`. Image upload max **10 MB** (Feishu API). |
+| **Telegram** | Yes | Images: [`sendPhoto`](https://core.telegram.org/bots/api#sendphoto) multipart `photo`. Other files: `sendDocument`. |
+| **QQ** | **Yes** (limited) | Rich media upload + `msg_type` 7. **Inline images:** `file_type=1`, **PNG/JPG only** (QQ API); empty caption for picture-only bubble. **Group:** image/video/voice; WebP/GIF etc. fall back to C2C file (`file_type` 4) or error in group. |
+| **WebUI** | Yes | `McpDeliveryTarget::WebUi` — files land in chat via `GET /api/media/{id}`; user upload via `POST /api/sessions/{id}/upload` |
+| **CLI only** | N/A | No chat delivery target |
 
 When adding a chat platform, **document** MCP support in this table, `docs/bots/<platform>.md`, and the platform hooks table below. If not implemented on day one, state it explicitly so users do not expect agent file push.
 

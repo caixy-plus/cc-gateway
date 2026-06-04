@@ -63,6 +63,7 @@ WebUI **平台** 页应显示 Telegram。在 Telegram 私聊机器人发送 `/st
 - **内联按钮** — 部分权限确认支持 Allow / Deny 按钮。
 - **`/ll`** — 纯文本目录列表，配合 `/cd` 使用。
 - **会话隔离** — 每个 Telegram `chat_id` 独立会话状态。
+- **MCP `send_file`**：图片文件使用 Bot API **`sendPhoto`**（聊天内联预览）；其他文件使用 `sendDocument`。
 
 ## 故障排查
 

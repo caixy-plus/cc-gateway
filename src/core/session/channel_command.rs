@@ -58,8 +58,10 @@ impl ChatCommandContext {
     }
 
     pub(crate) fn with_webui_session(mut self, agent_session_id: impl Into<String>) -> Self {
+        let id = agent_session_id.into();
+        self.mcp_context = Some(crate::web::files::mcp_context_for_session(&id));
         self.stop_kind = SessionStopKind::Webui {
-            agent_session_id: agent_session_id.into(),
+            agent_session_id: id,
         };
         self
     }

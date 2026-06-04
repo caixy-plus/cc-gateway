@@ -95,9 +95,18 @@ pub(crate) async fn deliver_chat_outcome(
             current,
             options,
         } => {
-            let text = outcome_text::format_select_model(&provider, current.as_deref(), &options);
-            broadcast_command_reply(session_id, user_message, &text);
-            reply_response(&text)
+            let content = crate::web::interactive::build_model_picker_content(
+                &provider,
+                current.as_deref(),
+                &options,
+            );
+            broadcast_slash_user(session_id, user_message);
+            broadcast_assistant_reply(session_id, &content);
+            let hint = crate::web::interactive::model_picker_title_line(
+                &provider,
+                current.as_deref(),
+            );
+            reply_response(&hint)
         }
         ChatCommandOutcome::History { sessions } => {
             let text = outcome_text::format_history(&sessions);

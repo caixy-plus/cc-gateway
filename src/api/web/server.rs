@@ -57,6 +57,14 @@ pub fn create_app_with_config_path(
             post(handlers::session::handle_send_message),
         )
         .route(
+            "/api/sessions/{id}/upload",
+            post(handlers::session::handle_upload_file),
+        )
+        .route(
+            "/api/media/{filename}",
+            get(handlers::media::handle_get_media),
+        )
+        .route(
             "/api/sessions/{id}/permission",
             post(handlers::session::handle_permission),
         )

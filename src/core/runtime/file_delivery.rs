@@ -6,6 +6,8 @@ use serde_json::Value;
 
 pub const MCP_TARGET_ENV: &str = "CC_GATEWAY_MCP_TARGET";
 pub const MAX_OUTBOUND_FILE_BYTES: u64 = 30 * 1024 * 1024;
+/// Feishu image upload API limit (see open.feishu.cn im/v1/images).
+pub const FEISHU_MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpContext {
@@ -28,6 +30,7 @@ pub enum McpDeliveryTarget {
     Feishu(FeishuFileTarget),
     Telegram(TelegramFileTarget),
     Qq(QqFileTarget),
+    WebUi(crate::web::files::WebUiFileTarget),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +87,82 @@ impl FileDelivery for McpDeliveryTarget {
             McpDeliveryTarget::Feishu(target) => target.send_file(file).await,
             McpDeliveryTarget::Telegram(target) => target.send_file(file).await,
             McpDeliveryTarget::Qq(target) => target.send_file(file).await,
+            McpDeliveryTarget::WebUi(target) => target.send_file(file).await,
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl FileDelivery for crate::web::files::WebUiFileTarget {
+    async fn send_file(&self, file: OutboundFile) -> Result<SentFile> {
+        let content_type = mime_guess_from_name(&file.file_name);
+        let saved = crate::platform::inbound_media::save_bytes_to_media_dir_with_upstream_name(
+            &file.bytes,
+            &file.file_name,
+            Some(content_type),
+        )
+        .await?;
+        let media_key = crate::web::files::media_storage_basename(&saved.path)?;
+        let size = file.bytes.len() as u64;
+        crate::web::files::broadcast_file_attachment(
+            &self.session_id,
+            "assistant",
+            &media_key,
+            &file.file_name,
+            size,
+            saved.is_image,
+        );
+        Ok(SentFile {
+            platform: "webui".to_string(),
+            message_id: media_key,
+            file_name: file.file_name,
+            external_id: None,
+            raw: None,
+        })
+    }
+}
+
+/// Whether MCP outbound should use platform **image** APIs (inline preview), not generic file/document.
+pub fn outbound_file_is_image(file: &OutboundFile) -> bool {
+    if file.file_type == "image" {
+        return true;
+    }
+    image_extension_from_name(&file.file_name)
+}
+
+fn image_extension_from_name(name: &str) -> bool {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tiff" | "tif"
+            | "heic" | "heif"
+    )
+}
+
+fn mime_guess_from_name(name: &str) -> &'static str {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "tiff" | "tif" => "image/tiff",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "pdf" => "application/pdf",
+        "txt" | "md" => "text/plain",
+        _ => "application/octet-stream",
     }
 }
 
@@ -103,6 +181,41 @@ impl FileDelivery for FeishuFileTarget {
             crate::config::model::AgentProfiles::default(),
             false,
         );
+
+        if outbound_file_is_image(&file) {
+            if file.bytes.len() as u64 > FEISHU_MAX_IMAGE_BYTES {
+                anyhow::bail!(
+                    "{}",
+                    crate::t_fmt!(
+                        "feishu.image_too_large",
+                        MB = FEISHU_MAX_IMAGE_BYTES / 1024 / 1024
+                    )
+                );
+            }
+            let token = platform
+                .token_manager
+                .get_tenant_access_token()
+                .await
+                .context("Feishu tenant token for image upload")?;
+            let mime = mime_guess_from_name(&file.file_name);
+            let image_key = crate::platform::feishu::media::upload_image(
+                file.bytes,
+                &file.file_name,
+                mime,
+                &token,
+            )
+            .await?;
+            let message_id = platform
+                .send_image_message(&self.receive_id_type, &self.chat_id, &image_key)
+                .await?;
+            return Ok(SentFile {
+                platform: "feishu".to_string(),
+                message_id,
+                file_name: file.file_name,
+                external_id: Some(image_key),
+                raw: None,
+            });
+        }
 
         let file_key = platform
             .upload_file(&file.file_type, &file.file_name, file.bytes)
@@ -125,40 +238,51 @@ pub(crate) fn telegram_send_document_url(bot_token: &str) -> String {
     format!("https://api.telegram.org/bot{}/sendDocument", bot_token)
 }
 
+pub(crate) fn telegram_send_photo_url(bot_token: &str) -> String {
+    format!("https://api.telegram.org/bot{}/sendPhoto", bot_token)
+}
+
 #[async_trait::async_trait]
 impl FileDelivery for TelegramFileTarget {
     async fn send_file(&self, file: OutboundFile) -> Result<SentFile> {
         let file_name = file.file_name.clone();
+        let mime = mime_guess_from_name(&file_name);
+        let (url, field) = if outbound_file_is_image(&file) {
+            (telegram_send_photo_url(&self.bot_token), "photo")
+        } else {
+            (telegram_send_document_url(&self.bot_token), "document")
+        };
+
         let part = reqwest::multipart::Part::bytes(file.bytes)
             .file_name(file_name.clone())
-            .mime_str("application/octet-stream")
-            .context("Failed to build Telegram document multipart")?;
+            .mime_str(mime)
+            .context("Failed to build Telegram multipart")?;
         let form = reqwest::multipart::Form::new()
             .text("chat_id", self.chat_id.clone())
-            .part("document", part);
+            .part(field, part);
 
         let client = crate::platform::telegram::build_http_client(&self.proxy);
         let resp = client
-            .post(telegram_send_document_url(&self.bot_token))
+            .post(url)
             .multipart(form)
             .send()
             .await
-            .context("Failed to send Telegram document")?;
+            .with_context(|| format!("Failed to send Telegram {field}"))?;
         let status = resp.status();
         let body: Value = resp
             .json()
             .await
-            .context("Failed to parse Telegram sendDocument response")?;
+            .with_context(|| format!("Failed to parse Telegram {field} response"))?;
 
         if !status.is_success() {
-            anyhow::bail!("Telegram sendDocument failed: {} - {}", status, body);
+            anyhow::bail!("Telegram {field} failed: {} - {}", status, body);
         }
         if !body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
             let desc = body
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            anyhow::bail!("Telegram sendDocument API error: {}", desc);
+            anyhow::bail!("Telegram {field} API error: {}", desc);
         }
 
         let message_id = body
@@ -169,7 +293,9 @@ impl FileDelivery for TelegramFileTarget {
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| v.to_string())
             })
-            .ok_or_else(|| anyhow::anyhow!("Telegram sendDocument response missing message_id"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("Telegram {field} response missing message_id")
+            })?;
 
         Ok(SentFile {
             platform: "telegram".to_string(),
@@ -264,4 +390,32 @@ pub async fn validate_outbound_file(
         file_type: detect_file_type(path_str).to_string(),
         bytes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_file(name: &str, file_type: &str) -> OutboundFile {
+        OutboundFile {
+            path: PathBuf::from(name),
+            file_name: name.to_string(),
+            file_type: file_type.to_string(),
+            bytes: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn outbound_file_is_image_by_type_or_extension() {
+        assert!(outbound_file_is_image(&sample_file("x.bin", "image")));
+        assert!(outbound_file_is_image(&sample_file("photo.png", "stream")));
+        assert!(!outbound_file_is_image(&sample_file("doc.pdf", "pdf")));
+    }
+
+    #[test]
+    fn telegram_photo_url_differs_from_document() {
+        let token = "123:ABC";
+        assert!(telegram_send_photo_url(token).contains("sendPhoto"));
+        assert!(telegram_send_document_url(token).contains("sendDocument"));
+    }
 }

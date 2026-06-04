@@ -1,6 +1,7 @@
 pub mod cmd;
 pub mod config;
 pub mod deliver;
+pub mod media;
 pub mod pairing;
 pub mod session;
 pub mod system;

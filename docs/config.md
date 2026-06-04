@@ -27,23 +27,26 @@ All string values support `${VAR_NAME}` environment variable substitution.
       "default_args": ""
     }
   },
-  "feishu": {
-    "enabled": true,
-    "app_id": "${FEISHU_APP_ID}",
-    "app_secret": "${FEISHU_APP_SECRET}",
-    "require_pairing": true
-  },
-  "telegram": {
-    "enabled": false,
-    "bot_token": "${TELEGRAM_BOT_TOKEN}",
-    "require_pairing": true
-  },
-  "qq": {
-    "enabled": false,
-    "app_id": "${QQ_APP_ID}",
-    "app_secret": "${QQ_APP_SECRET}",
-    "sandbox": false,
-    "require_pairing": true
+  "platforms": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "${FEISHU_APP_ID}",
+      "app_secret": "${FEISHU_APP_SECRET}",
+      "require_pairing": true
+    },
+    "telegram": {
+      "enabled": false,
+      "bot_token": "${TELEGRAM_BOT_TOKEN}",
+      "proxy": "",
+      "require_pairing": true
+    },
+    "qq": {
+      "enabled": false,
+      "app_id": "${QQ_APP_ID}",
+      "app_secret": "${QQ_APP_SECRET}",
+      "sandbox": false,
+      "require_pairing": true
+    }
   },
   "default_dir": "~/Workspace",
   "show_thinking": false,
@@ -99,7 +102,11 @@ Each provider profile:
 
 Override per session: `/agent [provider] <extra args>`.
 
-### `feishu`
+### `platforms`
+
+Object keyed by platform id (`feishu`, `telegram`, `qq`, …). Legacy top-level `feishu` / `telegram` / `qq` keys are upgraded automatically on load. WebUI **Settings** and `GET /api/platforms` use the registry field schema for each integrated platform.
+
+#### `platforms.feishu`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -110,7 +117,7 @@ Override per session: `/agent [provider] <extra args>`.
 
 **Setup guide:** [bots/feishu.md](bots/feishu.md)
 
-### `telegram`
+#### `platforms.telegram`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -120,7 +127,7 @@ Override per session: `/agent [provider] <extra args>`.
 
 Uses **long-polling** (`getUpdates`) only. **Setup guide:** [bots/telegram.md](bots/telegram.md)
 
-### `qq`
+#### `platforms.qq`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

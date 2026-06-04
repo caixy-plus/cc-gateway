@@ -12,6 +12,10 @@ cc-gateway webui
 
 网关命令（`/agent`、`/cd`、`/ll` 等）在 WebUI 与各机器人聊天中可用。飞书 `/ll` 为交互卡片；Telegram、QQ、WebUI 为文本列表。
 
+### WebUI 收发文件
+
+在已启动的 WebUI 会话中，输入框旁的 **📎** 可上传文件（可在输入框填写说明文字作为 caption）。文件保存在 `~/.cc-gateway/media/`，并在聊天中展示；若 Agent 会话正在运行，会像机器人入站媒体一样转发给 Agent。Agent 通过 MCP `send_file` 回传的文件会出现在同一会话中，经 `/api/media/{filename}` 下载。
+
 ## 守护进程模式
 
 守护进程通过绑定本地端口 (`port` 配置项，默认 `17534`) 来保证单实例运行。如果已有守护进程在运行，`start` 会报告现有 PID 而不会启动第二个进程。

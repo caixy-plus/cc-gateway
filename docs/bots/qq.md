@@ -76,7 +76,7 @@ Channel ids used internally:
 
 - **`/ll`**, **`/agents`**: plain text lists (no QQ message cards yet).
 - **Permission prompts**: text-only (no inline approve buttons like Telegram).
-- **MCP `send_file`**: supported via rich media (`msg_type` 7). **Private (C2C):** images, video, voice, and generic files. **Group:** images, video, and voice only — PDF/zip etc. must be sent in private chat. Uses upload `POST …/files` then send with `media.file_info`.
+- **MCP `send_file`**: rich media (`msg_type` 7). **Inline images** use `file_type=1` (**PNG/JPG only**, per QQ API) with no extra caption text. **Private (C2C):** images, video, voice, and generic files (WebP/GIF may send as file type 4). **Group:** PNG/JPG images, video, voice only — PDF/zip etc. must be private chat.
 - **Restart** after changing `app_id`, `app_secret`, `sandbox`, or `enabled`.
 
 ## Troubleshooting

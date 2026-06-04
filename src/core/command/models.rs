@@ -171,7 +171,7 @@ pub fn canonical_model_id(provider: &str, model_id: &str) -> String {
 /// Parse a Pi RPC `Model` JSON value into `(provider, modelId)`.
 pub fn pi_model_from_json(value: &serde_json::Value) -> Option<(String, String)> {
     if let Some(s) = value.as_str() {
-        return parse_provider_model_id(s).map(|(p, id)| (p, id));
+        return parse_provider_model_id(s);
     }
     let provider = value
         .get("provider")

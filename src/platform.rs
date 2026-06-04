@@ -20,6 +20,9 @@ pub trait Platform: Send + Sync {
 
     /// Gracefully shut down the platform and all active chat sessions.
     async fn shutdown(&self);
+
+    /// Independent instance for the background `run()` task (daemon keeps another for `shutdown`).
+    fn clone_for_run(&self) -> Box<dyn Platform>;
 }
 
 /// Spawn a background task that listens to `DELIVER_BUS` and forwards

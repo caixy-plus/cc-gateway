@@ -162,8 +162,20 @@ impl QqApiClient {
         bytes: &[u8],
     ) -> Result<String> {
         let (qq_file_type, c2c_only) = classify_qq_media_type(file_name, gateway_file_type);
+        if gateway_file_type == "image"
+            && qq_file_type == 1
+            && !qq_inline_image_filename_ok(file_name)
+        {
+            anyhow::bail!("{}", crate::t!("qq.send_image_format_unsupported"));
+        }
         if matches!(target, QqFileChatTarget::Group { .. }) && c2c_only {
             anyhow::bail!("{}", crate::t!("qq.send_file_group_unsupported"));
+        }
+        if matches!(target, QqFileChatTarget::Group { .. })
+            && gateway_file_type == "image"
+            && qq_file_type != 1
+        {
+            anyhow::bail!("{}", crate::t!("qq.send_image_group_unsupported"));
         }
 
         let token = self.access_token().await?;
@@ -196,11 +208,16 @@ impl QqApiClient {
             anyhow::anyhow!("QQ upload response missing file_info: {}", upload_json)
         })?;
 
-        let caption = crate::t_fmt!("qq.sent_file_caption", NAME = file_name);
+        // Inline image (file_type=1): empty text so QQ shows the picture only (rich media msg_type 7).
+        let content = if qq_file_type == 1 {
+            String::new()
+        } else {
+            crate::t_fmt!("qq.sent_file_caption", NAME = file_name)
+        };
         let messages_url = target.messages_url(self.api_base());
         let send_body = json!({
             "msg_type": 7,
-            "content": caption,
+            "content": content,
             "media": file_info,
         });
         let send_resp = self
@@ -321,6 +338,16 @@ impl QqFileChatTarget {
     }
 }
 
+/// QQ rich-media inline image upload only supports **png/jpg** (official API v2).
+pub fn qq_inline_image_filename_ok(file_name: &str) -> bool {
+    let ext = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg")
+}
+
 /// Map gateway `detect_file_type` + filename to QQ `file_type` (1 image, 2 video, 3 voice, 4 file).
 /// Second return value: `true` when only C2C supports this type (e.g. generic files in groups).
 pub fn classify_qq_media_type(file_name: &str, gateway_file_type: &str) -> (u32, bool) {
@@ -329,14 +356,19 @@ pub fn classify_qq_media_type(file_name: &str, gateway_file_type: &str) -> (u32,
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+    if qq_inline_image_filename_ok(file_name) {
+        return (1, false);
+    }
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => return (1, false),
         "mp4" | "mov" | "avi" => return (2, false),
         "silk" | "wav" | "mp3" | "flac" | "ogg" | "opus" => return (3, false),
         _ => {}
     }
+    // GIF/WebP/etc.: C2C may send as generic file (type 4); groups cannot.
+    if gateway_file_type == "image" {
+        return (4, true);
+    }
     match gateway_file_type {
-        "image" => (1, false),
         "mp4" => (2, false),
         "opus" => (3, false),
         _ => (4, true),
@@ -485,9 +517,17 @@ mod tests {
     #[test]
     fn classify_media_types() {
         assert_eq!(classify_qq_media_type("a.png", "image"), (1, false));
+        assert_eq!(classify_qq_media_type("photo.webp", "image"), (4, true));
         assert_eq!(classify_qq_media_type("clip.mp4", "mp4"), (2, false));
         assert_eq!(classify_qq_media_type("note.pdf", "pdf"), (4, true));
         assert_eq!(classify_qq_media_type("readme.md", "stream"), (4, true));
+    }
+
+    #[test]
+    fn inline_image_only_png_jpg() {
+        assert!(qq_inline_image_filename_ok("a.PNG"));
+        assert!(qq_inline_image_filename_ok("b.jpeg"));
+        assert!(!qq_inline_image_filename_ok("c.gif"));
     }
 
     #[test]

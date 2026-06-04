@@ -1154,6 +1154,18 @@ pub fn t(key: &str) -> &str {
             Language::En => "This file type cannot be sent in QQ groups (images/videos/voice only). Use private chat (C2C) or send a PNG/JPG.",
             Language::ZhCN => "该文件类型无法发到 QQ 群（群聊仅支持图片/视频/语音富媒体）。请私聊发送，或改用 PNG/JPG 图片。",
         },
+        "qq.send_image_format_unsupported" => match lang {
+            Language::En => "QQ inline images must be PNG or JPG (per QQ Bot API). Convert the file or send it as a document in private chat.",
+            Language::ZhCN => "QQ 内联图片仅支持 PNG/JPG（官方富媒体规范）。请转换格式，或在私聊中以文件形式发送。",
+        },
+        "qq.send_image_group_unsupported" => match lang {
+            Language::En => "This image format cannot be shown inline in QQ groups (PNG/JPG only). Use private chat or convert to PNG/JPG.",
+            Language::ZhCN => "该图片格式无法在 QQ 群内联展示（群聊仅支持 PNG/JPG）。请私聊发送或转换为 PNG/JPG。",
+        },
+        "feishu.image_too_large" => match lang {
+            Language::En => "Image exceeds Feishu upload limit ({MB} MB). Use a smaller file or send as a document via the file API.",
+            Language::ZhCN => "图片超过飞书上传限制（{MB} MB）。请缩小文件，或通过文件接口发送。",
+        },
         "qq.group_chat_unsupported" => match lang {
             Language::En => "QQ group chat is not supported. Please DM (C2C) the bot instead.",
             Language::ZhCN => "暂不支持 QQ 群聊通道，请改为私聊（C2C）机器人。",
@@ -1355,6 +1367,10 @@ pub fn t(key: &str) -> &str {
         "webui.empty_message" => match lang {
             Language::En => "Empty message",
             Language::ZhCN => "空消息",
+        },
+        "webui.upload_missing_file" => match lang {
+            Language::En => "No file in upload",
+            Language::ZhCN => "上传缺少文件",
         },
         "webui.runtime_not_found" => match lang {
             Language::En => "WebUI runtime not found",

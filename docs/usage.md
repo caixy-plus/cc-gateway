@@ -12,6 +12,10 @@ cc-gateway webui
 
 Gateway commands (`/agent`, `/cd`, `/ll`, …) work in WebUI and in bot chats. `/ll` is an interactive card on Feishu and a text list on Telegram/QQ/WebUI.
 
+### Files in WebUI
+
+In an active WebUI session, use the **attach** (📎) button next to the input to upload a file (optional caption in the input box). Uploads are stored under `~/.cc-gateway/media/` and shown in chat; when the agent session is running, the file is forwarded to the agent like bot inbound media. Agents can push files back via MCP `send_file` — they appear in the same chat thread and download from `/api/media/{filename}`.
+
 ## Daemon Mode
 
 The daemon enforces a single instance by binding to a local port (`port` in config, default `17534`). If another daemon is already running, `start` will report the existing PID instead of spawning a second process.

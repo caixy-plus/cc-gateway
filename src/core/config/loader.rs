@@ -105,6 +105,8 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
         }
     }
 
+    migrate_platform_sections_to_platforms(obj);
+
     if let Some(agent) = obj.get("agent").cloned() {
         if agent.get("provider").is_some() && agent.get("default").is_none() {
             let provider = agent
@@ -139,6 +141,30 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
     }
 
     value
+}
+
+/// Move legacy top-level `feishu` / `telegram` / `qq` into `"platforms": { … }`.
+fn migrate_platform_sections_to_platforms(obj: &mut serde_json::Map<String, Value>) {
+    const KEYS: [&str; 3] = ["feishu", "telegram", "qq"];
+    let mut legacy: serde_json::Map<String, Value> = serde_json::Map::new();
+    for key in KEYS {
+        if let Some(v) = obj.remove(key) {
+            legacy.insert(key.to_string(), v);
+        }
+    }
+    if legacy.is_empty() {
+        return;
+    }
+    let platforms = obj
+        .entry("platforms".to_string())
+        .or_insert_with(|| json!({}));
+    if let Some(existing) = platforms.as_object_mut() {
+        for (k, v) in legacy {
+            existing.entry(k).or_insert(v);
+        }
+    } else {
+        obj.insert("platforms".to_string(), Value::Object(legacy));
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +222,19 @@ mod tests {
         assert!(!config_path.is_file());
         assert!(!config.agent.claude.enabled);
         assert!(ConfigLoader::initialize_runtime().is_ok());
+    }
+
+    #[test]
+    fn upgrade_moves_legacy_platform_keys_under_platforms() {
+        let raw = json!({
+            "feishu": { "enabled": true, "app_id": "x" },
+            "telegram": { "enabled": false }
+        });
+        let upgraded = upgrade_config_json(raw);
+        let config: GatewayConfig = serde_json::from_value(upgraded).unwrap();
+        assert!(config.platforms.feishu.enabled);
+        assert_eq!(config.platforms.feishu.app_id, "x");
+        assert!(!config.platforms.telegram.enabled);
     }
 
     #[test]

@@ -1400,6 +1400,10 @@ impl Platform for TelegramPlatform {
     async fn shutdown(&self) {
         self.shutdown_all_sessions().await;
     }
+
+    fn clone_for_run(&self) -> Box<dyn Platform> {
+        Box::new(self.clone())
+    }
 }
 // ---------------------------------------------------------------------------
 // Telegram API types

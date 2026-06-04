@@ -27,23 +27,26 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
       "default_args": ""
     }
   },
-  "feishu": {
-    "enabled": true,
-    "app_id": "${FEISHU_APP_ID}",
-    "app_secret": "${FEISHU_APP_SECRET}",
-    "require_pairing": true
-  },
-  "telegram": {
-    "enabled": false,
-    "bot_token": "${TELEGRAM_BOT_TOKEN}",
-    "require_pairing": true
-  },
-  "qq": {
-    "enabled": false,
-    "app_id": "${QQ_APP_ID}",
-    "app_secret": "${QQ_APP_SECRET}",
-    "sandbox": false,
-    "require_pairing": true
+  "platforms": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "${FEISHU_APP_ID}",
+      "app_secret": "${FEISHU_APP_SECRET}",
+      "require_pairing": true
+    },
+    "telegram": {
+      "enabled": false,
+      "bot_token": "${TELEGRAM_BOT_TOKEN}",
+      "proxy": "",
+      "require_pairing": true
+    },
+    "qq": {
+      "enabled": false,
+      "app_id": "${QQ_APP_ID}",
+      "app_secret": "${QQ_APP_SECRET}",
+      "sandbox": false,
+      "require_pairing": true
+    }
   },
   "default_dir": "~/Workspace",
   "show_thinking": false,
@@ -99,7 +102,11 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 
 会话级覆盖：`/agent [provider] <额外参数>`。
 
-### `feishu`
+### `platforms`
+
+以平台 id 为键（`feishu`、`telegram`、`qq` 等）。旧版顶层 `feishu` / `telegram` / `qq` 会在加载时自动迁入 `platforms`。WebUI **设置** 与 `GET /api/platforms` 按注册表字段 schema 渲染。
+
+#### `platforms.feishu`
 
 | 字段 | 类型 | 默认值 | 说明 |
 |-------|------|---------|------|
@@ -110,7 +117,7 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 
 **配置指南：** [bots/feishu.zh-CN.md](bots/feishu.zh-CN.md)
 
-### `telegram`
+#### `platforms.telegram`
 
 | 字段 | 类型 | 默认值 | 说明 |
 |-------|------|---------|------|
@@ -120,7 +127,7 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 
 仅支持 **长轮询**（`getUpdates`）。**配置指南：** [bots/telegram.zh-CN.md](bots/telegram.zh-CN.md)
 
-### `qq`
+#### `platforms.qq`
 
 | 字段 | 类型 | 默认值 | 说明 |
 |-------|------|---------|------|

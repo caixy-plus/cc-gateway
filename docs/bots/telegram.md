@@ -63,6 +63,7 @@ WebUI **Platforms** should list Telegram when polling is active. Send `/start` o
 - **Inline keyboards** — permission / confirm prompts may show **Allow / Deny** buttons where supported.
 - **`/ll`** — plain-text folder list (reply with path or use `/cd`); no interactive cards.
 - **Per-chat isolation** — each Telegram chat id has its own agent session state.
+- **MCP `send_file`**: image files use Bot API **`sendPhoto`** (inline preview); other files use `sendDocument`.
 
 ## Troubleshooting
 

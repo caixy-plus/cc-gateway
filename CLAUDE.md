@@ -175,7 +175,7 @@ Official vendor API / console links for building or debugging `src/platform/<nam
 ### Configuration (`src/core/config/`)
 
 - **`core/config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.
-- **`core/config/model.rs`**: `GatewayConfig` with `log`, `agent` (provider profiles), `feishu`, `telegram`, `qq`, plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
+- **`core/config/model.rs`**: `GatewayConfig` with `log`, `agent` (provider profiles), `platforms` (`feishu` / `telegram` / `qq` sections), plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
 - **`core/config/wizard.rs`**: Interactive setup via `cc-gateway init` (also editable in WebUI Settings).
 
 ### Web Server (`src/api/web/`)
@@ -220,7 +220,7 @@ Full checklist for wiring a new CLI/agent — integration styles (stream-json / 
 
 ## Adding a New Chat Platform (Bot)
 
-Full checklist for integrating a new chat bot — architecture, transport choice, backend steps **A–U**, platform-specific hooks, frontend (`../cc-gateway-webui`), config shape, init wizard, verification, naming — lives in **[docs/adding-chat-platform.md](docs/adding-chat-platform.md)**. Companion: [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md) (feature-parity matrix + A–E checklist) and § [Platform Reference Docs](#platform-reference-docs). Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling), **QQ** (OpenAPI v2 Gateway WebSocket). There is **no** `platform_registry` yet — grep existing `feishu`/`telegram`/`qq` match arms when adding one. Also complete § [User-facing documentation](#user-facing-documentation-keep-in-sync).
+Full checklist for integrating a new chat bot — architecture, transport choice, backend steps **A–U**, platform-specific hooks, frontend (`../cc-gateway-webui`), config shape, init wizard, verification, naming — lives in **[docs/adding-chat-platform.md](docs/adding-chat-platform.md)**. Companion: [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md) (feature-parity matrix + A–E checklist) and § [Platform Reference Docs](#platform-reference-docs). Current platforms: **Feishu**, **Telegram**, **QQ**. Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) centralizes daemon spawn, status, APIs, pairing, and restart policy — still add typed config + `src/platform/<name>/` per checklist. Also complete § [User-facing documentation](#user-facing-documentation-keep-in-sync).
 
 ## Key Patterns
 

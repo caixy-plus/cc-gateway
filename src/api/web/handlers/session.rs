@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, Query, State},
+    extract::{Json, Multipart, Path, Query, State},
     http::StatusCode,
     response::sse::{Event as SseEvent, Sse},
 };
@@ -22,7 +22,22 @@ use crate::session::channel_command::{
 };
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::chat_flow;
+use crate::session::channel_manager::ActiveAgentRuntime;
 use crate::web::state::{broadcast_event, EVENT_BUS};
+
+async fn resume_webui_agent(session_id: &str, state: &AppState) -> anyhow::Result<ActiveAgentRuntime> {
+    GLOBAL_CHANNEL_SESSIONS
+        .resume_agent_session_for_platform(
+            session_id,
+            &state.default_dir,
+            state.agent_settings.clone(),
+            state.show_thinking,
+            None,
+            Some(crate::web::files::mcp_context_for_session(session_id)),
+            None,
+        )
+        .await
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -283,7 +298,7 @@ pub async fn handle_start_session(
             state.agent_settings.clone(),
             state.show_thinking,
             None,
-            None,
+            Some(crate::web::files::mcp_context_for_session(&session_id)),
             provider_override,
         )
         .await
@@ -380,15 +395,7 @@ pub async fn handle_send_message(
     {
         Some(a) => a,
         None => {
-            match GLOBAL_CHANNEL_SESSIONS
-                .resume_agent_session_runtime(
-                    &session_id,
-                    &state.default_dir,
-                    state.agent_settings.clone(),
-                    state.show_thinking,
-                )
-                .await
-            {
+            match resume_webui_agent(&session_id, &state).await {
                 Ok(active) => {
                     let session = active.agent_session.clone();
                     let controller = active.controller.clone();
@@ -434,15 +441,7 @@ pub async fn handle_send_message(
                 .stop_webui_session(&channel_id, &session_id)
                 .await;
 
-            match GLOBAL_CHANNEL_SESSIONS
-                .resume_agent_session_runtime(
-                    &session_id,
-                    &state.default_dir,
-                    state.agent_settings.clone(),
-                    state.show_thinking,
-                )
-                .await
-            {
+            match resume_webui_agent(&session_id, &state).await {
                 Ok(new_active) => {
                     let session = new_active.agent_session.clone();
                     let controller = new_active.controller.clone();
@@ -530,6 +529,166 @@ pub async fn handle_send_message(
     )
     .await;
     (http.status, http.body)
+}
+
+pub async fn handle_upload_file(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    mut multipart: Multipart,
+) -> (StatusCode, String) {
+    let channel_id = match ensure_webui_channel(&state.default_dir).await {
+        Ok(id) => id,
+        Err(e) => {
+            let body = json_error(
+                "webui.runtime_not_found",
+                format!("Failed to ensure WebUI channel: {}", e),
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
+        }
+    };
+
+    let mut caption = String::new();
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name = String::from("file");
+    let mut content_type: Option<String> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let Some(name) = field.name() else {
+            continue;
+        };
+        match name {
+            "message" | "caption" => {
+                if let Ok(text) = field.text().await {
+                    caption = text;
+                }
+            }
+            "file" => {
+                file_name = field.file_name().unwrap_or("file").to_string();
+                content_type = field.content_type().map(str::to_string);
+                match field.bytes().await {
+                    Ok(bytes) => file_bytes = Some(bytes.to_vec()),
+                    Err(e) => {
+                        let body = json_error(
+                            "webui.upload_read_failed",
+                            format!("Failed to read upload: {e}"),
+                        );
+                        return (StatusCode::BAD_REQUEST, body.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(bytes) = file_bytes else {
+        let body = json_error("webui.upload_missing_file", crate::t!("webui.upload_missing_file"));
+        return (StatusCode::BAD_REQUEST, body.to_string());
+    };
+
+    let saved = match crate::web::files::save_upload_for_webui(
+        &bytes,
+        &file_name,
+        content_type.as_deref(),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            let body = json_error("webui.upload_failed", e.to_string());
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
+
+    let media_key = match crate::web::files::media_storage_basename(&saved.path) {
+        Ok(k) => k,
+        Err(e) => {
+            let body = json_error("webui.upload_failed", e.to_string());
+            return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
+        }
+    };
+    let display_name = sanitize_display_name(&file_name);
+    let size = bytes.len() as u64;
+
+    crate::web::files::broadcast_file_attachment(
+        &session_id,
+        "user",
+        &media_key,
+        &display_name,
+        size,
+        saved.is_image,
+    );
+
+    let agent_text = crate::platform::inbound_media::format_agent_message(
+        &caption,
+        std::slice::from_ref(&saved),
+    );
+
+    let mut forwarded = false;
+    if !agent_text.trim().is_empty() {
+        if let Some(active) = GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id)
+        {
+            ensure_webui_poller_task(&channel_id, &session_id, active.controller.clone()).await;
+            let channel_work_dir = GLOBAL_CHANNEL_SESSIONS
+                .get_channel(&channel_id)
+                .map(|c| c.work_dir)
+                .unwrap_or_else(|| active.agent_session.work_dir.clone());
+            let mut context = ChatCommandContext::new(
+                channel_id.clone(),
+                active.agent_session.title.clone(),
+                channel_work_dir,
+                Some(active.clone()),
+            )
+            .with_webui_session(session_id.clone());
+            let executor = ChatCommandExecutor::new(
+                &state.default_dir,
+                state.agent_settings.clone(),
+                state.show_thinking,
+            );
+            if let Ok(outcome) = chat_flow::route_and_execute(
+                &active.router,
+                &executor,
+                &mut context,
+                &agent_text,
+            )
+            .await
+            {
+                super::webui_outcome::sync_webui_active_after_execute(
+                    &channel_id,
+                    &session_id,
+                    context.active_agent.clone(),
+                );
+                if let Some(ref a) = context.active_agent {
+                    ensure_webui_poller_task(&channel_id, &session_id, a.controller.clone()).await;
+                }
+                let _ = super::webui_outcome::deliver_chat_outcome(
+                    &state,
+                    &channel_id,
+                    &session_id,
+                    &agent_text,
+                    outcome,
+                )
+                .await;
+                forwarded = true;
+            }
+        }
+    }
+
+    let body = json!({
+        "status": "ok",
+        "media": media_key,
+        "name": display_name,
+        "size": size,
+        "forwarded": forwarded,
+    });
+    (StatusCode::OK, body.to_string())
+}
+
+fn sanitize_display_name(name: &str) -> String {
+    std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string()
 }
 
 pub(crate) async fn ensure_webui_poller_task(

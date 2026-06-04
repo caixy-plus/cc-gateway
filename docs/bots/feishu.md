@@ -67,6 +67,7 @@ Look for Feishu WebSocket connection logs. In WebUI **Platforms**, Feishu should
 - **`/cd`**: In Feishu, path changes are constrained under `default_dir` (cannot navigate above it).
 - **Per-chat isolation**: Each Feishu chat (group or DM) has its own agent subprocess and channel session.
 - **Cards**: Only Feishu supports interactive cards; other platforms use plain text for `/ll`.
+- **MCP `send_file`**: PNG/JPG/GIF/WebP etc. are sent as **image messages** (inline preview) via Feishu image API; other types use file messages. Max image size **10 MB** per Feishu docs.
 
 ## Troubleshooting
 

@@ -1,13 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+/// Per-platform bot settings (`config.json` → `"platforms": { "feishu": … }`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlatformsMap {
+    pub feishu: FeishuConfig,
+    pub telegram: TelegramConfig,
+    pub qq: QqConfig,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GatewayConfig {
     pub log: LogConfig,
     pub agent: AgentProfiles,
-    pub feishu: FeishuConfig,
-    pub telegram: TelegramConfig,
-    pub qq: QqConfig,
+    pub platforms: PlatformsMap,
     /// Default working directory for gateway sessions.
     pub default_dir: String,
     /// Whether to display agent Thinking blocks in output.
@@ -136,9 +143,7 @@ impl Default for GatewayConfig {
         Self {
             log: LogConfig::default(),
             agent: AgentProfiles::default(),
-            feishu: FeishuConfig::default(),
-            telegram: TelegramConfig::default(),
-            qq: QqConfig::default(),
+            platforms: PlatformsMap::default(),
             default_dir: "~".to_string(),
             show_thinking: false,
             media_retention_days: 30,
@@ -391,14 +396,14 @@ impl GatewayConfig {
         config.agent.cursor.enabled = false;
         config.agent.pi.enabled = false;
         config.agent.opencode.enabled = false;
-        config.qq.enabled = false;
-        config.qq.app_id.clear();
-        config.qq.app_secret.clear();
-        config.feishu.enabled = false;
-        config.feishu.app_id.clear();
-        config.feishu.app_secret.clear();
-        config.telegram.enabled = false;
-        config.telegram.bot_token.clear();
+        config.platforms.qq.enabled = false;
+        config.platforms.qq.app_id.clear();
+        config.platforms.qq.app_secret.clear();
+        config.platforms.feishu.enabled = false;
+        config.platforms.feishu.app_id.clear();
+        config.platforms.feishu.app_secret.clear();
+        config.platforms.telegram.enabled = false;
+        config.platforms.telegram.bot_token.clear();
         config
     }
 }

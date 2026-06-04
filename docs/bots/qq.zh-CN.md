@@ -76,7 +76,7 @@ cc-gateway log -f
 
 - **`/ll`、`/agents`**：纯文本列表（暂无 QQ 消息卡片）。
 - **权限确认**：文本提示为主（无 Telegram 式内联按钮）。
-- **MCP `send_file`**：通过富媒体（`msg_type` 7）支持。**私聊**：图片、视频、语音及一般文件。**群聊**：仅图片/视频/语音，PDF 等请私聊发送。流程为先 `POST …/files` 上传再带 `media.file_info` 发送。
+- **MCP `send_file`**：富媒体（`msg_type` 7）。**内联图片** 使用 `file_type=1`（官方仅 **PNG/JPG**），无额外文字说明。**私聊**：图片、视频、语音及一般文件（WebP/GIF 等可能以文件 type 4 发送）。**群聊**：仅 PNG/JPG 图片、视频、语音；PDF 等请私聊。
 - **修改** `app_id`、`app_secret`、`sandbox`、`enabled` 后需 **重启守护进程**。
 
 ## 故障排查
