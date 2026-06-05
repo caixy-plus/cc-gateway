@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 use tracing::warn;
 
-use super::handle::extract_post_content;
+use super::api::extract_post_content;
 use super::media::{download_message_resource, save_downloaded_resource};
 use super::{FeishuPlatform, NormalizedMessage};
 use crate::platform::inbound_media::{self, SavedInboundMedia};

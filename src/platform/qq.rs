@@ -22,6 +22,7 @@ use crate::session::channel_command::{
 };
 use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
 use crate::session::chat_flow;
+use crate::session::outcome_text;
 
 pub use api::{QqApiClient, QqFileChatTarget};
 
@@ -430,17 +431,8 @@ impl QqPlatform {
                 }
             }
             ChatCommandOutcome::History { sessions } => {
-                if sessions.is_empty() {
-                    self.send_text(chat, crate::t!("feishu.no_sessions"))
-                        .await?;
-                } else {
-                    let body = sessions
-                        .iter()
-                        .map(|s| format!("- {} ({})", s.title, s.id))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    self.send_text(chat, &body).await?;
-                }
+                self.send_text(chat, &outcome_text::format_history(&sessions))
+                    .await?;
             }
             ChatCommandOutcome::ForwardToAgent { active, text } => {
                 let _guard = runtime.poll_lock.lock().await;

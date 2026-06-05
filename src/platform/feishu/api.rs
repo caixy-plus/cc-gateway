@@ -8,15 +8,12 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout, Duration as TokioDuration};
 use tracing::{debug, error, info, warn};
 
-use crate::platform::proto::{Frame, Header};
-
 use super::auth_middleware;
 use super::interaction;
 use super::{
     AnomalyTracker, BotInfo, BotInfoResp, ChatItem, DedupCache, FeishuChannelRuntime,
     FeishuPlatform, RateLimiter, ReactionCreateResp, WsClientConfig, WsEndpointResp,
-    FEISHU_CHUNK_DELAY_MS, FEISHU_MAX_TEXT_CHARS, METHOD_CONTROL, REACTION_FAILURE,
-    REACTION_TYPING,
+    FEISHU_CHUNK_DELAY_MS, FEISHU_MAX_TEXT_CHARS, REACTION_FAILURE, REACTION_TYPING,
 };
 use crate::config::model::{AgentProfiles, FeishuConfig};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
@@ -875,7 +872,7 @@ impl FeishuPlatform {
 }
 
 // ---------------------------------------------------------------------------
-// Free functions: text splitting, HTTP response, content extraction, frames
+// Free functions: text splitting, HTTP response, content extraction
 // ---------------------------------------------------------------------------
 
 pub(crate) fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
@@ -997,40 +994,4 @@ pub(crate) fn extract_post_content(content_str: &str) -> (String, Vec<String>) {
         texts.join("\n")
     };
     (text, image_keys)
-}
-
-pub(crate) fn build_ping_frame(service_id: i32) -> Frame {
-    Frame {
-        seq_id: 0,
-        log_id: 0,
-        service: service_id,
-        method: METHOD_CONTROL,
-        headers: vec![Header {
-            key: "type".to_string(),
-            value: "ping".to_string(),
-        }],
-        payload_encoding: None,
-        payload_type: None,
-        payload: None,
-        log_id_new: None,
-    }
-}
-
-pub(crate) fn build_ack_frame(original_frame: &Frame) -> Frame {
-    let mut ack_frame = original_frame.clone();
-
-    if !ack_frame.headers.iter().any(|h| h.key == "biz_rt") {
-        ack_frame.headers.push(Header {
-            key: "biz_rt".to_string(),
-            value: "0".to_string(),
-        });
-    }
-
-    let ack = serde_json::json!({
-        "code": 200,
-        "headers": {},
-        "data": null
-    });
-    ack_frame.payload = Some(ack.to_string().into_bytes());
-    ack_frame
 }

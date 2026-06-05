@@ -13,11 +13,15 @@ use crate::config::model::{AgentProfiles, TelegramConfig};
 use crate::platform::Platform;
 use crate::runtime::controller::AgentController;
 use crate::runtime::event_poller::EventPollSink;
+use crate::session::agent_history::{
+    AgentHistoryAction, AgentHistoryEnv, AgentHistoryOutcome, AgentHistoryRequest,
+};
 use crate::session::channel_command::{
     ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
 };
 use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
 use crate::session::chat_flow;
+use crate::session::outcome_text;
 use crate::t_fmt;
 
 mod inbound;
@@ -721,29 +725,7 @@ impl TelegramPlatform {
     pub(crate) fn history_message_text(
         sessions: &[crate::session::channel_model::AgentSession],
     ) -> String {
-        let china_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
-        let mut lines = vec![crate::t!("telegram.session_history_subtitle").to_string()];
-
-        for (idx, session) in sessions.iter().enumerate() {
-            let status_dot = if session.active {
-                "\u{1F7E2}"
-            } else {
-                "\u{26AA}"
-            };
-            let time = session
-                .created_at
-                .with_timezone(&china_tz)
-                .format("%Y-%m-%d %H:%M")
-                .to_string();
-            lines.push(String::new());
-            lines.push(format!("{}. {} {}", idx + 1, status_dot, session.title));
-            lines.push(format!("\u{1F916} {}", session.provider));
-            lines.push(format!("\u{1F4C1} {}", session.work_dir));
-            lines.push(format!("\u{1F552} {}", time));
-            lines.push(format!("\u{1F511} {}", session.display_session_id()));
-        }
-
-        lines.join("\n")
+        outcome_text::format_history(sessions)
     }
 
     async fn handle_update(&self, update: Update) -> Result<()> {
@@ -1057,43 +1039,14 @@ impl TelegramPlatform {
                         .await;
                     return Ok(());
                 }
-
-                let _runtime = self.get_channel(&chat_id_str).await;
-                match GLOBAL_CHANNEL_SESSIONS
-                    .resume_agent_session_for_platform(
-                        &session_id,
-                        &self.default_dir,
-                        self.agent_settings.clone(),
-                        self.show_thinking,
-                        None,
-                        Some(self.mcp_context_for_chat(&chat_id_str)),
-                        None,
-                    )
-                    .await
-                {
-                    Ok(active) => {
-                        let provider = active.agent_session.stored_provider();
-                        let work_dir = active.agent_session.work_dir.clone();
-                        if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                            rt.channel_session.work_dir = work_dir.clone();
-                            rt.active_agent = Some(active);
-                        }
-                        let text =
-                            crate::command::agents::session_restarted_message(&provider, &work_dir);
-                        let _ = self.edit_message_text(chat_id, message_id, &text).await;
-                    }
-                    Err(e) => {
-                        let provider = GLOBAL_CHANNEL_SESSIONS
-                            .get_agent_session(&session_id)
-                            .map(|s| s.stored_provider())
-                            .unwrap_or(self.agent_settings.default.clone());
-                        let text = crate::command::agents::failed_start_agent_message(&provider, e);
-                        let _ = self
-                            .answer_callback_query(&callback_query.id, Some(&text))
-                            .await;
-                        let _ = self.edit_message_text(chat_id, message_id, &text).await;
-                    }
-                }
+                self.handle_agent_history_callback(
+                    &chat_id_str,
+                    chat_id,
+                    message_id,
+                    &callback_query.id,
+                    AgentHistoryAction::Resume { session_id },
+                )
+                .await?;
             }
             TelegramCallbackAction::StartNewSession {
                 chat_id: action_chat_id,
@@ -1108,35 +1061,14 @@ impl TelegramPlatform {
                         .await;
                     return Ok(());
                 }
-
-                let runtime = self.get_channel(&chat_id_str).await;
-                let provider = GLOBAL_CHANNEL_SESSIONS
-                    .effective_channel_provider(&runtime.channel_session.id, &self.agent_settings);
-                let active = GLOBAL_CHANNEL_SESSIONS
-                    .start_agent_session_for_platform(
-                        crate::session::channel_manager::StartAgentSessionForPlatformArgs {
-                            channel_id: runtime.channel_session.id.clone(),
-                            title: format!("Telegram {}", chat_id),
-                            default_dir: self.default_dir.clone(),
-                            agent_settings: self.agent_settings.clone(),
-                            show_thinking: self.show_thinking,
-                            args: vec![],
-                            resume_session_id: None,
-                            work_dir_override: Some(work_dir),
-                            mcp_context: Some(self.mcp_context_for_chat(&chat_id_str)),
-                            provider_override: Some(provider),
-                        },
-                    )
-                    .await?;
-                let started_provider = active.agent_session.stored_provider();
-                let work_dir = active.agent_session.work_dir.clone();
-                if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-                    rt.channel_session.work_dir = work_dir.clone();
-                    rt.active_agent = Some(active);
-                }
-                let text =
-                    crate::command::agents::session_started_message(&started_provider, &work_dir);
-                let _ = self.edit_message_text(chat_id, message_id, &text).await;
+                self.handle_agent_history_callback(
+                    &chat_id_str,
+                    chat_id,
+                    message_id,
+                    &callback_query.id,
+                    AgentHistoryAction::StartNew { work_dir },
+                )
+                .await?;
             }
             TelegramCallbackAction::DeleteSession {
                 chat_id: action_chat_id,
@@ -1151,13 +1083,14 @@ impl TelegramPlatform {
                         .await;
                     return Ok(());
                 }
-
-                let text = if GLOBAL_CHANNEL_SESSIONS.remove_agent_session(&session_id) {
-                    crate::t!("telegram.session_deleted")
-                } else {
-                    crate::t!("telegram.cannot_delete_active")
-                };
-                let _ = self.edit_message_text(chat_id, message_id, text).await;
+                self.handle_agent_history_callback(
+                    &chat_id_str,
+                    chat_id,
+                    message_id,
+                    &callback_query.id,
+                    AgentHistoryAction::Delete { session_id },
+                )
+                .await?;
             }
             TelegramCallbackAction::PermissionResponse {
                 chat_id: action_chat_id,
@@ -1279,6 +1212,53 @@ impl TelegramPlatform {
                 }
             }
         }
+    }
+
+    fn agent_history_env(&self) -> AgentHistoryEnv {
+        AgentHistoryEnv {
+            default_dir: self.default_dir.clone(),
+            agent_settings: self.agent_settings.clone(),
+            show_thinking: self.show_thinking,
+        }
+    }
+
+    async fn handle_agent_history_callback(
+        &self,
+        chat_id_str: &str,
+        chat_id: i64,
+        message_id: i64,
+        callback_query_id: &str,
+        history_action: AgentHistoryAction,
+    ) -> Result<()> {
+        let runtime = self.get_channel(chat_id_str).await;
+        let req = AgentHistoryRequest {
+            channel_id: runtime.channel_session.id.clone(),
+            title: format!("Telegram {}", chat_id),
+            mcp_context: Some(self.mcp_context_for_chat(chat_id_str)),
+        };
+        let outcome =
+            crate::session::agent_history::run(&self.agent_history_env(), &req, history_action)
+                .await;
+        match outcome {
+            AgentHistoryOutcome::Started { active, message, .. } => {
+                if let Some(mut rt) = self.channels.get_mut(chat_id_str) {
+                    rt.channel_session.work_dir = active.agent_session.work_dir.clone();
+                    rt.active_agent = Some(active);
+                }
+                let _ = self.edit_message_text(chat_id, message_id, &message).await;
+            }
+            AgentHistoryOutcome::Deleted { message, .. } => {
+                let _ = self.edit_message_text(chat_id, message_id, &message).await;
+            }
+            AgentHistoryOutcome::Error { message } => {
+                let _ = self
+                    .answer_callback_query(callback_query_id, Some(&message))
+                    .await;
+                let _ = self.edit_message_text(chat_id, message_id, &message).await;
+            }
+            AgentHistoryOutcome::List { .. } => {}
+        }
+        Ok(())
     }
 
     fn spawn_deliver_listener(&self) {

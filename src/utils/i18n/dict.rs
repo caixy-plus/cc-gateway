@@ -808,8 +808,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "使用 /agents <智能体>（例如 /agents claude）。",
         },
         "builtin.agent_history_hint" => match lang {
-            Language::En => "Use /agent-history <number> to resume a session.",
-            Language::ZhCN => "使用 /agent-history <序号> 恢复会话。",
+            Language::En => "Use /agent-history <n> to resume, or /agent-history <n> new to start a new session in that record's work dir.",
+            Language::ZhCN => "使用 /agent-history <n> 恢复；或用 /agent-history <n> new 在该记录的工作目录新起会话。",
         },
         "builtin.changed_dir" => match lang {
             Language::En => "Changed directory to: {PATH}",
@@ -818,6 +818,10 @@ pub fn t(key: &str) -> &str {
         "builtin.cannot_delete_active" => match lang {
             Language::En => "Cannot delete an active session. Use /quit to stop it first.",
             Language::ZhCN => "无法删除活跃中的会话，请先使用 /quit 退出。",
+        },
+        "builtin.session_deleted" => match lang {
+            Language::En => "Session deleted.",
+            Language::ZhCN => "会话已删除。",
         },
         "builtin.no_active_session_to_quit" => match lang {
             Language::En => "No active session to quit. Use /quit in an active session or type /help for available commands.",
@@ -1080,6 +1084,10 @@ pub fn t(key: &str) -> &str {
         "feishu.card_resumed_title" => match lang {
             Language::En => "Session Resumed",
             Language::ZhCN => "会话已恢复",
+        },
+        "feishu.card_started_title" => match lang {
+            Language::En => "Session Started",
+            Language::ZhCN => "会话已启动",
         },
         "feishu.card_allowed" => match lang {
             Language::En => "Permission allowed.",

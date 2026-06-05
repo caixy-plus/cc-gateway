@@ -6,6 +6,9 @@ use crate::command::models;
 use crate::command::router::CommandAction;
 use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
+use crate::session::agent_history::{
+    AgentHistoryAction, AgentHistoryEnv, AgentHistoryOutcome, AgentHistoryRequest,
+};
 use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
 use crate::session::channel_model::AgentSession;
 use crate::{t, t_fmt};
@@ -341,55 +344,38 @@ impl ChatCommandExecutor {
                 }
             }
             CommandAction::ShowAgentHistory { arg } => {
+                let env = AgentHistoryEnv {
+                    default_dir: self.default_dir.clone(),
+                    agent_settings: self.agent_settings.clone(),
+                    show_thinking: self.show_thinking,
+                };
+                let req = AgentHistoryRequest {
+                    channel_id: context.channel_id.clone(),
+                    title: context.title.clone(),
+                    mcp_context: context.mcp_context.clone(),
+                };
                 let arg = arg.trim();
-                if arg.is_empty() {
-                    let sessions = GLOBAL_CHANNEL_SESSIONS
-                        .list_agent_sessions_by_channel(&context.channel_id, Some(10));
-                    return Ok(ChatCommandOutcome::History { sessions });
-                }
-                if let Ok(idx) = arg.parse::<usize>() {
-                    let sessions = GLOBAL_CHANNEL_SESSIONS
-                        .list_agent_sessions_by_channel(&context.channel_id, Some(10));
-                    if idx == 0 || idx > sessions.len() {
-                        return Ok(ChatCommandOutcome::Error(
-                            t!("builtin.invalid_history_index").to_string(),
-                        ));
-                    }
-                    let target = &sessions[idx - 1];
-                    match GLOBAL_CHANNEL_SESSIONS
-                        .resume_agent_session_for_platform(
-                            &target.id,
-                            &self.default_dir,
-                            self.agent_settings.clone(),
-                            self.show_thinking,
-                            Some(target.work_dir.clone()),
-                            context.mcp_context.clone(),
-                            None,
-                        )
-                        .await
-                    {
-                        Ok(active) => {
-                            context.channel_work_dir = active.agent_session.work_dir.clone();
-                            context.active_agent = Some(active.clone());
-                            let provider = active.agent_session.stored_provider();
-                            Ok(ChatCommandOutcome::Started {
-                                message: crate::command::agents::session_restarted_message(
-                                    &provider,
-                                    &active.agent_session.work_dir,
-                                ),
-                            })
-                        }
-                        Err(e) => Ok(ChatCommandOutcome::Error(
-                            crate::command::agents::failed_start_agent_message(
-                                &target.stored_provider(),
-                                e,
-                            ),
-                        )),
-                    }
+                let action = if arg.is_empty() {
+                    AgentHistoryAction::List
                 } else {
-                    Ok(ChatCommandOutcome::Error(
-                        t!("builtin.invalid_history_index").to_string(),
-                    ))
+                    match crate::session::agent_history::parse_history_arg(arg) {
+                        Ok((index, start_new)) => AgentHistoryAction::ByIndex { index, start_new },
+                        Err(message) => return Ok(ChatCommandOutcome::Error(message)),
+                    }
+                };
+                match crate::session::agent_history::run(&env, &req, action).await {
+                    AgentHistoryOutcome::List { sessions } => {
+                        Ok(ChatCommandOutcome::History { sessions })
+                    }
+                    AgentHistoryOutcome::Started { active, message, .. } => {
+                        context.channel_work_dir = active.agent_session.work_dir.clone();
+                        context.active_agent = Some(active);
+                        Ok(ChatCommandOutcome::Started { message })
+                    }
+                    AgentHistoryOutcome::Deleted { message, .. } => {
+                        Ok(ChatCommandOutcome::Reply(message))
+                    }
+                    AgentHistoryOutcome::Error { message } => Ok(ChatCommandOutcome::Error(message)),
                 }
             }
             CommandAction::FlushQueue { prompt } => match context.active_agent.as_ref() {

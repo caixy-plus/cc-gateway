@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 pub(crate) mod auth_middleware;
 pub(crate) mod cards;
-pub(crate) mod handle;
+pub(crate) mod api;
 pub(crate) mod inbound;
 pub(crate) mod interaction;
 pub(crate) mod media;
 
+pub(crate) mod runtime;
 pub(crate) mod ws;
 
 use std::sync::atomic::AtomicBool;
@@ -23,7 +24,7 @@ use crate::config::model::{AgentProfiles, FeishuConfig};
 use crate::session::channel_manager::ActiveAgentRuntime;
 
 // Re-export commonly used items from child modules
-pub(crate) use handle::{build_ack_frame, build_ping_frame, extract_post_content};
+pub(crate) use api::extract_post_content;
 
 // ---------------------------------------------------------------------------
 // Constants for Feishu pbbp2 WebSocket protocol
