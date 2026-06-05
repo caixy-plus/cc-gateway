@@ -58,8 +58,10 @@ impl ChatCommandContext {
     }
 
     pub(crate) fn with_webui_session(mut self, agent_session_id: impl Into<String>) -> Self {
+        let id = agent_session_id.into();
+        self.mcp_context = Some(crate::web::files::mcp_context_for_session(&id));
         self.stop_kind = SessionStopKind::Webui {
-            agent_session_id: agent_session_id.into(),
+            agent_session_id: id,
         };
         self
     }
@@ -528,7 +530,7 @@ impl ChatCommandExecutor {
                         )));
                     }
                     let hint = arg.trim();
-                    if matches!(provider, crate::config::model::AgentProvider::Claude) {
+                    if crate::command::agents::provider_compact_via_user_message(&provider) {
                         let text = if hint.is_empty() {
                             "/compact".to_string()
                         } else {

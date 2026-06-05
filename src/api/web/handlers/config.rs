@@ -5,29 +5,16 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use serde_json::json;
 
 pub(crate) fn mask_secret(s: &str) -> String {
-    if s.len() <= 8 {
-        "***".to_string()
-    } else {
-        format!("{}***{}", &s[..4], &s[s.len() - 4..])
-    }
+    crate::config::secrets::mask_secret(s)
 }
 
-/// Check if the frontend sent back a masked secret rather than a real one.
-///
-/// We consider it masked if it exactly matches the mask we would generate from the
-/// existing secret. This avoids false-positives when a real secret happens to contain `***`.
 fn is_masked_value(incoming: &str, existing_secret: &str) -> bool {
-    if incoming.is_empty() {
-        return false;
-    }
-    incoming == mask_secret(existing_secret)
+    crate::config::secrets::is_masked_secret(incoming, existing_secret)
 }
 
 pub async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let mut config = crate::config::loader::ConfigLoader::load().unwrap_or_default();
-    config.feishu.app_secret = mask_secret(&config.feishu.app_secret);
-    config.telegram.bot_token = mask_secret(&config.telegram.bot_token);
-    config.qq.app_secret = mask_secret(&config.qq.app_secret);
+    crate::config::platform_registry::mask_platform_secrets_in_config(&mut config);
     if let Some(ref token) = config.webui_token {
         config.webui_token = Some(mask_secret(token));
     }
@@ -121,39 +108,18 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
             config.agent = c;
         }
     }
-    if let Some(v) = body.get("feishu") {
-        if let Ok(c) = serde_json::from_value::<crate::config::model::FeishuConfig>(v.clone()) {
-            // Preserve real secrets if the frontend sent back masked values
-            if !is_masked_value(&c.app_secret, &config.feishu.app_secret) {
-                config.feishu.app_secret = c.app_secret;
-            }
-            config.feishu.enabled = c.enabled;
-            config.feishu.app_id = c.app_id;
-            config.feishu.require_pairing = c.require_pairing;
-        }
+    if let Some(platforms) = body.get("platforms").and_then(|v| v.as_object()) {
+        crate::config::platform_registry::apply_platforms_from_json(
+            &mut config,
+            platforms,
+            &is_masked_value,
+        );
     }
-    if let Some(v) = body.get("telegram") {
-        if let Ok(c) = serde_json::from_value::<crate::config::model::TelegramConfig>(v.clone()) {
-            // Preserve real secrets if the frontend sent back masked values
-            if !is_masked_value(&c.bot_token, &config.telegram.bot_token) {
-                config.telegram.bot_token = c.bot_token;
-            }
-            config.telegram.enabled = c.enabled;
-            config.telegram.require_pairing = c.require_pairing;
-            config.telegram.proxy = c.proxy;
-        }
-    }
-    if let Some(v) = body.get("qq") {
-        if let Ok(c) = serde_json::from_value::<crate::config::model::QqConfig>(v.clone()) {
-            if !is_masked_value(&c.app_secret, &config.qq.app_secret) {
-                config.qq.app_secret = c.app_secret;
-            }
-            config.qq.enabled = c.enabled;
-            config.qq.app_id = c.app_id;
-            config.qq.sandbox = c.sandbox;
-            config.qq.require_pairing = c.require_pairing;
-        }
-    }
+    crate::config::platform_registry::apply_legacy_platform_sections_from_json(
+        &mut config,
+        &body,
+        &is_masked_value,
+    );
 
     let assessment = crate::config::restart_policy::assess_config_changes(&before, &config);
 
@@ -161,12 +127,7 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         Ok(()) => {
             // Apply the pairing flags live so the toggle takes effect without
             // a daemon restart (running platforms read the manager, not config).
-            crate::session::pairing::GLOBAL_PAIRING_MANAGER
-                .set_require_pairing("feishu", config.feishu.require_pairing);
-            crate::session::pairing::GLOBAL_PAIRING_MANAGER
-                .set_require_pairing("telegram", config.telegram.require_pairing);
-            crate::session::pairing::GLOBAL_PAIRING_MANAGER
-                .set_require_pairing("qq", config.qq.require_pairing);
+            crate::config::platform_registry::apply_pairing_flags_from_config(&config);
             let body = json!({
                 "status": "saved",
                 "requires_restart": assessment.requires_restart,
@@ -184,34 +145,7 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
 
 pub async fn handle_get_platforms() -> Json<serde_json::Value> {
     let config = crate::config::loader::ConfigLoader::load().unwrap_or_default();
-    let mut platforms = Vec::new();
-
-    if config.feishu.enabled {
-        platforms.push(serde_json::json!({
-            "name": "feishu",
-            "enabled": true,
-            "state": crate::platform::status::get_state("feishu").as_str(),
-            "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("feishu"),
-        }));
-    }
-    if config.telegram.enabled {
-        platforms.push(serde_json::json!({
-            "name": "telegram",
-            "enabled": true,
-            "state": crate::platform::status::get_state("telegram").as_str(),
-            "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("telegram"),
-        }));
-    }
-    if config.qq.enabled {
-        platforms.push(serde_json::json!({
-            "name": "qq",
-            "enabled": true,
-            "state": crate::platform::status::get_state("qq").as_str(),
-            "require_pairing": GLOBAL_PAIRING_MANAGER.require_pairing("qq"),
-        }));
-    }
-
-    Json(serde_json::json!({ "platforms": platforms }))
+    Json(crate::config::platform_registry::build_platforms_api_response(&config))
 }
 
 /// Quick toggle for a platform's `require_pairing` flag. Applies live (no
@@ -227,7 +161,7 @@ pub async fn handle_set_require_pairing(
             return (StatusCode::BAD_REQUEST, body.to_string());
         }
     };
-    if platform != "feishu" && platform != "telegram" && platform != "qq" {
+    if crate::config::platform_registry::def_by_id(platform).is_none() {
         let body = json!({ "error": "Unknown platform" });
         return (StatusCode::BAD_REQUEST, body.to_string());
     }
@@ -238,11 +172,13 @@ pub async fn handle_set_require_pairing(
     // Persist to config.json so the choice survives a restart.
     if let Ok(path) = ConfigLoader::config_path() {
         let mut config = ConfigLoader::load_from(&path).unwrap_or_default();
-        match platform {
-            "feishu" => config.feishu.require_pairing = required,
-            "telegram" => config.telegram.require_pairing = required,
-            "qq" => config.qq.require_pairing = required,
-            _ => {}
+        if !crate::config::platform_registry::set_require_pairing_in_config(
+            &mut config,
+            platform,
+            required,
+        ) {
+            let body = json!({ "error": "Unknown platform" });
+            return (StatusCode::BAD_REQUEST, body.to_string());
         }
         if let Err(e) = ConfigLoader::save(&config) {
             let body = json!({ "error": format!("Failed to persist config: {}", e) });

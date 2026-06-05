@@ -328,7 +328,7 @@ impl CommandRouter {
                     ));
                 }
                 let hint = arg.trim();
-                if matches!(provider, AgentProvider::Claude) {
+                if crate::command::agents::provider_compact_via_user_message(&provider) {
                     let text = if hint.is_empty() {
                         "/compact".to_string()
                     } else {

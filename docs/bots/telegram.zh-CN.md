@@ -23,18 +23,23 @@
 
 ```json
 {
-  "telegram": {
-    "enabled": true,
-    "bot_token": "123456789:AA...你的Token",
-    "require_pairing": true
+  "platforms": {
+    "telegram": {
+      "enabled": true,
+      "bot_token": "123456789:AA...你的Token",
+      "require_pairing": true
+    }
   }
 }
 ```
+
+（完整 `config.json` 结构见 [config.zh-CN.md](../config.zh-CN.md)。）
 
 | 字段 | 说明 |
 |------|------|
 | `enabled` | 是否启动 Telegram 集成 |
 | `bot_token` | BotFather 提供的 Token |
+| `proxy` | 可选 HTTP/SOCKS 代理（空为直连） |
 | `require_pairing` | 新聊天是否须 WebUI 配对 |
 
 可使用环境变量：`"bot_token": "${TELEGRAM_BOT_TOKEN}"`。
@@ -61,8 +66,9 @@ WebUI **平台** 页应显示 Telegram。在 Telegram 私聊机器人发送 `/st
 
 - **仅长轮询** — 无 `webhook_url` 配置项。
 - **内联按钮** — 部分权限确认支持 Allow / Deny 按钮。
-- **`/ll`** — 纯文本目录列表，配合 `/cd` 使用。
+- **`/ll`** / **`/agents`** — **内联键盘** 按钮（目录 / 智能体选择），非纯文本列表。
 - **会话隔离** — 每个 Telegram `chat_id` 独立会话状态。
+- **MCP `send_file`**：图片文件使用 Bot API **`sendPhoto`**（聊天内联预览）；其他文件使用 `sendDocument`。
 
 ## 故障排查
 

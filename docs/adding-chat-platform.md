@@ -2,9 +2,9 @@
 
 > Back: [CLAUDE.md](../CLAUDE.md). Companion: [Adding a New Agent Provider](adding-agent-provider.md), [Platform Reference Docs](platform-reference.md), [platform-integration-checklist](platform-integration-checklist.md).
 
-Use this checklist when integrating a new chat bot (Feishu/Lark, Telegram, QQ, Discord, Slack, etc.). **Full checklist (do not skip items):** [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md).
+Use this checklist when integrating a new chat bot (Feishu/Lark, Telegram, QQ, Discord, Slack, etc.). **Full checklist (do not skip items):** [platform-integration-checklist.md](platform-integration-checklist.md).
 
-Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling), **QQ** (OpenAPI v2 Gateway WebSocket). Unlike agents, there is **no** `platform_registry` yet — several files still use explicit `feishu` / `telegram` / `qq` match arms (noted below). **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) and [Platform Reference Docs](platform-reference.md).
+Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling), **QQ** (OpenAPI v2 Gateway WebSocket). Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) drives daemon startup, connection status, `GET /api/platforms`, pairing flags, config restart policy, and `SessionSource` mapping — add a `PlatformDef` entry plus `src/platform/<name>/`. Typed per-platform sections live under **`platforms.<id>`** in `config.json`; WebUI Settings render from `GET /api/platforms` field schema (Phase 2). **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) and [Platform Reference Docs](platform-reference.md).
 
 ## 1. Architecture (what you are building)
 
@@ -61,7 +61,7 @@ Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` onl
 | **C. Restart policy** | `src/core/config/restart_policy.rs` | `daemon_restart_field_paths()` for `xxx.enabled`, secrets; `live_field_paths()` for `xxx.require_pairing` if it applies without restart; `assess_*` diff functions. |
 | **D. Platform module** | `src/platform/<name>/` | `<name>.rs` (module root): `struct XxxPlatform`, `impl Platform`. Submodules typical: `inbound.rs`, `handle.rs` or `ws.rs`, optional `cards.rs` / keyboards for interactive UI. |
 | **E. Export** | `src/platform.rs` | `pub mod <name>;` |
-| **F. Daemon** | `src/daemon/engine.rs` | If `config.<name>.enabled`, construct platform, `tokio::spawn(platform.run())`, push into `platforms` vec for shutdown; `GLOBAL_PAIRING_MANAGER.set_require_pairing("<name>", …)` on startup. |
+| **F. Registry + daemon** | `src/core/config/platform_registry.rs`, `src/daemon/engine.rs` | Add `PlatformDef` to `PLATFORM_DEFS` (spawn fn, pairing flag, restart/live paths, status). `engine.rs` calls `platform_registry::start_enabled_platforms` — do not hand-wire each platform in engine. |
 | **G. Connection status** | `src/platform/status.rs` | `set_state` / `get_state` for WebUI sidebar (today: static atoms per platform). |
 | **H. Session source** | `src/core/session/channel_model.rs`, `src/database.rs` | `SessionSource` variant + `source_to_str` / `str_to_source` for SQLite. |
 | **I. Channel mapping** | `src/core/session/channel_manager.rs` | `get_or_create_platform_channel`: map `platform` string → `SessionSource`. |
@@ -70,7 +70,7 @@ Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` onl
 | **L. Agent events** | Platform poll loop | `core/runtime/event_poller.rs` + `EventPollSink` impl (see `TelegramEventSink`) to stream `AgentEvent` → chat messages. |
 | **M. MCP `send_file`** | `src/core/runtime/file_delivery.rs`, `core/runtime/mcp_server.rs`, platform `mcp_context_for_*` | New `McpDeliveryTarget` variant + `FileDelivery` impl; `with_mcp_context` on inbound. Update MCP matrix + `docs/bots/<platform>.md` limits. |
 | **N. Deliver bus** | `platform.rs` | `spawn_deliver_listener("<name>", \|chat_id, text\| …)` if WebUI/daemon pushes files into chats. |
-| **O. Interactive UX** | e.g. `feishu/cards.rs`, Telegram inline keyboards | Platform-specific: `/ll` dir picker, `/agent` provider picker, session history cards, permission buttons. Feishu intercepts some commands **before** `CommandRouter` (see Architecture above). |
+| **O. Interactive UX** | e.g. `feishu/cards.rs`, Telegram inline keyboards | Map `ChatCommandOutcome` to platform UI: Feishu cards, Telegram inline keyboards, QQ plain text. Inbound slash commands use shared `route_and_execute` (not pre-intercepted). |
 | **P. Web API** | `src/api/web/handlers/config.rs` | Mask secrets in `handle_get_config`; merge body in `handle_save_config`; include in `handle_get_platforms` when `enabled`; extend `handle_set_require_pairing` allowlist. |
 | **Q. Init wizard** | `src/core/config/wizard.rs` | `configure_bot_step`: menu entry, enable flag, credential prompts, incomplete warnings. |
 | **R. i18n** | `src/utils/i18n/dict.rs` | Prefix `<name>.` for help, errors, shutdown notice, permission titles, command menu labels. |
@@ -85,10 +85,10 @@ Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` onl
 | Feature | Feishu | Telegram | QQ | Your platform |
 |---------|--------|----------|-----|----------------|
 | Pairing gate | `require_pairing` + WebUI approve | same | same | Call `GLOBAL_PAIRING_MANAGER` before handling |
-| `/ll` directory UI | Interactive card + callbacks | Text list | Text list | Map `ChatCommandOutcome::ListDir` |
-| `/agent` picker | Card buttons `set_agent` | Text list | Text list | Map `ChatCommandOutcome::SelectAgent` |
+| `/ll` directory UI | Interactive card + callbacks | Inline keyboard | Text list | Map `ChatCommandOutcome::ListDir` |
+| `/agent` picker | Card buttons `set_agent` | Inline keyboard | Text list | Map `ChatCommandOutcome::SelectAgent` |
 | Permission prompts | Card / text + callback | Inline buttons | Text + request id | Map `PermissionRequest` events |
-| **MCP `send_file`** | Yes (`FeishuFileTarget`) | Yes (`TelegramFileTarget`) | Yes (`QqFileTarget`, group limits) | `McpDeliveryTarget` + `with_mcp_context` |
+| **MCP `send_file`** | Yes (`FeishuFileTarget`) | Yes (`TelegramFileTarget`) | Yes (`QqFileTarget`, C2C only) | `McpDeliveryTarget` + `with_mcp_context` |
 | Shutdown notice | `feishu.shutdown_notice` i18n | `telegram.shutdown_notice` | `qq.shutdown_notice` | Send on daemon `Platform::shutdown` |
 | Unknown slash (no session) | `feishu.unknown_command` | Telegram help text | (shared builtins) | Reply with available commands |
 
@@ -108,30 +108,34 @@ Pairing REST (`/api/pairing/*`) is platform-agnostic; config save for `require_p
 
 ## 6. Config shape (for reference)
 
+Bot settings live under **`platforms.<id>`** (not top-level keys). Canonical full file: [config.md](config.md).
+
 ```json
 {
-  "feishu": {
-    "enabled": true,
-    "app_id": "${FEISHU_APP_ID}",
-    "app_secret": "${FEISHU_APP_SECRET}",
-    "require_pairing": true
-  },
-  "telegram": {
-    "enabled": false,
-    "bot_token": "${TELEGRAM_BOT_TOKEN}",
-    "require_pairing": true
-  },
-  "qq": {
-    "enabled": false,
-    "app_id": "${QQ_APP_ID}",
-    "app_secret": "${QQ_APP_SECRET}",
-    "sandbox": false,
-    "require_pairing": true
+  "platforms": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "${FEISHU_APP_ID}",
+      "app_secret": "${FEISHU_APP_SECRET}",
+      "require_pairing": true
+    },
+    "telegram": {
+      "enabled": false,
+      "bot_token": "${TELEGRAM_BOT_TOKEN}",
+      "require_pairing": true
+    },
+    "qq": {
+      "enabled": false,
+      "app_id": "${QQ_APP_ID}",
+      "app_secret": "${QQ_APP_SECRET}",
+      "sandbox": false,
+      "require_pairing": true
+    }
   }
 }
 ```
 
-`${VAR}` substitution happens in `config/loader.rs`. Changing `enabled` or bot credentials requires a **daemon restart**; toggling `require_pairing` applies **live** (see `restart_policy`).
+`${VAR}` substitution happens in `config/loader.rs`. Legacy top-level platform keys are migrated into `platforms` on load and **persisted** when the structure changes. Changing `enabled` or bot credentials requires a **daemon restart**; toggling `require_pairing` applies **live** (see `restart_policy`).
 
 ## 7. Init wizard (`cc-gateway init`)
 
@@ -155,4 +159,4 @@ Pairing REST (`/api/pairing/*`) is platform-agnostic; config save for `require_p
 
 ## 10. Future improvement
 
-A `platform_registry` (like `config/agent_registry.rs`) could drive `DaemonEngine`, `status.rs`, `handle_get_platforms`, and WebUI settings from one list. Until then, grep for existing platform names when adding a new one.
+Register the platform in **`platform_registry.rs`** (`PLATFORM_DEFS`: id, `SessionSource`, transport, capabilities, config hooks, `spawn`). Grep existing `feishu` / `telegram` / `qq` for remaining match arms (WebUI config POST, wizard prompts, MCP delivery, platform module).

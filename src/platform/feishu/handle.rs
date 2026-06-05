@@ -634,6 +634,55 @@ impl FeishuPlatform {
         Ok(message_id)
     }
 
+    /// Send an image message (inline preview in Feishu chat).
+    pub async fn send_image_message(
+        &self,
+        receive_id_type: &str,
+        receive_id: &str,
+        image_key: &str,
+    ) -> Result<String> {
+        let url = "https://open.feishu.cn/open-apis/im/v1/messages";
+        let resp = self
+            .http_client
+            .post(url)
+            .query(&[("receive_id_type", receive_id_type)])
+            .json(&json!({
+                "receive_id": receive_id,
+                "msg_type": "image",
+                "content": json!({"image_key": image_key}).to_string(),
+            }))
+            .send()
+            .await
+            .context("Failed to send Feishu image message")?;
+
+        let status = resp.status();
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse image message response")?;
+        if !status.is_success() {
+            anyhow::bail!("Feishu send image message failed: {} - {}", status, body);
+        }
+        let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+        if code != 0 {
+            let msg = body
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            anyhow::bail!(
+                "Feishu send image message API error: code={}, msg={}",
+                code,
+                msg
+            );
+        }
+
+        body.get("data")
+            .and_then(|d| d.get("message_id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("Feishu send image message response missing message_id"))
+    }
+
     pub async fn list_chats(&self) -> Result<Vec<ChatItem>> {
         let url = "https://open.feishu.cn/open-apis/im/v1/chats";
         let resp = self

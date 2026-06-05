@@ -1,0 +1,18 @@
+---
+description: Git branch naming — use feature/ prefix for feature branches
+alwaysApply: true
+---
+
+# Git branch naming
+
+When creating a branch for new work in **cc-gateway** or the sibling **cc-gateway-webui** repo:
+
+- **Feature branches** must use the prefix `feature/` (not `feat/`).
+- Use a short **kebab-case** slug after the prefix, e.g. `feature/platform-registry-webui-files-models`.
+- Backend and frontend changes for the same effort should use the **same branch name** in both repos when possible.
+
+```bash
+git checkout -b feature/my-change-slug
+```
+
+Do not rename to `feat/...` or bare names without a type prefix unless the user explicitly requests a different convention.

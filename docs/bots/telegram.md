@@ -23,18 +23,23 @@ Edit `~/.cc-gateway/config.json` or WebUI **Settings → Telegram**:
 
 ```json
 {
-  "telegram": {
-    "enabled": true,
-    "bot_token": "123456789:AA...your_token",
-    "require_pairing": true
+  "platforms": {
+    "telegram": {
+      "enabled": true,
+      "bot_token": "123456789:AA...your_token",
+      "require_pairing": true
+    }
   }
 }
 ```
+
+(Full `config.json` layout: [config.md](../config.md).)
 
 | Field | Description |
 |-------|-------------|
 | `enabled` | Start Telegram integration when the daemon runs |
 | `bot_token` | Token from BotFather |
+| `proxy` | Optional HTTP/SOCKS proxy for Bot API (empty = direct) |
 | `require_pairing` | New chats must be approved in WebUI |
 
 Use env substitution: `"bot_token": "${TELEGRAM_BOT_TOKEN}"`.
@@ -61,8 +66,9 @@ WebUI **Platforms** should list Telegram when polling is active. Send `/start` o
 
 - **Long-polling only** — no `webhook_url` setting; the daemon pulls updates continuously.
 - **Inline keyboards** — permission / confirm prompts may show **Allow / Deny** buttons where supported.
-- **`/ll`** — plain-text folder list (reply with path or use `/cd`); no interactive cards.
+- **`/ll`** / **`/agents`** — **inline keyboard** buttons (folder picker / agent picker); not plain-text-only.
 - **Per-chat isolation** — each Telegram chat id has its own agent session state.
+- **MCP `send_file`**: image files use Bot API **`sendPhoto`** (inline preview); other files use `sendDocument`.
 
 ## Troubleshooting
 

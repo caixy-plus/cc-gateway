@@ -1,8 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::config::model::{
-    AgentProfiles, FeishuConfig, GatewayConfig, LogConfig, QqConfig, TelegramConfig,
-};
+use crate::config::model::{AgentProfiles, GatewayConfig, LogConfig};
 
 /// Describes which saved config changes need a daemon restart vs apply live.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,42 +14,9 @@ pub struct ConfigRestartAssessment {
 /// Metadata returned to the WebUI so it can show accurate hints without hard-coding.
 pub fn restart_policy_metadata() -> Value {
     json!({
-        "daemon_restart": daemon_restart_field_paths(),
-        "live": live_field_paths(),
+        "daemon_restart": crate::config::platform_registry::daemon_restart_field_paths(),
+        "live": crate::config::platform_registry::live_field_paths(),
     })
-}
-
-pub fn daemon_restart_field_paths() -> Vec<&'static str> {
-    vec![
-        "port",
-        "bind_address",
-        "allowed_ips",
-        "webui_token",
-        "default_dir",
-        "show_thinking",
-        "media_retention_days",
-        "session_retention_per_channel",
-        "log",
-        "agent",
-        "feishu.enabled",
-        "feishu.app_id",
-        "feishu.app_secret",
-        "telegram.enabled",
-        "telegram.bot_token",
-        "telegram.proxy",
-        "qq.enabled",
-        "qq.app_id",
-        "qq.app_secret",
-        "qq.sandbox",
-    ]
-}
-
-pub fn live_field_paths() -> Vec<&'static str> {
-    vec![
-        "feishu.require_pairing",
-        "telegram.require_pairing",
-        "qq.require_pairing",
-    ]
 }
 
 /// Compare config before/after a save merge.
@@ -92,19 +57,12 @@ pub fn assess_config_changes(
     if agent_requires_restart(&before.agent, &after.agent) {
         restart_fields.push("agent".to_string());
     }
-    feishu_restart_fields(
-        &before.feishu,
-        &after.feishu,
+    crate::config::platform_registry::assess_platform_config_changes(
+        before,
+        after,
         &mut restart_fields,
         &mut live_fields,
     );
-    telegram_restart_fields(
-        &before.telegram,
-        &after.telegram,
-        &mut restart_fields,
-        &mut live_fields,
-    );
-    qq_restart_fields(&before.qq, &after.qq, &mut restart_fields, &mut live_fields);
 
     let requires_restart = !restart_fields.is_empty();
     ConfigRestartAssessment {
@@ -125,69 +83,6 @@ fn agent_requires_restart(before: &AgentProfiles, after: &AgentProfiles) -> bool
     before != after
 }
 
-fn feishu_restart_fields(
-    before: &FeishuConfig,
-    after: &FeishuConfig,
-    restart_fields: &mut Vec<String>,
-    live_fields: &mut Vec<String>,
-) {
-    if before.enabled != after.enabled {
-        restart_fields.push("feishu.enabled".to_string());
-    }
-    if before.app_id != after.app_id {
-        restart_fields.push("feishu.app_id".to_string());
-    }
-    if before.app_secret != after.app_secret {
-        restart_fields.push("feishu.app_secret".to_string());
-    }
-    if before.require_pairing != after.require_pairing {
-        live_fields.push("feishu.require_pairing".to_string());
-    }
-}
-
-fn telegram_restart_fields(
-    before: &TelegramConfig,
-    after: &TelegramConfig,
-    restart_fields: &mut Vec<String>,
-    live_fields: &mut Vec<String>,
-) {
-    if before.enabled != after.enabled {
-        restart_fields.push("telegram.enabled".to_string());
-    }
-    if before.bot_token != after.bot_token {
-        restart_fields.push("telegram.bot_token".to_string());
-    }
-    if before.proxy != after.proxy {
-        restart_fields.push("telegram.proxy".to_string());
-    }
-    if before.require_pairing != after.require_pairing {
-        live_fields.push("telegram.require_pairing".to_string());
-    }
-}
-
-fn qq_restart_fields(
-    before: &QqConfig,
-    after: &QqConfig,
-    restart_fields: &mut Vec<String>,
-    live_fields: &mut Vec<String>,
-) {
-    if before.enabled != after.enabled {
-        restart_fields.push("qq.enabled".to_string());
-    }
-    if before.app_id != after.app_id {
-        restart_fields.push("qq.app_id".to_string());
-    }
-    if before.app_secret != after.app_secret {
-        restart_fields.push("qq.app_secret".to_string());
-    }
-    if before.sandbox != after.sandbox {
-        restart_fields.push("qq.sandbox".to_string());
-    }
-    if before.require_pairing != after.require_pairing {
-        live_fields.push("qq.require_pairing".to_string());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,8 +91,8 @@ mod tests {
     fn pairing_only_change_does_not_require_restart() {
         let before = GatewayConfig::default();
         let mut after = before.clone();
-        after.feishu.require_pairing = false;
-        after.telegram.require_pairing = false;
+        after.platforms.feishu.require_pairing = false;
+        after.platforms.telegram.require_pairing = false;
 
         let assessment = assess_config_changes(&before, &after);
         assert!(!assessment.requires_restart);
@@ -220,7 +115,7 @@ mod tests {
     fn feishu_enable_requires_restart() {
         let before = GatewayConfig::default();
         let mut after = before.clone();
-        after.feishu.enabled = false;
+        after.platforms.feishu.enabled = false;
         let assessment = assess_config_changes(&before, &after);
         assert!(assessment.requires_restart);
         assert!(assessment
@@ -232,7 +127,7 @@ mod tests {
     fn qq_sandbox_change_requires_restart() {
         let before = GatewayConfig::default();
         let mut after = before.clone();
-        after.qq.sandbox = true;
+        after.platforms.qq.sandbox = true;
         let assessment = assess_config_changes(&before, &after);
         assert!(assessment.requires_restart);
         assert!(assessment
@@ -244,7 +139,7 @@ mod tests {
     fn qq_require_pairing_change_is_live_only() {
         let before = GatewayConfig::default();
         let mut after = before.clone();
-        after.qq.require_pairing = false;
+        after.platforms.qq.require_pairing = false;
         let assessment = assess_config_changes(&before, &after);
         assert!(!assessment.requires_restart);
         assert!(assessment

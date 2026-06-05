@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tokio::sync::mpsc;
 
+use crate::agent::backend::AgentBackend;
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
 use crate::agent::mcp_attach::{log_unsupported_mcp, supports_mcp_attach};
@@ -27,6 +28,15 @@ pub enum AgentRuntime {
 }
 
 impl AgentRuntime {
+    pub fn provider_kind(&self) -> AgentProvider {
+        match self {
+            Self::Claude(_) => AgentProvider::Claude,
+            Self::Cursor(_) => AgentProvider::Cursor,
+            Self::Pi(_) => AgentProvider::Pi,
+            Self::OpenCode(_) => AgentProvider::OpenCode,
+        }
+    }
+
     pub async fn spawn(
         work_dir: String,
         extra_args: Vec<String>,
@@ -100,181 +110,67 @@ impl AgentRuntime {
     }
 
     pub async fn send_message(&mut self, text: &str) -> Result<()> {
-        match self {
-            AgentRuntime::Claude(session) => {
-                session
-                    .send(crate::runtime::protocol::build_user_message(text))
-                    .await
-            }
-            AgentRuntime::Cursor(session) => session.send_user_message(text).await,
-            AgentRuntime::Pi(session) => session.send_user_message(text).await,
-            AgentRuntime::OpenCode(session) => session.send_user_message(text).await,
-        }
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::send_user_message(b, text).await)
     }
 
     /// Flush queued user messages (Claude stream-json `interrupt` frame).
     pub async fn flush_queued_messages(&mut self) -> Result<()> {
-        match self {
-            AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
-            AgentRuntime::Cursor(_) | AgentRuntime::Pi(_) | AgentRuntime::OpenCode(_) => Ok(()),
-        }
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::flush_queued_messages(b).await)
     }
 
     /// Stop the current generation without killing the session.
     pub async fn send_stop_generation(&mut self) -> Result<()> {
-        match self {
-            // stream-json mode does not accept `/stop` as a user message; use interrupt frame.
-            AgentRuntime::Claude(session) => session.send(InputMessage::Interrupt).await,
-            AgentRuntime::Cursor(session) => session.send_cancel().await,
-            AgentRuntime::Pi(session) => session.send_cancel().await,
-            AgentRuntime::OpenCode(session) => session.send_cancel().await,
-        }
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::send_stop_generation(b).await)
     }
 
     pub async fn set_model(&mut self, provider: &AgentProvider, model_id: &str) -> Result<String> {
-        match self {
-            AgentRuntime::Pi(session) => {
-                let Some((p, mid)) = crate::command::models::parse_provider_model_id(model_id)
-                else {
-                    anyhow::bail!("{}", crate::t!("models.pi_requires_provider_model"));
-                };
-                session.set_model(&p, &mid).await
-            }
-            AgentRuntime::OpenCode(session) => {
-                session.set_model(model_id).await?;
-                Ok(model_id.to_string())
-            }
-            AgentRuntime::Claude(_) | AgentRuntime::Cursor(_) => {
-                anyhow::bail!(
-                    "{}",
-                    crate::t_fmt!(
-                        "models.not_supported_platform_agent",
-                        NAME = crate::command::agents::provider_display_name(provider)
-                    )
-                )
-            }
-        }
+        crate::dispatch_agent_backend!(
+            self,
+            |b| AgentBackend::set_model(b, provider, model_id).await
+        )
     }
 
     /// Start a fresh provider session (ACP `session/new`, Pi `new_session`, Claude respawn).
     /// Returns the new provider session id when the backend exposes one.
     pub async fn compact_context(&mut self, instructions: Option<&str>) -> Result<String> {
-        match self {
-            AgentRuntime::Claude(session) => {
-                let text = match instructions.filter(|s| !s.trim().is_empty()) {
-                    Some(hint) => format!("/compact {hint}"),
-                    None => "/compact".to_string(),
-                };
-                session
-                    .send(crate::runtime::protocol::build_user_message(&text))
-                    .await?;
-                Ok(String::new())
-            }
-            AgentRuntime::Pi(session) => session.compact_context(instructions).await,
-            AgentRuntime::Cursor(_) => anyhow::bail!(
-                "{}",
-                crate::t_fmt!(
-                    "builtin.compact_not_supported",
-                    NAME = crate::command::agents::provider_display_name(&AgentProvider::Cursor)
-                )
-            ),
-            AgentRuntime::OpenCode(_) => anyhow::bail!(
-                "{}",
-                crate::t_fmt!(
-                    "builtin.compact_not_supported",
-                    NAME = crate::command::agents::provider_display_name(&AgentProvider::OpenCode)
-                )
-            ),
-        }
+        let provider = self.provider_kind();
+        crate::dispatch_agent_backend!(
+            self,
+            |b| AgentBackend::compact_context(b, instructions, provider).await
+        )
     }
 
     pub async fn new_provider_session(
         &mut self,
         ctx: &NewProviderSessionCtx<'_>,
     ) -> Result<Option<String>> {
-        match self {
-            AgentRuntime::Claude(session) => {
-                session
-                    .restart_fresh(ctx.extra_args.clone(), ctx.config, ctx.mcp_context.clone())
-                    .await
-            }
-            AgentRuntime::Cursor(session) => {
-                session
-                    .new_provider_session(&ctx.work_dir, ctx.config)
-                    .await
-            }
-            AgentRuntime::Pi(session) => session.new_provider_session().await,
-            AgentRuntime::OpenCode(session) => {
-                session
-                    .new_provider_session(&ctx.work_dir, ctx.config)
-                    .await
-            }
-        }
+        crate::dispatch_agent_backend!(
+            self,
+            |b| AgentBackend::new_provider_session(b, ctx).await
+        )
     }
 
     pub async fn send_input(&mut self, msg: InputMessage) -> Result<()> {
-        match self {
-            AgentRuntime::Claude(session) => session.send(msg).await,
-            AgentRuntime::Cursor(session) => match msg {
-                InputMessage::ControlResponse { response } => {
-                    let allow = response.response.behavior == "allow";
-                    session
-                        .send_permission_response(&response.request_id, allow)
-                        .await
-                }
-                InputMessage::User { message } => {
-                    let text = message
-                        .content
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| message.content.to_string());
-                    session.send_user_message(&text).await
-                }
-                InputMessage::Interrupt => Ok(()),
-            },
-            AgentRuntime::Pi(session) => match msg {
-                InputMessage::ControlResponse { response } => {
-                    let allow = response.response.behavior == "allow";
-                    session
-                        .send_permission_response(&response.request_id, allow)
-                        .await
-                }
-                InputMessage::User { message } => {
-                    let text = message
-                        .content
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| message.content.to_string());
-                    session.send_user_message(&text).await
-                }
-                InputMessage::Interrupt => Ok(()),
-            },
-            AgentRuntime::OpenCode(session) => match msg {
-                InputMessage::ControlResponse { response } => {
-                    let allow = response.response.behavior == "allow";
-                    session
-                        .send_permission_response(&response.request_id, allow)
-                        .await
-                }
-                InputMessage::User { message } => {
-                    let text = message
-                        .content
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| message.content.to_string());
-                    session.send_user_message(&text).await
-                }
-                InputMessage::Interrupt => Ok(()),
-            },
-        }
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::send_input(b, msg).await)
+    }
+
+    pub async fn active_model_id(&mut self) -> Result<Option<String>> {
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::active_model_id(b).await)
+    }
+
+    pub async fn list_available_models_in_session(&mut self) -> Result<Vec<String>> {
+        crate::dispatch_agent_backend!(
+            self,
+            |b| AgentBackend::list_available_models_in_session(b).await
+        )
     }
 
     pub async fn stop(self) -> Result<()> {
         match self {
-            AgentRuntime::Claude(session) => session.stop().await,
-            AgentRuntime::Cursor(session) => session.stop().await,
-            AgentRuntime::Pi(session) => session.stop().await,
-            AgentRuntime::OpenCode(session) => session.stop().await,
+            Self::Claude(session) => session.stop().await,
+            Self::Cursor(session) => session.stop().await,
+            Self::Pi(session) => session.stop().await,
+            Self::OpenCode(session) => session.stop().await,
         }
     }
 
@@ -284,29 +180,19 @@ impl AgentRuntime {
     /// responsive even if the provider is stuck or busy.
     pub async fn force_stop(self) -> Result<()> {
         match self {
-            AgentRuntime::Claude(session) => session.force_stop().await,
-            AgentRuntime::Cursor(session) => session.force_stop().await,
-            AgentRuntime::Pi(session) => session.force_stop().await,
-            AgentRuntime::OpenCode(session) => session.force_stop().await,
+            Self::Claude(session) => session.force_stop().await,
+            Self::Cursor(session) => session.force_stop().await,
+            Self::Pi(session) => session.force_stop().await,
+            Self::OpenCode(session) => session.force_stop().await,
         }
     }
 
     pub fn is_alive(&mut self) -> bool {
-        match self {
-            AgentRuntime::Claude(session) => session.is_alive(),
-            AgentRuntime::Cursor(session) => session.is_alive(),
-            AgentRuntime::Pi(session) => session.is_alive(),
-            AgentRuntime::OpenCode(session) => session.is_alive(),
-        }
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::is_alive(b))
     }
 
     pub fn recent_stderr(&mut self) -> String {
-        match self {
-            AgentRuntime::Claude(session) => session.recent_stderr(),
-            AgentRuntime::Cursor(_) => String::new(),
-            AgentRuntime::Pi(session) => session.recent_stderr(),
-            AgentRuntime::OpenCode(session) => session.recent_stderr(),
-        }
+        crate::dispatch_agent_backend!(self, |b| AgentBackend::recent_stderr(b))
     }
 }
 

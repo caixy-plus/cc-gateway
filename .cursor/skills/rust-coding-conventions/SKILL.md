@@ -21,6 +21,46 @@ description: Applies standard Rust coding conventions and best practices. Use wh
 - Prefer Rust Style Guide defaults (line width and layout decisions come from rustfmt).
 - Keep `use` statements tidy and grouped (std → external crates → crate).
 
+## Module layout (Rust 2018+)
+
+**Use the modern layout only** — do **not** add or revive `mod.rs` (legacy `foo/mod.rs`).
+
+| Layout | Paths | When |
+|--------|--------|------|
+| **Directory module** | `src/foo.rs` + `src/foo/*.rs` | Several related files; `foo.rs` is the module root |
+| **Single file** | `src/foo.rs` only | One implementation file; no `foo/` directory |
+
+- `foo.rs` declares children with `mod child;` (files live in `foo/child.rs`).
+- **Forbidden**: `foo.rs` and `foo/mod.rs` at the same time (compile error).
+- **Forbidden for new code**: `foo/mod.rs` as the directory entry.
+- Put types, `impl`, and logic in `foo/*.rs` (or a dedicated top-level `foo.rs` when there is no directory). Keep `foo.rs` focused on `mod` / `pub use` / API facade when the module is a directory.
+- Reference: [Paths for accessing named crates, modules, and items](https://doc.rust-lang.org/book/ch07-05-separating-modules-into-different-files.html) (Rust Book — `mod` in `src/lib.rs` or `src/foo.rs`, not `mod.rs` for new code).
+
+### This repository
+
+`cc-gateway` uses **`foo.rs` + `foo/`** only (no `mod.rs` under `src/`). When adding a module, follow that layout; fix `include_str!` / relative paths if the entry file moves up one directory level.
+
+### cc-gateway layers
+
+| Layer | Entry | Contents |
+|-------|--------|----------|
+| `core` | `src/core.rs` | `agent`, `command`, `config`, `history`, `prompt`, `runtime`, `session` |
+| `api` | `src/api.rs` | `web` (Axum handlers, SSE) |
+| `database` | `src/database.rs` | SQLite persistence (`pub use database as db` in `lib.rs`) |
+| `platform` | `src/platform.rs` | Feishu / Telegram / QQ |
+| `daemon`, `utils` | `src/<name>.rs` + `src/<name>/` | lifecycle, i18n |
+| `types` | `src/types.rs` | `pub use` of shared config/session types |
+
+Binary: `src/main.rs` calls `cc_gateway::…` only.
+
+### Submodule example
+
+```
+src/core/config.rs     # pub mod loader; pub mod model;
+src/core/config/loader.rs
+src/core/config/model.rs
+```
+
 ## Naming & API rules (Rust API Guidelines)
 - Types/traits/enums: `UpperCamelCase`; functions/vars/modules: `snake_case`; constants: `SCREAMING_SNAKE_CASE`.
 - Boolean names: `is_*`, `has_*`, `should_*`.

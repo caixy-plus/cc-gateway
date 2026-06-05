@@ -7,10 +7,7 @@ use tokio::sync::Notify;
 use tracing::{error, info};
 
 use crate::config::model::GatewayConfig;
-use crate::platform::feishu::FeishuPlatform;
-use crate::platform::qq::QqPlatform;
-use crate::platform::telegram::TelegramPlatform;
-use crate::platform::Platform;
+use crate::config::platform_registry;
 
 pub struct DaemonEngine {
     config: GatewayConfig,
@@ -54,63 +51,15 @@ impl DaemonEngine {
         }
         crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS.load_from_db();
         crate::session::pairing::GLOBAL_PAIRING_MANAGER.load_from_db();
-        crate::session::pairing::GLOBAL_PAIRING_MANAGER
-            .set_require_pairing("feishu", self.config.feishu.require_pairing);
-        crate::session::pairing::GLOBAL_PAIRING_MANAGER
-            .set_require_pairing("telegram", self.config.telegram.require_pairing);
-        crate::session::pairing::GLOBAL_PAIRING_MANAGER
-            .set_require_pairing("qq", self.config.qq.require_pairing);
+        platform_registry::apply_pairing_flags_from_config(&self.config);
 
-        // Start all enabled platforms concurrently
-        let mut platforms: Vec<(Box<dyn Platform>, tokio::task::JoinHandle<()>)> = Vec::new();
+        crate::web::files::spawn_webui_deliver_listener();
 
-        if self.config.feishu.enabled {
-            let platform = FeishuPlatform::new(
-                self.config.feishu.clone(),
-                &self.config.default_dir,
-                self.config.effective_agent_settings(),
-                self.config.show_thinking,
-            );
-            let platform_for_spawn = platform.clone();
-            let handle = tokio::spawn(async move {
-                if let Err(e) = platform_for_spawn.run().await {
-                    error!("Feishu platform error: {}", e);
-                }
+        let platforms = platform_registry::start_enabled_platforms(&self.config)
+            .unwrap_or_else(|e| {
+                error!("Failed to start platforms: {e}");
+                Vec::new()
             });
-            platforms.push((Box::new(platform), handle));
-        }
-
-        if self.config.telegram.enabled {
-            let platform = TelegramPlatform::new(
-                self.config.telegram.clone(),
-                &self.config.default_dir,
-                self.config.effective_agent_settings(),
-                self.config.show_thinking,
-            );
-            let platform_for_spawn = platform.clone();
-            let handle = tokio::spawn(async move {
-                if let Err(e) = platform_for_spawn.run().await {
-                    error!("Telegram platform error: {}", e);
-                }
-            });
-            platforms.push((Box::new(platform), handle));
-        }
-
-        if self.config.qq.enabled {
-            let platform = QqPlatform::new(
-                self.config.qq.clone(),
-                &self.config.default_dir,
-                self.config.effective_agent_settings(),
-                self.config.show_thinking,
-            );
-            let platform_for_spawn = platform.clone();
-            let handle = tokio::spawn(async move {
-                if let Err(e) = platform_for_spawn.run().await {
-                    error!("QQ platform error: {}", e);
-                }
-            });
-            platforms.push((Box::new(platform), handle));
-        }
 
         // Shutdown signal: used when a critical component (HTTP server) fails,
         // so the daemon exits cleanly instead of becoming a zombie.

@@ -255,6 +255,9 @@ mod tests {
 
     #[test]
     fn delete_session_history_removes_jsonl_file() {
+        use crate::tests::helpers::TestEnv;
+
+        let _env = TestEnv::new();
         let id = uuid::Uuid::new_v4().to_string();
         append_session_history(&id, "user", "hi").expect("append");
         let path = get_history_dir().unwrap().join(format!("{id}.jsonl"));

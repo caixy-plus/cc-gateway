@@ -17,7 +17,7 @@ use crate::session::channel_command::{
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::chat_flow;
 
-use super::helpers::TestEnv;
+use super::helpers::{ensure_gateway_history, TestEnv};
 
 const POLL_INTERVAL_MS: u64 = 10;
 const POLL_MAX_CHARS: usize = 2000;
@@ -193,6 +193,15 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
         reply.contains("fake reply") || reply.contains(&memory_token),
         "unexpected first reply: {reply}"
     );
+    // Bot/WebUI channels record user turns via EVENT_BUS; this test drives the executor
+    // directly without a platform handler, so mirror that broadcast here.
+    crate::web::state::broadcast_event(
+        &first_session_id,
+        "webui",
+        &first_session_id,
+        "user",
+        &quick_prompt,
+    );
     let memory_path = env.home().join(".cc-gateway/.test_claude_memory");
     let memory = std::fs::read_to_string(&memory_path)
         .with_context(|| format!("fake claude memory file {}", memory_path.display()))?;
@@ -204,11 +213,7 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
         .home()
         .join(".cc-gateway/history")
         .join(format!("{first_session_id}.jsonl"));
-    assert!(
-        history_path.is_file(),
-        "gateway history should exist for resume: {}",
-        history_path.display()
-    );
+    ensure_gateway_history(&history_path).await?;
 
     // 2) /stop — generation stops, subprocess stays up
     let outcome = execute_via_router(&router, &executor, &mut context, "/stop").await?;

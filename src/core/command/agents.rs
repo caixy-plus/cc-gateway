@@ -73,17 +73,22 @@ pub fn session_resumed_message(provider: &AgentProvider, dir: &str) -> String {
 
 /// Whether the provider CLI can reload a prior conversation (ACP load / Claude `--resume` / Pi `switch_session`).
 pub fn provider_supports_session_resume(provider: &AgentProvider) -> bool {
-    !matches!(provider, AgentProvider::Pi)
+    crate::config::agent_registry::capabilities_for(provider).session_resume
 }
 
 /// Whether the provider supports manual context compaction (`/compact`).
 pub fn provider_supports_context_compact(provider: &AgentProvider) -> bool {
-    matches!(provider, AgentProvider::Claude | AgentProvider::Pi)
+    crate::config::agent_registry::capabilities_for(provider).context_compact
+}
+
+/// Whether `/compact` is sent as a user-visible `/compact` message (Claude stream-json).
+pub fn provider_compact_via_user_message(provider: &AgentProvider) -> bool {
+    crate::config::agent_registry::capabilities_for(provider).compact_via_user_message
 }
 
 /// Whether the provider supports initializing project memory files (`/init`, e.g. Claude `CLAUDE.md`).
 pub fn provider_supports_memory_init(provider: &AgentProvider) -> bool {
-    matches!(provider, AgentProvider::Claude)
+    crate::config::agent_registry::capabilities_for(provider).memory_init
 }
 
 /// User-visible message after a successful `/compact`.
@@ -105,7 +110,7 @@ pub fn compact_success_message(summary: &str) -> String {
 
 /// Message shown when a session is restarted (e.g. user clicks "Restart Session" or `/agent-history N`).
 pub fn session_restarted_message(provider: &AgentProvider, dir: &str) -> String {
-    if matches!(provider, AgentProvider::Pi) {
+    if crate::config::agent_registry::capabilities_for(provider).restart_shows_fresh_hint {
         return format!(
             "{}\n\n{}",
             session_started_message(provider, dir),
@@ -162,17 +167,19 @@ pub fn failed_start_agent_message(provider: &AgentProvider, err: impl std::fmt::
 
 /// User-visible reply when `/esc` is used but there is nothing to flush.
 pub fn esc_already_idle_message(provider: &AgentProvider) -> String {
-    match provider {
-        AgentProvider::Claude => t!("builtin.esc_already_idle_claude").to_string(),
-        _ => t!("builtin.esc_already_idle").to_string(),
+    if crate::config::agent_registry::capabilities_for(provider).uses_claude_idle_copy {
+        t!("builtin.esc_already_idle_claude").to_string()
+    } else {
+        t!("builtin.esc_already_idle").to_string()
     }
 }
 
 /// User-visible reply when `/stop` is used but the agent is already idle.
 pub fn stop_already_idle_message(provider: &AgentProvider) -> String {
-    match provider {
-        AgentProvider::Claude => t!("builtin.stop_already_idle_claude").to_string(),
-        _ => t!("builtin.stop_already_idle").to_string(),
+    if crate::config::agent_registry::capabilities_for(provider).uses_claude_idle_copy {
+        t!("builtin.stop_already_idle_claude").to_string()
+    } else {
+        t!("builtin.stop_already_idle").to_string()
     }
 }
 
@@ -209,14 +216,10 @@ pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{AgentProfiles, AgentProviderConfig};
+    use crate::config::model::AgentProfiles;
 
     fn test_profiles_both() -> AgentProfiles {
-        AgentProfiles {
-            claude: AgentProviderConfig::default(),
-            cursor: AgentProviderConfig::default(),
-            ..Default::default()
-        }
+        AgentProfiles::default()
     }
 
     #[test]
@@ -301,14 +304,8 @@ mod tests {
 
     #[test]
     fn available_providers_excludes_unconfigured() {
-        let profiles = AgentProfiles {
-            claude: AgentProviderConfig::default(), // enabled=true
-            cursor: AgentProviderConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let mut profiles = AgentProfiles::default();
+        profiles.profile_mut(&AgentProvider::Cursor).enabled = false;
         let available = available_providers(&profiles);
         // claude is enabled (default), cursor is disabled, pi & opencode enabled by default → 3 total.
         assert_eq!(available.len(), 3);
@@ -317,25 +314,15 @@ mod tests {
 
     #[test]
     fn available_providers_returns_empty_when_none_configured() {
-        let profiles = AgentProfiles {
-            claude: AgentProviderConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            cursor: AgentProviderConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            pi: AgentProviderConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            opencode: AgentProviderConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let mut profiles = AgentProfiles::default();
+        for provider in [
+            AgentProvider::Claude,
+            AgentProvider::Cursor,
+            AgentProvider::Pi,
+            AgentProvider::OpenCode,
+        ] {
+            profiles.profile_mut(&provider).enabled = false;
+        }
         let available = available_providers(&profiles);
         assert!(available.is_empty());
     }

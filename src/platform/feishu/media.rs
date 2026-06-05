@@ -52,13 +52,18 @@ pub async fn download_image(image_key: &str, token: &str) -> Result<Vec<u8>> {
 
 /// Upload an image to Feishu and return the image_key.
 /// `token` is a tenant or user access token.
-pub async fn upload_image(bytes: Vec<u8>, filename: &str, token: &str) -> Result<String> {
+pub async fn upload_image(
+    bytes: Vec<u8>,
+    filename: &str,
+    mime: &str,
+    token: &str,
+) -> Result<String> {
     let url = "https://open.feishu.cn/open-apis/im/v1/images";
     let client = reqwest::Client::new();
 
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename.to_string())
-        .mime_str("image/png")
+        .mime_str(mime)
         .context("Failed to build image multipart")?;
 
     let form = reqwest::multipart::Form::new()

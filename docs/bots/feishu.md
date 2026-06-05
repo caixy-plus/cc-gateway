@@ -26,15 +26,19 @@ Edit `~/.cc-gateway/config.json` or use WebUI **Settings → Feishu**:
 
 ```json
 {
-  "feishu": {
-    "enabled": true,
-    "app_id": "cli_xxxxxxxx",
-    "app_secret": "your_app_secret",
-    "require_pairing": true
+  "platforms": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "cli_xxxxxxxx",
+      "app_secret": "your_app_secret",
+      "require_pairing": true
+    }
   },
   "default_dir": "/path/to/your/projects"
 }
 ```
+
+(Other top-level keys such as `agent`, `log`, and `port` are omitted here. Full layout: [config.md](../config.md).)
 
 | Field | Description |
 |-------|-------------|
@@ -63,10 +67,11 @@ Look for Feishu WebSocket connection logs. In WebUI **Platforms**, Feishu should
 
 ## 5. Usage notes
 
-- **`/ll`**: Sends an **interactive card** listing folders under `default_dir`; tap a button to `cd`.
-- **`/cd`**: In Feishu, path changes are constrained under `default_dir` (cannot navigate above it).
+- **`/ll`**: Sends an **interactive card** listing subfolders of the **current** work dir (starts at `default_dir`); tap a button to `cd`.
+- **`/cd`**: Same home-directory bound as other platforms (`ensure_under_home`); not limited to `default_dir`.
 - **Per-chat isolation**: Each Feishu chat (group or DM) has its own agent subprocess and channel session.
-- **Cards**: Only Feishu supports interactive cards; other platforms use plain text for `/ll`.
+- **Interactive UI**: Feishu uses message cards; Telegram uses inline keyboards for `/ll` / `/agents`; QQ uses plain text.
+- **MCP `send_file`**: PNG/JPG/GIF/WebP etc. are sent as **image messages** (inline preview) via Feishu image API; other types use file messages. Max image size **10 MB** per Feishu docs.
 
 ## Troubleshooting
 

@@ -10,18 +10,18 @@ English | [简体中文](platform-integration-checklist.zh-CN.md)
 |------------|--------|----------|-----|
 | `Platform` trait (`run` / `shutdown`) | Yes | Yes | Yes |
 | Config + `runtime_defaults()` | Yes | Yes | Yes |
-| Daemon `engine.rs` spawn | Yes | Yes | Yes |
+| Daemon spawn via `platform_registry` | Yes | Yes | Yes |
 | `SessionSource` + DB `source` string | Yes | Yes | Yes |
 | Pairing (`require_pairing`) | Yes | Yes | Yes |
 | `ChatCommandExecutor` + `CommandRouter` | Yes | Yes | Yes |
 | `EventPollSink` (stream replies) | Yes | Yes | Yes |
-| **MCP `send_file`** | Yes | Yes | Yes (rich media; group: image/video/voice only) |
+| **MCP `send_file`** | Yes | Yes | Yes (C2C rich media only; group chat unsupported) |
 | `McpContext` on channel commands | Yes | Yes | Yes |
 | Deliver-bus text (`spawn_deliver_listener`) | Yes | Yes | Yes |
 | WebUI config + `/api/platforms` | Yes | Yes | Yes |
 | Init wizard bot step | Yes | Yes | Yes |
 | i18n (`<platform>.*`) | Yes | Yes | Yes |
-| Inbound media → agent path | Yes | Yes | **No** (text-only inbound) |
+| Inbound media → agent path | Yes | Yes | **Yes** (C2C attachments) |
 | Interactive `/ll` / `/agents` UI | Cards | Inline keyboard | Text list |
 | Permission prompts UI | Cards / callback | Inline buttons | Text + request id |
 | Unknown slash (no session) | Custom help | Help text | Router default |
@@ -36,10 +36,10 @@ Document any intentional **No** in your platform’s `docs/bots/<id>.md`.
 |---|------|----------------|
 | A1 | Config struct on `GatewayConfig` | `src/core/config/model.rs` |
 | A2 | `Default` + `runtime_defaults()` disable until init | `model.rs` |
-| A3 | Restart policy fields | `src/core/config/restart_policy.rs` |
+| A3 | Restart / live field paths | `src/core/config/platform_registry.rs` + `restart_policy.rs` |
 | A4 | Platform module `src/platform/<name>/` | `impl Platform` |
 | A5 | `pub mod <name>` | `src/platform.rs` |
-| A6 | Daemon startup + pairing flag | `src/daemon/engine.rs` |
+| A6 | `PlatformDef` in registry + daemon startup | `src/core/config/platform_registry.rs`, `src/daemon/engine.rs` |
 | A7 | Connection status | `src/platform/status.rs` |
 | A8 | `SessionSource` variant | `src/core/session/channel_model.rs`, `src/database.rs`, `channel_manager.rs` |
 | A9 | `ChatCommandContext::with_mcp_context` | Platform inbound handler |

@@ -26,15 +26,19 @@
 
 ```json
 {
-  "feishu": {
-    "enabled": true,
-    "app_id": "cli_xxxxxxxx",
-    "app_secret": "你的AppSecret",
-    "require_pairing": true
+  "platforms": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "cli_xxxxxxxx",
+      "app_secret": "你的AppSecret",
+      "require_pairing": true
+    }
   },
   "default_dir": "/你的/项目/根目录"
 }
 ```
+
+（此处省略 `agent`、`log`、`port` 等顶层字段；完整结构见 [config.zh-CN.md](../config.zh-CN.md)。）
 
 | 字段 | 说明 |
 |------|------|
@@ -63,10 +67,11 @@ cc-gateway log -f
 
 ## 5. 使用说明
 
-- **`/ll`**：发送 **交互卡片**，列出 `default_dir` 下目录；点击按钮切换工作目录。
-- **`/cd`**：飞书模式下路径不能超出 `default_dir` 上级。
+- **`/ll`**：发送 **交互卡片**，列出**当前**工作目录子文件夹（初始为 `default_dir`）；点击按钮 `cd`。
+- **`/cd`**：与其他平台相同，路径须落在用户主目录内（`ensure_under_home`），不限于 `default_dir`。
 - **会话隔离**：每个群聊 / 私聊独立子进程与频道会话。
-- **卡片**：仅飞书支持目录卡片；其他平台 `/ll` 为纯文本列表。
+- **交互 UI**：飞书为消息卡片；Telegram `/ll`、`/agents` 为内联键盘；QQ 为纯文本。
+- **MCP `send_file`**：PNG/JPG/GIF/WebP 等走 **图片消息**（`im/v1/images` + `msg_type=image`，聊天内联预览）；其他类型走文件消息。单张图片最大 **10 MB**（飞书官方限制）。
 
 ## 故障排查
 

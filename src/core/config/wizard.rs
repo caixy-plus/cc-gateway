@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde_json::json;
 use std::io::{self, Write};
 
 use crate::config::agent_registry::{self, AGENT_PROVIDER_DEFS};
@@ -148,42 +149,47 @@ fn resolve_agent_menu_choice(choice: &str) -> Option<AgentProvider> {
 fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) -> Result<()> {
     println!("\n{}", t!("wizard.bot_section_title"));
     println!("{}", t!("wizard.bot_section_hint"));
-    println!("  1. feishu");
-    println!("  2. telegram");
-    println!("  3. qq");
+    for (i, def) in crate::config::platform_registry::PLATFORM_DEFS.iter().enumerate() {
+        println!("  {}. {}", i + 1, def.id);
+    }
     println!("  {}", t!("wizard.opt_skip"));
 
-    match read_choice()?.as_str() {
-        "1" | "feishu" => {
-            config.feishu.enabled = true;
-            config.feishu.app_id = prompt_field("app_id", "")?;
-            config.feishu.app_secret = prompt_field("app_secret", "")?;
-            if config.feishu.app_id.is_empty() || config.feishu.app_secret.is_empty() {
-                warnings.push(t!("wizard.warn_feishu_incomplete").to_string());
-            }
-            println!("{}", t_fmt!("wizard.bot_configured", NAME = "feishu"));
+    let choice = read_choice()?;
+    let Some(def) = crate::config::platform_registry::def_by_menu_choice(&choice) else {
+        println!("{}", t!("wizard.skipped_bot"));
+        return Ok(());
+    };
+
+    (def.config.set_enabled)(config, true);
+    let mut section = (def.config_to_json)(config);
+    let mut incomplete = false;
+    for field in def.settings_fields {
+        if !field.wizard {
+            continue;
         }
-        "2" | "telegram" => {
-            config.telegram.enabled = true;
-            config.telegram.bot_token = prompt_field("bot_token", "")?;
-            if config.telegram.bot_token.is_empty() {
-                warnings.push(t!("wizard.warn_telegram_incomplete").to_string());
-            }
-            println!("{}", t_fmt!("wizard.bot_configured", NAME = "telegram"));
+        let current = section
+            .get(field.key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let value = prompt_field(field.key, current)?;
+        if value.is_empty() {
+            incomplete = true;
         }
-        "3" | "qq" => {
-            config.qq.enabled = true;
-            config.qq.app_id = prompt_field("app_id", &config.qq.app_id)?;
-            config.qq.app_secret = prompt_field("app_secret", "")?;
-            if config.qq.app_id.is_empty() || config.qq.app_secret.is_empty() {
-                warnings.push(t!("wizard.warn_qq_incomplete").to_string());
-            }
-            println!("{}", t_fmt!("wizard.bot_configured", NAME = "qq"));
-        }
-        _ => {
-            println!("{}", t!("wizard.skipped_bot"));
+        if let Some(obj) = section.as_object_mut() {
+            obj.insert(field.key.to_string(), json!(value));
         }
     }
+    (def.apply_settings)(config, &section, &|_, _| false);
+    if incomplete {
+        let msg = match def.id {
+            "feishu" => t!("wizard.warn_feishu_incomplete").to_string(),
+            "telegram" => t!("wizard.warn_telegram_incomplete").to_string(),
+            "qq" => t!("wizard.warn_qq_incomplete").to_string(),
+            other => format!("Platform {other}: required fields are empty"),
+        };
+        warnings.push(msg);
+    }
+    println!("{}", t_fmt!("wizard.bot_configured", NAME = def.id));
     Ok(())
 }
 
@@ -256,12 +262,13 @@ mod tests {
     fn runtime_defaults_disables_all_integrations() {
         let config = GatewayConfig::runtime_defaults();
 
-        assert!(!config.agent.claude.enabled);
-        assert!(!config.agent.cursor.enabled);
-        assert!(!config.agent.pi.enabled);
-        assert!(!config.agent.opencode.enabled);
-        assert!(!config.feishu.enabled);
-        assert!(!config.telegram.enabled);
-        assert!(!config.qq.enabled);
+        use crate::config::model::AgentProvider;
+        assert!(!config.agent.profile_for(&AgentProvider::Claude).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Cursor).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Pi).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(!config.platforms.feishu.enabled);
+        assert!(!config.platforms.telegram.enabled);
+        assert!(!config.platforms.qq.enabled);
     }
 }

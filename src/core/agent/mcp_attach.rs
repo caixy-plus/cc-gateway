@@ -6,30 +6,18 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tracing::debug;
 
+use crate::config::agent_registry;
 use crate::config::model::AgentProvider;
 use crate::runtime::file_delivery::{McpContext, MCP_TARGET_ENV};
+
+pub use crate::config::agent_registry::ProviderMcpSupport;
 
 const CURSOR_MCP_DIR: &str = ".cursor";
 const PI_MCP_DIR: &str = ".pi";
 const GATEWAY_MCP_SERVER_NAME: &str = "cc-gateway";
 
-/// How a provider can receive [`McpContext`] for Feishu/Telegram file delivery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderMcpSupport {
-    /// Claude Code `--mcp-config` JSON file.
-    ClaudeMcpConfig,
-    /// ACP `session/new` / `session/load` `mcpServers` array (OpenCode).
-    AcpSession,
-    /// Project-level `mcp.json` under `.cursor/` or `.pi/` (Cursor, Pi).
-    ProjectMcpJson,
-}
-
 pub fn provider_mcp_support(provider: AgentProvider) -> ProviderMcpSupport {
-    match provider {
-        AgentProvider::Claude => ProviderMcpSupport::ClaudeMcpConfig,
-        AgentProvider::OpenCode => ProviderMcpSupport::AcpSession,
-        AgentProvider::Cursor | AgentProvider::Pi => ProviderMcpSupport::ProjectMcpJson,
-    }
+    agent_registry::capabilities_for(&provider).mcp
 }
 
 pub fn supports_mcp_attach(_provider: AgentProvider) -> bool {

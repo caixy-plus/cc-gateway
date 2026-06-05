@@ -86,8 +86,7 @@ pub fn generate_webui_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
-/// Extract a token from request: query param `?token=xxx` takes priority,
-/// then `Authorization: Bearer xxx` header.
+/// Extract a token from request: query `?token=`, `Authorization: Bearer`, then `cc_gateway_token` cookie.
 fn extract_token(request: &Request) -> Option<String> {
     // Check query param first
     if let Some(token) = request.uri().query().and_then(|q| {
@@ -106,6 +105,19 @@ fn extract_token(request: &Request) -> Option<String> {
         if let Some(token) = auth.strip_prefix("Bearer ") {
             if !token.is_empty() {
                 return Some(token.to_string());
+            }
+        }
+    }
+
+    // Cookie set after successful WebUI login (also used by <img src="/api/media/...">).
+    if let Some(cookie) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for part in cookie.split(';') {
+            let part = part.trim();
+            if let Some(value) = part.strip_prefix("cc_gateway_token=") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
             }
         }
     }

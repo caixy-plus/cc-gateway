@@ -7,7 +7,7 @@ use crate::config::model::{AgentConfig, AgentProvider};
 
 /// Platform-bound agents (Claude Code, Cursor) use vendor-tied models; cc-gateway does not expose `/models`.
 pub fn is_platform_bound_agent(provider: &AgentProvider) -> bool {
-    matches!(provider, AgentProvider::Claude | AgentProvider::Cursor)
+    crate::config::agent_registry::capabilities_for(provider).platform_bound
 }
 
 /// A conservative built-in list for Claude (works without shelling out).
@@ -171,7 +171,7 @@ pub fn canonical_model_id(provider: &str, model_id: &str) -> String {
 /// Parse a Pi RPC `Model` JSON value into `(provider, modelId)`.
 pub fn pi_model_from_json(value: &serde_json::Value) -> Option<(String, String)> {
     if let Some(s) = value.as_str() {
-        return parse_provider_model_id(s).map(|(p, id)| (p, id));
+        return parse_provider_model_id(s);
     }
     let provider = value
         .get("provider")

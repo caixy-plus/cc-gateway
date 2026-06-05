@@ -1,6 +1,6 @@
 # QQ Official Bot Setup
 
-Connect a **QQ Open Platform** robot (QQ 频道 / 群 / 私聊官方机器人 API v2) via **WebSocket Gateway**. cc-gateway uses the gateway long-connection model suitable for a local daemon (no public webhook required).
+Connect a **QQ Open Platform** robot via **WebSocket Gateway** (OpenAPI v2). cc-gateway currently supports **C2C (private) chat only** — group @ messages receive an unsupported notice. Uses the gateway long-connection model suitable for a local daemon (no public webhook required).
 
 > Official docs increasingly recommend webhooks for production at scale; cc-gateway currently implements **WebSocket Gateway** for simpler self-hosted deployment.
 
@@ -9,17 +9,17 @@ Connect a **QQ Open Platform** robot (QQ 频道 / 群 / 私聊官方机器人 AP
 - QQ Open Platform developer account and an approved **bot** application
 - `app_id` and `app_secret` (client secret) from the console
 - cc-gateway daemon with outbound HTTPS to QQ API hosts
-- Bot intents including **C2C** and **group @ message** events (cc-gateway subscribes with intent `GROUP_AND_C2C`)
+- Bot intents including **C2C** message events (`C2C_MESSAGE_CREATE`)
 
 ## 1. Register on QQ Open Platform
 
 1. Open [QQ Open Platform](https://q.qq.com/) (developer portal for QQ bots).
 2. Create a **robot** application and complete any required review.
 3. In the console, copy **AppID** and **AppSecret** (client secret).
-4. Enable message capabilities your bot needs:
-   - **C2C** (user ↔ bot private messages) — event `C2C_MESSAGE_CREATE`
-   - **Group** — event `GROUP_AT_MESSAGE_CREATE` (user @ bot in group)
+4. Enable **C2C** (user ↔ bot private messages) — event `C2C_MESSAGE_CREATE`.
 5. For initial testing, you may use the **sandbox** environment (`sandbox: true` in config); switch to production API when ready.
+
+> **Group chat:** `GROUP_AT_MESSAGE_CREATE` is not handled for normal chat; users messaging in a group will see `qq.group_chat_unsupported`.
 
 ## 2. Configure cc-gateway
 
@@ -27,15 +27,19 @@ Edit `~/.cc-gateway/config.json` or WebUI **Settings → QQ**:
 
 ```json
 {
-  "qq": {
-    "enabled": true,
-    "app_id": "102xxxxxx",
-    "app_secret": "your_client_secret",
-    "sandbox": false,
-    "require_pairing": true
+  "platforms": {
+    "qq": {
+      "enabled": true,
+      "app_id": "102xxxxxx",
+      "app_secret": "your_client_secret",
+      "sandbox": false,
+      "require_pairing": true
+    }
   }
 }
 ```
+
+(Full `config.json` layout: [config.md](../config.md).)
 
 | Field | Description |
 |-------|-------------|
@@ -60,14 +64,9 @@ Look for `[QQ] Gateway connected` in logs. WebUI **Platforms** should show QQ wh
 
 ## 4. Pairing (if `require_pairing` is true)
 
-Channel ids used internally:
+Internal channel id for C2C: `u:{user_openid}`.
 
-| Chat type | Internal channel id | How to talk |
-|-----------|---------------------|-------------|
-| C2C (private) | `u:{user_openid}` | DM the bot |
-| Group | `g:{group_openid}` | @ the bot in a group |
-
-1. Send any message (group: **@ bot**).
+1. DM the bot with any message.
 2. Bot replies with pairing code.
 3. WebUI → **Pairing** → approve platform `qq`.
 4. `/agent` then chat.
@@ -76,7 +75,8 @@ Channel ids used internally:
 
 - **`/ll`**, **`/agents`**: plain text lists (no QQ message cards yet).
 - **Permission prompts**: text-only (no inline approve buttons like Telegram).
-- **MCP `send_file`**: supported via rich media (`msg_type` 7). **Private (C2C):** images, video, voice, and generic files. **Group:** images, video, and voice only — PDF/zip etc. must be sent in private chat. Uses upload `POST …/files` then send with `media.file_info`.
+- **Inbound media (C2C):** images/files in private messages are downloaded to `~/.cc-gateway/media/` and forwarded to the agent when a session is active.
+- **MCP `send_file` (C2C only):** rich media (`msg_type` 7). **Inline images** use `file_type=1` (**PNG/JPG only**). C2C supports images, video, voice, and generic files (WebP/GIF may send as file type 4).
 - **Restart** after changing `app_id`, `app_secret`, `sandbox`, or `enabled`.
 
 ## Troubleshooting
@@ -85,7 +85,7 @@ Channel ids used internally:
 |---------|-----------------|
 | Token / gateway errors | `app_id` / `app_secret`; sandbox vs production mismatch |
 | No C2C events | C2C intent / permission enabled in console |
-| No group events | Bot in group; message must @ bot; group intent enabled |
+| Group messages ignored | Expected — only C2C is supported for chat |
 | Silent bot | Pairing not approved; daemon restarted after config change |
 | Sandbox vs prod | Set `sandbox` to match the credentials environment |
 

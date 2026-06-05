@@ -22,7 +22,7 @@ async fn pi_resume_skips_switch_session_starts_fresh() -> Result<()> {
         .await;
 
     let mut profiles = env.fake_agent_profiles();
-    profiles.pi.enabled = true;
+    profiles.profile_mut(&crate::config::model::AgentProvider::Pi).enabled = true;
 
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(StartAgentSessionForPlatformArgs {
@@ -92,7 +92,7 @@ async fn pi_resume_succeeds_without_switch_session_even_when_marker_would_fail()
         .await;
 
     let mut profiles = env.fake_agent_profiles();
-    profiles.pi.enabled = true;
+    profiles.profile_mut(&crate::config::model::AgentProvider::Pi).enabled = true;
 
     let active = GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(StartAgentSessionForPlatformArgs {
@@ -146,8 +146,10 @@ async fn pi_spawn_strips_no_session_from_profile_and_extra_args() -> Result<()> 
         .await;
 
     let mut profiles = env.fake_agent_profiles();
-    profiles.pi.enabled = true;
-    profiles.pi.default_args = Some("--no-session".to_string());
+    profiles.profile_mut(&crate::config::model::AgentProvider::Pi).enabled = true;
+    profiles
+        .profile_mut(&crate::config::model::AgentProvider::Pi)
+        .default_args = Some("--no-session".to_string());
 
     GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(StartAgentSessionForPlatformArgs {

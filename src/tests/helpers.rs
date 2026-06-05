@@ -1,10 +1,41 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
+use anyhow::Result;
 use crate::config::model::AgentProfiles;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Start a history recorder subscriber for the current Tokio runtime.
+///
+/// Each `#[tokio::test]` gets a fresh runtime; a process-wide "already started" flag would
+/// leave later tests without a live recorder after the first runtime is dropped.
+fn ensure_history_recorder_started() {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        crate::history::recorder::start_recorder();
+    }
+}
+
+/// Poll until the gateway history JSONL exists (background recorder writes asynchronously).
+pub(crate) async fn wait_for_gateway_history(path: &Path) -> Result<()> {
+    for _ in 0..200 {
+        if path.is_file() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    anyhow::bail!(
+        "gateway history file should exist: {}",
+        path.display()
+    )
+}
+
+/// Wait until the background history recorder has written the JSONL file.
+pub(crate) async fn ensure_gateway_history(path: &Path) -> Result<()> {
+    wait_for_gateway_history(path).await
+}
 
 pub(crate) struct TestEnv {
     _lock: MutexGuard<'static, ()>,
@@ -37,6 +68,7 @@ impl TestEnv {
         std::env::set_var("PATH", &new_path);
         std::fs::create_dir_all(root.path().join(".cc-gateway")).unwrap();
         GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+        ensure_history_recorder_started();
         let home = root.path().to_path_buf();
         Self {
             _lock: lock,
@@ -68,6 +100,7 @@ impl TestEnv {
         // Isolate from the developer's real `claude` on PATH — only the fake script in the repo root.
         std::env::set_var("PATH", manifest.as_os_str());
         GLOBAL_CHANNEL_SESSIONS.reset_for_tests();
+        ensure_history_recorder_started();
         let fake_claude = create_fake_agent_cli(&manifest);
         let _ = fake_claude;
 
@@ -93,7 +126,9 @@ impl TestEnv {
     pub(crate) fn fake_agent_profiles(&self) -> AgentProfiles {
         let mut profiles = AgentProfiles::default();
         create_fake_agent_cli(self.home());
-        profiles.claude.default_args = Some(String::new());
+        profiles
+            .profile_mut(&crate::config::model::AgentProvider::Claude)
+            .default_args = Some(String::new());
         profiles
     }
 }

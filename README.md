@@ -12,7 +12,7 @@ Gateway for controlling local agent CLIs (Claude Code, Cursor, Pi, OpenCode, …
 - **Per-chat isolation** — Each chat/channel gets its own agent subprocess; messages never mix across chats
 - **Pairing** — Optional WebUI approval for new chats before they can use the bot (recommended)
 - **WebUI** — Browser dashboard for sessions, pairing, settings, and live events
-- **Directory tools** — `/ll` (interactive card in Feishu, text list on Telegram/QQ/WebUI)
+- **Directory tools** — `/ll` (Feishu card, Telegram inline keyboard, text list on QQ/WebUI)
 - **Daemon mode** — `start` / `stop` / `restart` / `log`; single instance via port binding
 
 ## Installation
@@ -52,15 +52,15 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
    cc-gateway init
    ```
 
-   Or edit `~/.cc-gateway/config.json` / use WebUI **Settings** after `cc-gateway start`.
+   Or edit `~/.cc-gateway/config.json` / use WebUI **Settings** after `cc-gateway start`. Legacy config layouts are upgraded and saved on first load ([config.md](docs/config.md)).
 
    Enable the bots you need, for example:
 
    | Platform | Config | Setup guide |
    |----------|--------|-------------|
-   | Feishu / Lark | `feishu.enabled`, `app_id`, `app_secret` | [docs/bots/feishu.md](docs/bots/feishu.md) |
-   | Telegram | `telegram.enabled`, `bot_token` | [docs/bots/telegram.md](docs/bots/telegram.md) |
-   | QQ | `qq.enabled`, `app_id`, `app_secret`, `sandbox` | [docs/bots/qq.md](docs/bots/qq.md) |
+   | Feishu / Lark | `platforms.feishu.enabled`, `app_id`, `app_secret` | [docs/bots/feishu.md](docs/bots/feishu.md) |
+   | Telegram | `platforms.telegram.enabled`, `bot_token` | [docs/bots/telegram.md](docs/bots/telegram.md) |
+   | QQ | `platforms.qq.enabled`, `app_id`, `app_secret`, `sandbox` | [docs/bots/qq.md](docs/bots/qq.md) |
 
    Set `default_dir` to the workspace root remote users should browse (e.g. `~/Workspace`). Multiple platforms can run at once.
 
@@ -98,8 +98,8 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
 | `cc-gateway webui` | Open WebUI in the browser (starts daemon if needed) |
 | `cc-gateway webui-token [--refresh]` | Show or regenerate WebUI access token |
 | `cc-gateway enable` / `disable` | Toggle OS auto-start (launchd / systemd user unit) |
-| `cc-gateway update [-y]` | Check/install latest release |
-| `cc-gateway uninstall` | Remove binary and service entries |
+| `cc-gateway update [--check] [-f] [-y]` | Check or install latest release (`--check` = version only) |
+| `cc-gateway uninstall [-y] [--keep-data]` | Remove binary and service entries (`--keep-data` keeps `~/.cc-gateway`) |
 
 ## Gateway Commands (in chat)
 
@@ -115,7 +115,7 @@ Available in WebUI and connected bots (after pairing if enabled):
 | `/agents [provider]` | Set this channel's default agent |
 | `/agent-history [n]` | List recent sessions; resume by index |
 | `/pwd` | Show current working directory |
-| `/ll` | Pick directory (Feishu card / text list) |
+| `/ll` | Pick directory (Feishu card / Telegram inline keyboard / text on QQ & WebUI) |
 | `/mkdir <name>` | Create a directory |
 | `/show-thinking` / `/hide-thinking` | Toggle Thinking output |
 | `/stop` / `/clear` / `/status` / `/esc` | Control active generation (where supported) |

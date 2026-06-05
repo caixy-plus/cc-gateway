@@ -16,7 +16,7 @@ Do **not** commit `webui/dist/` in the backend repo (gitignored; CI rebuilds it)
 
 ### What is `webui/dist/`?
 
-| | Local (`install_local.sh` / `build-with-frontend.sh`) | GitHub Release CI |
+| | Local (`install_local.sh` / `scripts/build-with-frontend.sh`) | GitHub Release CI |
 |--|--|--|
 | **Source used** | Your sibling `../cc-gateway-webui` checkout | Latest commit on **`cc-gateway-webui` `main` on GitHub** |
 | **Output** | Copied into this repo’s `webui/dist/`, then `cargo build` embeds it | CI runs `npm run build`, copies into `webui/dist/`, then compiles — **does not use your laptop’s `dist/`** |

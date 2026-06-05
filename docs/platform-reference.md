@@ -27,7 +27,7 @@ Also refresh [Adding a New Chat Platform](adding-chat-platform.md) (“Current p
 | Card JSON v2 overview | https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes |
 | Button component (V2) | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button |
 
-**cc-gateway:** pbbp2 WebSocket (`platform/feishu/ws.rs`, `platform/proto/`); interactive cards (`platform/feishu/cards.rs`). User guide: [docs/bots/feishu.md](docs/bots/feishu.md).
+**cc-gateway:** pbbp2 WebSocket (`platform/feishu/ws.rs`, `platform/proto/`); interactive cards (`platform/feishu/cards.rs`). User guide: [bots/feishu.md](bots/feishu.md).
 
 ## Telegram (`platform/telegram/`)
 
@@ -38,7 +38,7 @@ Also refresh [Adding a New Chat Platform](adding-chat-platform.md) (“Current p
 | `sendMessage` | https://core.telegram.org/bots/api#sendmessage |
 | Create bot (BotFather) | https://t.me/BotFather |
 
-**cc-gateway:** HTTP long-polling only (no webhook in tree). User guide: [docs/bots/telegram.md](docs/bots/telegram.md).
+**cc-gateway:** HTTP long-polling only (no webhook in tree). User guide: [bots/telegram.md](bots/telegram.md).
 
 ## QQ (`platform/qq/`)
 
@@ -50,10 +50,10 @@ Also refresh [Adding a New Chat Platform](adding-chat-platform.md) (“Current p
 | Events / intents | https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html |
 | Get WSS URL (`GET /gateway` / `gateway/bot`) | https://bot.q.qq.com/wiki/develop/api-v2/openapi/wss/url_get.html |
 | Messages (send/receive) | https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/ |
-| Rich media (for future `send_file`) | https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/rich-media.html |
+| Rich media (`send_file` / inbound) | https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/rich-media.html |
 | Access token (`getAppAccessToken`) | Implemented against `https://bots.qq.com/app/getAppAccessToken` (see `platform/qq/api.rs`) |
 
-**cc-gateway:** OpenAPI v2 WebSocket Gateway (`platform/qq/ws.rs`); production API `https://api.sgroup.qq.com`, sandbox `https://sandbox.api.sandbox.qq.com`. User guide: [docs/bots/qq.md](docs/bots/qq.md).
+**cc-gateway:** OpenAPI v2 WebSocket Gateway (`platform/qq/ws.rs`); **C2C chat only** (group @ → `qq.group_chat_unsupported`); C2C inbound attachments via `extract_inbound_attachments`. Production API `https://api.sgroup.qq.com`, sandbox `https://sandbox.api.sandbox.qq.com`. User guide: [bots/qq.md](bots/qq.md).
 
 ## MCP `send_file` by platform
 
@@ -65,13 +65,14 @@ Agents can call the gateway MCP tool **`send_file`** (see `core/runtime/mcp_serv
 
 | Platform | MCP `send_file` | Notes |
 |----------|-----------------|-------|
-| **Feishu** | Yes | Upload + `send_file_message` (`FeishuFileTarget`) |
-| **Telegram** | Yes | `sendDocument` multipart (`TelegramFileTarget`) |
-| **QQ** | **Yes** (limited) | Rich media upload + `msg_type` 7 (`QqFileTarget`). **Group:** image/video/voice only. **C2C:** also generic files (`file_type` 4). No inbound media forwarding yet. |
-| **CLI / WebUI** | N/A | No chat delivery target |
+| **Feishu** | Yes | Images: `im/v1/images` (`image_type=message`) + `msg_type=image` with `image_key` (inline preview). Other files: `im/v1/files` + `msg_type=file`. Image upload max **10 MB** (Feishu API). |
+| **Telegram** | Yes | Images: [`sendPhoto`](https://core.telegram.org/bots/api#sendphoto) multipart `photo`. Other files: `sendDocument`. |
+| **QQ** | **Yes** (C2C only) | Rich media upload + `msg_type` 7. **Inline images:** `file_type=1`, **PNG/JPG only**. C2C: images, video, voice, generic files. **Group chat not supported** for messaging. |
+| **WebUI** | Yes | `McpDeliveryTarget::WebUi` — files land in chat via `GET /api/media/{id}`; user upload via `POST /api/sessions/{id}/upload` |
+| **CLI only** | N/A | No chat delivery target |
 
 When adding a chat platform, **document** MCP support in this table, `docs/bots/<platform>.md`, and the platform hooks table below. If not implemented on day one, state it explicitly so users do not expect agent file push.
 
 ## User-facing setup guides
 
-End-user / operator walkthroughs: **`docs/bots/`** (EN + `*.zh-CN.md` per platform), index [docs/bots/README.md](docs/bots/README.md). Install scripts list these via `scripts/install-docs.*`.
+End-user / operator walkthroughs: **`docs/bots/`** (EN + `*.zh-CN.md` per platform), index [bots/README.md](bots/README.md). Install scripts list these via `scripts/install-docs.*`.

@@ -4,9 +4,9 @@ cc-gateway 可同时接入多个聊天机器人；在 `~/.cc-gateway/config.json
 
 | 平台 | 指南 | 连接方式 | MCP `send_file` | 配置节 |
 |------|------|----------|-----------------|--------|
-| 飞书 / Lark | [feishu.zh-CN.md](feishu.zh-CN.md) | WebSocket（pbbp2） | 支持 | `feishu` |
-| Telegram | [telegram.zh-CN.md](telegram.zh-CN.md) | HTTP 长轮询（`getUpdates`） | 支持 | `telegram` |
-| QQ 官方机器人 | [qq.zh-CN.md](qq.zh-CN.md) | WebSocket Gateway（OpenAPI v2） | 支持（群聊仅富媒体） | `qq` |
+| 飞书 / Lark | [feishu.zh-CN.md](feishu.zh-CN.md) | WebSocket（pbbp2） | 支持 | `platforms.feishu` |
+| Telegram | [telegram.zh-CN.md](telegram.zh-CN.md) | HTTP 长轮询（`getUpdates`） | 支持 | `platforms.telegram` |
+| QQ 官方机器人 | [qq.zh-CN.md](qq.zh-CN.md) | WebSocket Gateway（OpenAPI v2） | 支持（仅 C2C） | `platforms.qq` |
 
 English: [README.md](README.md)
 
@@ -29,15 +29,19 @@ English: [README.md](README.md)
 
 ## 同时启用多个平台
 
-守护进程会并行启动所有 `"enabled": true` 的平台，例如：
+守护进程会并行启动 `platforms` 下所有 `"enabled": true` 的平台，例如：
 
 ```json
 {
-  "feishu": { "enabled": true, "app_id": "...", "app_secret": "...", "require_pairing": true },
-  "telegram": { "enabled": true, "bot_token": "...", "require_pairing": true },
-  "qq": { "enabled": false, "app_id": "", "app_secret": "", "sandbox": false, "require_pairing": true }
+  "platforms": {
+    "feishu": { "enabled": true, "app_id": "...", "app_secret": "...", "require_pairing": true },
+    "telegram": { "enabled": true, "bot_token": "...", "require_pairing": true },
+    "qq": { "enabled": false, "app_id": "", "app_secret": "", "sandbox": false, "require_pairing": true }
+  }
 }
 ```
+
+旧版顶层 `feishu` / `telegram` / `qq` 会在加载时迁入 `platforms.*` 并写回磁盘，见 [config.zh-CN.md](../config.zh-CN.md)。
 
 修改 `enabled`、凭证或 `qq.sandbox` 需要 **重启守护进程**。仅修改 `require_pairing` 时，在 WebUI 保存后即可生效（无需重启）。
 
