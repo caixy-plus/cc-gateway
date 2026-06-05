@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// Per-platform bot settings (`config.json` → `"platforms": { "feishu": … }`).
@@ -67,14 +70,16 @@ pub struct AgentConfig {
     pub permission: String,
 }
 
+/// Per-provider settings under `config.json` → `"agent"`.
+///
+/// Canonical JSON: `{ "default": "claude", "providers": { "claude": {…}, … } }`.
+/// Legacy flat keys (`agent.claude`, …) are migrated on load — see `upgrade_config_json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct AgentProfiles {
     pub default: AgentProvider,
-    pub claude: AgentProviderConfig,
-    pub cursor: AgentProviderConfig,
-    pub pi: AgentProviderConfig,
-    pub opencode: AgentProviderConfig,
+    #[serde(default)]
+    pub providers: BTreeMap<String, AgentProviderConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,18 +211,6 @@ impl Default for AgentConfig {
     }
 }
 
-impl Default for AgentProfiles {
-    fn default() -> Self {
-        Self {
-            default: AgentProvider::Claude,
-            claude: AgentProviderConfig::default(),
-            cursor: AgentProviderConfig::default(),
-            pi: AgentProviderConfig::default(),
-            opencode: AgentProviderConfig::default(),
-        }
-    }
-}
-
 impl AgentConfig {
     pub fn default_for_provider(provider: AgentProvider) -> Self {
         match provider {
@@ -261,17 +254,11 @@ impl AgentConfig {
     }
 
     pub fn normalized(mut self) -> Self {
-        // Clear Claude-specific flags that don't apply to other providers.
-        if !matches!(self.provider, AgentProvider::Claude)
-            && self.default_args == "--dangerously-skip-permissions"
-        {
-            self.default_args.clear();
-        }
-        if matches!(self.provider, AgentProvider::Pi) {
-            self.default_args = strip_pi_cli_args(&self.default_args);
-        } else if matches!(self.provider, AgentProvider::OpenCode) {
-            self.default_args = strip_unsupported_default_args(&self.default_args);
-        }
+        self.default_args =
+            crate::config::agent_registry::normalize_default_args_for_provider(
+                &self.provider,
+                &self.default_args,
+            );
         self
     }
 }
@@ -300,7 +287,7 @@ pub(crate) fn filter_pi_cli_tokens(tokens: &[String]) -> Vec<String> {
 }
 
 /// Flags meant for Cursor/Claude CLIs that break other providers.
-fn strip_unsupported_default_args(args: &str) -> String {
+pub(crate) fn strip_unsupported_default_args(args: &str) -> String {
     const UNSUPPORTED: &[&str] = &[
         "--yolo",
         "--print",
@@ -317,29 +304,53 @@ fn strip_unsupported_default_args(args: &str) -> String {
 }
 
 impl AgentProfiles {
-    /// Whether a provider is enabled in the current configuration.
-    pub fn is_provider_enabled(&self, provider: &AgentProvider) -> bool {
-        match provider {
-            AgentProvider::Claude => self.claude.enabled,
-            AgentProvider::Cursor => self.cursor.enabled,
-            AgentProvider::Pi => self.pi.enabled,
-            AgentProvider::OpenCode => self.opencode.enabled,
-        }
+    pub(crate) fn from_parts(
+        default: AgentProvider,
+        providers: BTreeMap<String, AgentProviderConfig>,
+    ) -> Self {
+        Self { default, providers }
     }
 
-    pub fn effective_config(&self) -> AgentConfig {
+    /// Lookup a provider profile. Call [`crate::config::agent_registry::normalize_profiles`]
+    /// after loading `config.json` so every registered provider id exists.
+    pub fn profile_for(&self, provider: &AgentProvider) -> Result<&AgentProviderConfig> {
+        self.profile_by_id(&provider.to_string())
+    }
+
+    pub fn profile_mut(&mut self, provider: &AgentProvider) -> &mut AgentProviderConfig {
+        let id = provider.to_string();
+        self.providers.entry(id).or_default()
+    }
+
+    pub fn profile_by_id(&self, id: &str) -> Result<&AgentProviderConfig> {
+        self.providers.get(id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing agent profile for '{id}'; call agent_registry::normalize_profiles after load"
+            )
+        })
+    }
+
+    pub fn profile_mut_by_id(&mut self, id: &str) -> &mut AgentProviderConfig {
+        self.providers
+            .entry(id.to_string())
+            .or_default()
+    }
+
+    /// Whether a provider is enabled in the current configuration.
+    pub fn is_provider_enabled(&self, provider: &AgentProvider) -> bool {
+        self.profile_for(provider)
+            .map(|profile| profile.enabled)
+            .unwrap_or(false)
+    }
+
+    pub fn effective_config(&self) -> Result<AgentConfig> {
         self.config_for_provider(None)
     }
 
-    pub fn config_for_provider(&self, provider: Option<AgentProvider>) -> AgentConfig {
+    pub fn config_for_provider(&self, provider: Option<AgentProvider>) -> Result<AgentConfig> {
         let selected = provider.unwrap_or_else(|| self.default.clone());
         let mut config = AgentConfig::default_for_provider(selected.clone());
-        let profile = match selected {
-            AgentProvider::Claude => &self.claude,
-            AgentProvider::Cursor => &self.cursor,
-            AgentProvider::Pi => &self.pi,
-            AgentProvider::OpenCode => &self.opencode,
-        };
+        let profile = self.profile_for(&selected)?;
         let explicit_permission = profile.permission.clone();
         if let Some(ref default_args) = profile.default_args {
             let (cli_args, semantics) = parse_gateway_default_args(default_args);
@@ -354,7 +365,7 @@ impl AgentProfiles {
         if let Some(ref permission) = explicit_permission {
             config.permission = permission.clone();
         }
-        config.normalized()
+        Ok(config.normalized())
     }
 }
 
@@ -385,17 +396,14 @@ impl GatewayConfig {
 
     #[cfg(test)]
     pub fn effective_agent_config(&self) -> AgentConfig {
-        self.agent.effective_config()
+        self.agent.effective_config().expect("normalized agent profiles")
     }
 
     /// In-memory defaults used by daemon / WebUI when `config.json` does not
     /// exist yet. Integrations stay disabled until `cc-gateway init` writes the file.
     pub fn runtime_defaults() -> Self {
         let mut config = Self::default();
-        config.agent.claude.enabled = false;
-        config.agent.cursor.enabled = false;
-        config.agent.pi.enabled = false;
-        config.agent.opencode.enabled = false;
+        config.agent = crate::config::agent_registry::runtime_agent_profiles();
         config.platforms.qq.enabled = false;
         config.platforms.qq.app_id.clear();
         config.platforms.qq.app_secret.clear();
@@ -463,9 +471,13 @@ mod pi_cli_args_tests {
     #[test]
     fn pi_normalized_strips_no_session_from_profile_default_args() {
         let mut profiles = AgentProfiles::default();
-        profiles.pi.default_args = Some("--no-session --provider openai".to_string());
-        profiles.pi.enabled = true;
-        let cfg = profiles.config_for_provider(Some(AgentProvider::Pi));
+        profiles
+            .profile_mut(&AgentProvider::Pi)
+            .default_args = Some("--no-session --provider openai".to_string());
+        profiles.profile_mut(&AgentProvider::Pi).enabled = true;
+        let cfg = profiles
+            .config_for_provider(Some(AgentProvider::Pi))
+            .expect("normalized pi profile");
         assert!(!cfg.default_args.contains("--no-session"));
         assert!(cfg.default_args.contains("--provider"));
     }

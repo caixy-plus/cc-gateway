@@ -9,13 +9,14 @@ use crate::session::channel_model::AgentSessionState;
 use crate::web::handlers::cmd::{handle_cd, CdRequest};
 use crate::web::handlers::session::{
     handle_create_session, handle_delete_session, handle_get_history, handle_list_sessions,
-    handle_permission, handle_send_message, handle_start_session, handle_stop_session, AppState,
-    CreateSessionRequest, ListSessionsQuery, PermissionRequest, SendMessageRequest,
-    StartSessionRequest,
+    handle_permission, handle_send_message, handle_start_session, handle_stop_session,
+    handle_upload_file, AppState, CreateSessionRequest, ListSessionsQuery, PermissionRequest,
+    SendMessageRequest, StartSessionRequest,
 };
+use crate::web::files::WEBUI_FILE_EVENT_PREFIX;
 use crate::web::state::EVENT_BUS;
 
-use super::helpers::TestEnv;
+use super::helpers::{ensure_gateway_history, TestEnv};
 
 async fn short_timeout<T>(label: &str, future: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(std::time::Duration::from_secs(20), future)
@@ -353,7 +354,7 @@ async fn webui_resume_after_chat_passes_claude_resume_flag() -> Result<()> {
         .home()
         .join(".cc-gateway/history")
         .join(format!("{}.jsonl", session_id));
-    assert!(history_path.is_file(), "gateway history should exist");
+    ensure_gateway_history(&history_path).await?;
 
     let (status, _) = short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
     assert_eq!(status, StatusCode::OK);
@@ -502,11 +503,6 @@ async fn webui_poller_does_not_broadcast_empty_assistant_done_event() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn webui_history_records_user_message_once_after_send() -> Result<()> {
-    use std::sync::Once;
-
-    static START_RECORDER: Once = Once::new();
-    START_RECORDER.call_once(crate::history::recorder::start_recorder);
-
     let env = TestEnv::new();
     db::init_schema()?;
     let work_dir = env.home().join("webui-history-dedupe");
@@ -546,7 +542,11 @@ async fn webui_history_records_user_message_once_after_send() -> Result<()> {
     let (status, _) = webui_send(&state, &session_id, user_text).await;
     assert_eq!(status, StatusCode::OK);
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let history_path = env
+        .home()
+        .join(".cc-gateway/history")
+        .join(format!("{session_id}.jsonl"));
+    ensure_gateway_history(&history_path).await?;
 
     let (status, body) = handle_get_history(Path(session_id.clone())).await;
     assert_eq!(status, StatusCode::OK);
@@ -627,11 +627,6 @@ async fn webui_list_history_and_delete_session_handlers_are_offline_testable() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn webui_delete_session_removes_history_jsonl() -> Result<()> {
-    use std::sync::Once;
-
-    static START_RECORDER: Once = Once::new();
-    START_RECORDER.call_once(crate::history::recorder::start_recorder);
-
     let env = TestEnv::new();
     db::init_schema()?;
     let work_dir = env.home().join("webui-delete-history");
@@ -669,17 +664,13 @@ async fn webui_delete_session_removes_history_jsonl() -> Result<()> {
 
     let (status, _) = webui_send(&state, &session_id, "hello").await;
     assert_eq!(status, StatusCode::OK);
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     let history_file = env
         .home()
         .join(".cc-gateway")
         .join("history")
         .join(format!("{session_id}.jsonl"));
-    assert!(
-        history_file.is_file(),
-        "history file should exist before delete"
-    );
+    ensure_gateway_history(&history_file).await?;
 
     let _ = short_timeout("stop", handle_stop_session(Path(session_id.clone()))).await;
 
@@ -980,6 +971,73 @@ async fn webui_permission_allow_and_deny_endpoint() -> Result<()> {
     Ok(())
 }
 
+/// WebUI `POST /api/sessions/:id/start` must attach cc-gateway MCP (WebUi `send_file` target).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_handle_start_injects_mcp_context() -> Result<()> {
+    let env = TestEnv::new();
+    super::helpers::create_fake_agent_cli(env.home());
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-mcp-start");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let (status, body) = short_timeout(
+        "create",
+        handle_create_session(
+            State(state.clone()),
+            Json(CreateSessionRequest {
+                title: Some("MCP inject".to_string()),
+                work_dir: Some(work_dir.to_string_lossy().to_string()),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session_id = serde_json::from_str::<serde_json::Value>(&body)?["session"]["id"]
+        .as_str()
+        .context("session id")?
+        .to_string();
+
+    let (status, _) = short_timeout(
+        "start",
+        handle_start_session(
+            State(state.clone()),
+            Path(session_id.clone()),
+            Json(StartSessionRequest {
+                provider: Some("claude".to_string()),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mcp_marker = env.home().join(".cc-gateway/.test_last_mcp_config");
+    assert!(
+        mcp_marker.is_file(),
+        "WebUI start should pass --mcp-config when mcp_context is set"
+    );
+    let path = std::fs::read_to_string(&mcp_marker)?;
+    let config_body = std::fs::read_to_string(path.trim())?;
+    assert!(
+        config_body.contains("cc-gateway") && config_body.contains("_mcp-server"),
+        "mcp config should reference cc-gateway MCP server"
+    );
+    assert!(
+        config_body.contains("web_ui") && config_body.contains(&session_id),
+        "WebUI MCP target should include platform web_ui and session id, got: {config_body}"
+    );
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
+    Ok(())
+}
+
 /// Same scenario as `smoke_core::core_claude_session_flow_in_test_work_dir`, via WebUI HTTP handlers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
@@ -1075,7 +1133,7 @@ async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
         .home()
         .join(".cc-gateway/history")
         .join(format!("{session_id}.jsonl"));
-    assert!(history_path.is_file(), "gateway history for WebUI resume");
+    ensure_gateway_history(&history_path).await?;
 
     // `/stop` — subprocess stays up (WebUI chat command, not sidebar stop)
     let (status, body) = webui_send(&state, &session_id, "/stop").await;
@@ -1242,5 +1300,119 @@ async fn webui_core_claude_session_flow_in_test_work_dir() -> Result<()> {
         .get_agent_session(&session_id_2)
         .is_some());
 
+    Ok(())
+}
+
+/// WebUI file upload should render the attachment card once and not duplicate the agent
+/// prompt as a second user chat bubble (forward uses `echo_user_to_ui = false`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webui_upload_forward_skips_duplicate_user_bubble() -> Result<()> {
+    use axum::body::Body;
+    use axum::extract::{FromRequest, Multipart};
+    use axum::http::Request;
+
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("webui-upload-dedupe");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let runtime = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_webui_channel("WebUI", work_dir.to_str().unwrap())
+        .await?;
+    let active = GLOBAL_CHANNEL_SESSIONS
+        .start_agent_session_for_platform(
+            crate::session::channel_manager::StartAgentSessionForPlatformArgs {
+                channel_id: runtime.channel_session.id.clone(),
+                title: "Upload dedupe".to_string(),
+                default_dir: work_dir.to_string_lossy().to_string(),
+                agent_settings: state.agent_settings.clone(),
+                show_thinking: state.show_thinking,
+                args: vec![],
+                resume_session_id: None,
+                work_dir_override: None,
+                mcp_context: None,
+                provider_override: None,
+            },
+        )
+        .await?;
+    let session_id = active.agent_session.id.clone();
+    let channel_id = runtime.channel_session.id.clone();
+    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, active);
+
+    let mut rx = EVENT_BUS.subscribe();
+    while rx.try_recv().is_ok() {}
+
+    let boundary = "----ccgtestboundary";
+    let file_body = "# Title\n\nupload body";
+    let multipart_body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"note.md\"\r\n\
+         Content-Type: text/markdown\r\n\
+         \r\n\
+         {file_body}\r\n\
+         --{boundary}--\r\n"
+    );
+    let req = Request::builder()
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(multipart_body))
+        .unwrap();
+    let multipart = Multipart::from_request(req, &())
+        .await
+        .map_err(|e| anyhow::anyhow!("multipart parse failed: {e}"))?;
+
+    let (status, body) = short_timeout(
+        "upload",
+        handle_upload_file(
+            State(state.clone()),
+            Path(session_id.clone()),
+            multipart,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "upload response: {body}");
+    let parsed = serde_json::from_str::<serde_json::Value>(&body)?;
+    assert_eq!(parsed["forwarded"], true);
+
+    let mut file_cards = 0u32;
+    let mut inlined_prompt_bubbles = 0u32;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+            Ok(Ok(event)) if event.session_id == session_id => {
+                if event.role == "user" && event.content.starts_with(WEBUI_FILE_EVENT_PREFIX) {
+                    file_cards += 1;
+                }
+                if event.role == "user" && event.content.contains("# Title") {
+                    inlined_prompt_bubbles += 1;
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+            Err(_) => break,
+        }
+        if file_cards >= 1 {
+            break;
+        }
+    }
+
+    assert_eq!(file_cards, 1, "expected one file attachment card event");
+    assert_eq!(
+        inlined_prompt_bubbles, 0,
+        "inlined agent prompt must not appear as a duplicate user bubble"
+    );
+
+    let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
     Ok(())
 }

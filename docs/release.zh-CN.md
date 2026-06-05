@@ -16,7 +16,7 @@ Release 里嵌进去的 WebUI **只来自** 打 tag 那一刻 GitHub 上的 webu
 
 ### `webui/dist/` 是什么？
 
-| | 本地（`install_local.sh` / `build-with-frontend.sh`） | GitHub Release CI |
+| | 本地（`install_local.sh` / `scripts/build-with-frontend.sh`） | GitHub Release CI |
 |--|--|--|
 | **用的代码** | 你磁盘上的 `../cc-gateway-webui` | GitHub 上 **cc-gateway-webui 仓库 `main` 最新 commit** |
 | **产物放哪** | 编完后复制到本仓库 `webui/dist/`，再 `cargo build` 嵌进二进制 | CI 在临时目录 `npm run build`，复制到 `webui/dist/` 再编译，**不读你本机的 dist** |

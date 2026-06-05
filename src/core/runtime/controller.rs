@@ -284,7 +284,7 @@ impl AgentController {
         } else {
             self.pending_resume_provider.write().await.take()
         };
-        let config = self.config.config_for_provider(provider);
+        let config = self.config.config_for_provider(provider)?;
         let validated = ensure_under_home(&work_dir)?;
 
         {
@@ -558,7 +558,7 @@ impl AgentController {
         let work_dir = self.get_work_dir().await;
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
-        let config = self.config.config_for_provider(Some(provider));
+        let config = self.config.config_for_provider(Some(provider))?;
         let mcp_ctx = self.mcp_context.read().await.clone();
 
         let state = self.session_state.read().await.clone();
@@ -704,10 +704,11 @@ impl AgentController {
     pub async fn current_model_id(&self) -> Option<String> {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
-        if matches!(provider, AgentProvider::Pi) {
+        let caps = crate::config::agent_registry::capabilities_for(&provider);
+        if caps.active_model_from_session {
             let mut s = self.session.write().await;
-            if let Some(AgentRuntime::Pi(pi)) = s.as_mut() {
-                if let Ok(Some(id)) = pi.active_model_id().await {
+            if let Some(session) = s.as_mut() {
+                if let Ok(Some(id)) = session.active_model_id().await {
                     let mut cached = self.active_model_id.write().await;
                     *cached = Some(id.clone());
                     return Some(id);
@@ -725,7 +726,8 @@ impl AgentController {
     pub async fn list_available_models(&self) -> Result<Vec<String>> {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
-        if models::is_platform_bound_agent(&provider) {
+        let caps = crate::config::agent_registry::capabilities_for(&provider);
+        if caps.platform_bound {
             anyhow::bail!(
                 "{}",
                 crate::t_fmt!(
@@ -734,17 +736,20 @@ impl AgentController {
                 )
             );
         }
-        let config = self.config.config_for_provider(Some(provider.clone()));
+        let config = self.config.config_for_provider(Some(provider.clone()))?;
 
-        match provider {
-            AgentProvider::Pi => {
+        match caps.list_models {
+            crate::config::agent_registry::ListModelsSource::NotSupported => Ok(vec![]),
+            crate::config::agent_registry::ListModelsSource::InSessionRpc => {
                 let mut s = self.session.write().await;
-                if let Some(AgentRuntime::Pi(pi)) = s.as_mut() {
-                    return pi.get_available_models().await;
+                if let Some(session) = s.as_mut() {
+                    return session.list_available_models_in_session().await;
                 }
                 Ok(vec![])
             }
-            _ => models::list_models_via_cli(&provider, &config).await,
+            crate::config::agent_registry::ListModelsSource::CliSubcommand => {
+                models::list_models_via_cli(&provider, &config).await
+            }
         }
     }
 
@@ -755,7 +760,8 @@ impl AgentController {
     pub async fn switch_model(&self, model_arg: &str) -> Result<String> {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
-        if models::is_platform_bound_agent(&provider) {
+        let caps = crate::config::agent_registry::capabilities_for(&provider);
+        if caps.platform_bound {
             anyhow::bail!(
                 "{}",
                 crate::t_fmt!(
@@ -764,28 +770,26 @@ impl AgentController {
                 )
             );
         }
-        let options = self.list_available_models().await?;
-        let resolved = models::resolve_model_arg(model_arg, &options)?;
-        match provider {
-            AgentProvider::Pi | AgentProvider::OpenCode => {
-                let mut s = self.session.write().await;
-                if let Some(ref mut session) = *s {
-                    let canonical = session.set_model(&provider, &resolved).await?;
-                    drop(s);
-                    let mut active = self.active_model_id.write().await;
-                    *active = Some(canonical.clone());
-                    return Ok(canonical);
-                }
-                anyhow::bail!("{}", t!("controller.no_active_session"))
-            }
-            _ => anyhow::bail!(
+        if !caps.in_session_model_switch {
+            anyhow::bail!(
                 "{}",
                 crate::t_fmt!(
                     "models.not_supported",
                     NAME = crate::command::agents::provider_display_name(&provider)
                 )
-            ),
+            );
         }
+        let options = self.list_available_models().await?;
+        let resolved = models::resolve_model_arg(model_arg, &options)?;
+        let mut s = self.session.write().await;
+        if let Some(ref mut session) = *s {
+            let canonical = session.set_model(&provider, &resolved).await?;
+            drop(s);
+            let mut active = self.active_model_id.write().await;
+            *active = Some(canonical.clone());
+            return Ok(canonical);
+        }
+        anyhow::bail!("{}", t!("controller.no_active_session"))
     }
 
     /// Whether the agent is currently generating output (true) or ready for input (false).
@@ -836,7 +840,12 @@ impl AgentController {
             .read()
             .await
             .clone()
-            .unwrap_or_else(|| self.config.effective_config().provider.to_string())
+            .unwrap_or_else(|| {
+                self.config
+                    .effective_config()
+                    .map(|c| c.provider.to_string())
+                    .unwrap_or_else(|_| self.config.default.to_string())
+            })
     }
 
     pub async fn set_pending_resume_session_id(&self, id: Option<String>) {

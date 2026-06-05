@@ -1,4 +1,6 @@
 pub mod acp_client;
+pub mod acp_session;
+pub mod backend;
 pub mod cursor_acp;
 pub mod event;
 pub mod mcp_attach;

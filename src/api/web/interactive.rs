@@ -1,7 +1,5 @@
 //! Structured WebUI chat interactions (model picker, etc.) via SSE/history `content` prefixes.
 
-use serde_json::json;
-
 use crate::command::agents;
 use crate::command::models;
 use crate::config::model::AgentProvider;

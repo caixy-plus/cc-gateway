@@ -341,7 +341,8 @@ pub async fn handle_start_session(
                     "created_at": session.created_at,
                 }
             });
-            if matches!(session.stored_provider(), AgentProvider::Pi)
+            let caps = crate::config::agent_registry::capabilities_for(&session.stored_provider());
+            if caps.restart_shows_fresh_hint
                 && crate::session::channel_manager::gateway_session_has_user_history(&session)
             {
                 body["notice"] = json!(crate::t!("builtin.session_restarted_pi_hint"));
@@ -609,6 +610,7 @@ pub async fn handle_upload_file(
     let display_name = sanitize_display_name(&file_name);
     let size = bytes.len() as u64;
 
+    let local_path = saved.path.display().to_string();
     crate::web::files::broadcast_file_attachment(
         &session_id,
         "user",
@@ -616,58 +618,30 @@ pub async fn handle_upload_file(
         &display_name,
         size,
         saved.is_image,
+        &local_path,
     );
 
-    let agent_text = crate::platform::inbound_media::format_agent_message(
+    let agent_text = crate::web::files::format_webui_upload_agent_message(
         &caption,
-        std::slice::from_ref(&saved),
+        &display_name,
+        &saved,
+        &bytes,
     );
 
     let mut forwarded = false;
     if !agent_text.trim().is_empty() {
         if let Some(active) = GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id)
         {
-            ensure_webui_poller_task(&channel_id, &session_id, active.controller.clone()).await;
-            let channel_work_dir = GLOBAL_CHANNEL_SESSIONS
-                .get_channel(&channel_id)
-                .map(|c| c.work_dir)
-                .unwrap_or_else(|| active.agent_session.work_dir.clone());
-            let mut context = ChatCommandContext::new(
-                channel_id.clone(),
-                active.agent_session.title.clone(),
-                channel_work_dir,
-                Some(active.clone()),
-            )
-            .with_webui_session(session_id.clone());
-            let executor = ChatCommandExecutor::new(
-                &state.default_dir,
-                state.agent_settings.clone(),
-                state.show_thinking,
-            );
-            if let Ok(outcome) = chat_flow::route_and_execute(
-                &active.router,
-                &executor,
-                &mut context,
+            if super::webui_outcome::forward_text_to_agent(
+                &channel_id,
+                &session_id,
                 &agent_text,
+                &active,
+                false,
             )
             .await
+            .is_ok()
             {
-                super::webui_outcome::sync_webui_active_after_execute(
-                    &channel_id,
-                    &session_id,
-                    context.active_agent.clone(),
-                );
-                if let Some(ref a) = context.active_agent {
-                    ensure_webui_poller_task(&channel_id, &session_id, a.controller.clone()).await;
-                }
-                let _ = super::webui_outcome::deliver_chat_outcome(
-                    &state,
-                    &channel_id,
-                    &session_id,
-                    &agent_text,
-                    outcome,
-                )
-                .await;
                 forwarded = true;
             }
         }

@@ -262,10 +262,11 @@ mod tests {
     fn runtime_defaults_disables_all_integrations() {
         let config = GatewayConfig::runtime_defaults();
 
-        assert!(!config.agent.claude.enabled);
-        assert!(!config.agent.cursor.enabled);
-        assert!(!config.agent.pi.enabled);
-        assert!(!config.agent.opencode.enabled);
+        use crate::config::model::AgentProvider;
+        assert!(!config.agent.profile_for(&AgentProvider::Claude).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Cursor).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Pi).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
         assert!(!config.platforms.feishu.enabled);
         assert!(!config.platforms.telegram.enabled);
         assert!(!config.platforms.qq.enabled);

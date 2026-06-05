@@ -4,9 +4,9 @@ cc-gateway can bridge local agent sessions to multiple chat bots at once. Each p
 
 | Platform | Guide | Transport | MCP `send_file` | Config section |
 |----------|-------|-------------|-----------------|---------------|
-| Feishu / Lark | [feishu.md](feishu.md) | WebSocket (pbbp2) | Yes | `feishu` |
-| Telegram | [telegram.md](telegram.md) | HTTP long-polling (`getUpdates`) | Yes | `telegram` |
-| QQ (official bot) | [qq.md](qq.md) | WebSocket Gateway (OpenAPI v2) | Yes (group: media only) | `qq` |
+| Feishu / Lark | [feishu.md](feishu.md) | WebSocket (pbbp2) | Yes | `platforms.feishu` |
+| Telegram | [telegram.md](telegram.md) | HTTP long-polling (`getUpdates`) | Yes | `platforms.telegram` |
+| QQ (official bot) | [qq.md](qq.md) | WebSocket Gateway (OpenAPI v2) | Yes (C2C only) | `platforms.qq` |
 
 中文文档：[README.zh-CN.md](README.zh-CN.md)
 
@@ -29,15 +29,19 @@ You can turn pairing off per platform in config or WebUI Settings (`require_pair
 
 ## Running multiple platforms
 
-The daemon starts **every** platform with `"enabled": true` in parallel. Example:
+The daemon starts **every** platform with `"enabled": true` under `platforms` in parallel. Example:
 
 ```json
 {
-  "feishu": { "enabled": true, "app_id": "...", "app_secret": "...", "require_pairing": true },
-  "telegram": { "enabled": true, "bot_token": "...", "require_pairing": true },
-  "qq": { "enabled": false, "app_id": "", "app_secret": "", "sandbox": false, "require_pairing": true }
+  "platforms": {
+    "feishu": { "enabled": true, "app_id": "...", "app_secret": "...", "require_pairing": true },
+    "telegram": { "enabled": true, "bot_token": "...", "require_pairing": true },
+    "qq": { "enabled": false, "app_id": "", "app_secret": "", "sandbox": false, "require_pairing": true }
+  }
 }
 ```
+
+Legacy top-level `feishu` / `telegram` / `qq` keys are upgraded to `platforms.*` on load and written back — see [config.md](../config.md).
 
 Changing `enabled`, credentials, or `qq.sandbox` requires a **daemon restart**. Changing `require_pairing` alone applies live after saving config in the WebUI (no restart).
 

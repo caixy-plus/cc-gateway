@@ -7,7 +7,7 @@ use crate::config::model::{AgentConfig, AgentProvider};
 
 /// Platform-bound agents (Claude Code, Cursor) use vendor-tied models; cc-gateway does not expose `/models`.
 pub fn is_platform_bound_agent(provider: &AgentProvider) -> bool {
-    matches!(provider, AgentProvider::Claude | AgentProvider::Cursor)
+    crate::config::agent_registry::capabilities_for(provider).platform_bound
 }
 
 /// A conservative built-in list for Claude (works without shelling out).

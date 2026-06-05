@@ -104,6 +104,7 @@ impl FileDelivery for crate::web::files::WebUiFileTarget {
         .await?;
         let media_key = crate::web::files::media_storage_basename(&saved.path)?;
         let size = file.bytes.len() as u64;
+        let local_path = saved.path.display().to_string();
         crate::web::files::broadcast_file_attachment(
             &self.session_id,
             "assistant",
@@ -111,6 +112,7 @@ impl FileDelivery for crate::web::files::WebUiFileTarget {
             &file.file_name,
             size,
             saved.is_image,
+            &local_path,
         );
         Ok(SentFile {
             platform: "webui".to_string(),

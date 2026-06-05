@@ -34,14 +34,9 @@ src/
 Workflow: edit frontend → `npm run build` in `cc-gateway-webui` → copy `dist/` into this repo's `webui/dist/` → rebuild Rust binary.
 
 Notes:
-- The frontend repo is expected to be a **sibling directory** (one level up from this repo). If `../cc-gateway-webui` is missing, clone it first.
-- If `webui/dist/` is missing (or not embedded in the Rust binary), the WebUI will show a fallback page indicating the frontend artifacts were not embedded.
-- The WebUI frontend (`../cc-gateway-webui`) is an **auxiliary repo** for this project. Before cutting a release tag, follow [docs/release.md](docs/release.md) (or [docs/release.zh-CN.md](docs/release.zh-CN.md)): **commit and push webui `main` first**, then tag the backend. CI builds WebUI from GitHub, not from local `webui/dist/` — unpushed frontend changes are missing from release binaries (backend-only tag = old UI + new API).
-- **NEVER commit `webui/dist/`** — it is gitignored (`webui/.gitignore`: `dist/`) and exists only as a **local build artifact** for local packaging/embedding. The release workflow `rm -rf`s and rebuilds it from the frontend repo, so committing it is pointless and noisy. When committing backend changes, only stage `src/`, `Cargo.toml`, etc. — never `git add -f` or otherwise force dist files. The legacy force-added dist files have been untracked; do not re-add them.
-- **No manual rebuild/integration of `webui/dist/` is needed.** Do not hand-run `npm run build` + copy `dist/` just to "integrate" the frontend. Integration is automatic:
-  - **Local**: `./install_local.sh` builds the frontend (`npm run build` in `../cc-gateway-webui`), refreshes `webui/dist/`, then `cargo build --release` embeds it.
-  - **Release**: the CI workflow checks out and builds the frontend repo and copies it into `webui/dist/` before compiling.
-  - So after editing the frontend, just commit/push the **frontend repo** and run `./install_local.sh` (local) or push a tag (release) — never commit `webui/dist/` to wire it up.
+- The frontend repo is a **sibling directory** (`../cc-gateway-webui`); clone it if missing. If `webui/dist/` is absent/unembedded, the WebUI serves a fallback page.
+- **NEVER commit `webui/dist/`** — gitignored, a **local build artifact** only; never `git add -f` it. Stage only `src/`, `Cargo.toml`, etc.
+- **Integration is automatic — don't hand-run `npm run build` + copy `dist/`.** Local: `./install_local.sh` builds the frontend and `cargo build --release` embeds it. Release: CI builds the **frontend repo's GitHub `main`** into `webui/dist/`. So after editing the frontend, commit/push the **frontend repo**, then `./install_local.sh` (local) or push a tag (release). Release-tag ordering & rationale → [docs/release.md](docs/release.md) / [release.zh-CN.md](docs/release.zh-CN.md).
 
 ## Local Development Install
 
@@ -85,37 +80,7 @@ cargo run -- webui        # Open WebUI (requires built/embedded frontend for ful
 
 ## User-facing documentation (keep in sync)
 
-Treat documentation as part of the feature. When reviewers (or release prep) grep for a new `id`, it should appear in setup guides—not only in Rust/WebUI code.
-
-### New agent provider
-
-| File | What to update |
-|------|----------------|
-| `docs/config.md` / `docs/config.zh-CN.md` | `agent` fields, example JSON, defaults; link to provider CLI install if non-obvious |
-| `README.md` / `README.zh-CN.md` | Provider name in features / gateway-command provider list / quick start when behavior differs |
-| `CLAUDE.md` | § [Adding a New Agent Provider](#adding-a-new-agent-provider) — refresh “Current providers” line; optional note under Agent Runtime if protocol is new |
-| `src/utils/i18n/dict.rs` | Provider-specific user strings (see i18n rules below) |
-
-No `docs/bots/` change unless the provider is only relevant on one platform (unusual).
-
-### New chat platform (bot channel)
-
-| File | What to update |
-|------|----------------|
-| `docs/bots/<platform>.md` / `docs/bots/<platform>.zh-CN.md` | **Create** setup guide: developer console steps, `config.json` fields, pairing, transport, UX (`/ll`, @ rules), **whether MCP `send_file` is supported**, troubleshooting, official API links |
-| `docs/bots/README.md` / `docs/bots/README.zh-CN.md` | Add row to the platform table; mention pairing if applicable |
-| `docs/config.md` / `docs/config.zh-CN.md` | New `GatewayConfig` section, field table, example JSON, restart vs live fields; link to `docs/bots/<platform>` |
-| `docs/usage.md` / `docs/usage.zh-CN.md` | Usage section for that platform (how to talk to the bot, command quirks) |
-| `README.md` / `README.zh-CN.md` | Features, architecture line, quick-start platform table, documentation index table |
-| `scripts/install-docs.sh` / `scripts/install-docs.ps1` | Add EN + zh-CN URL lines (install scripts source these; do not duplicate URLs in `install.sh` / `install.ps1`) |
-| `CLAUDE.md` | Project Overview; Platform layer; § [Adding a New Chat Platform](#adding-a-new-chat-platform-bot); **§ [Platform Reference Docs](#platform-reference-docs)** — add official vendor URLs (required, see that section) |
-| `../cc-gateway-webui` | Settings / pairing / session source labels (see platform frontend checklist in that section) |
-
-### Conventions
-
-- **Bilingual pairs**: every new `docs/foo.md` user guide should have `docs/foo.zh-CN.md` (or live under `docs/bots/*.zh-CN.md`). README uses `README.md` + `README.zh-CN.md` with language links at the top.
-- **Single source for setup steps**: long console walkthroughs live in `docs/bots/<platform>.md`; `docs/config.md` and README only summarize fields and link there.
-- **Install output**: `install.sh` / `install.ps1` / `install_local.*` call `scripts/install-docs.*` — extend those scripts when adding a platform so fresh installs list the new guide.
+Treat documentation as part of the feature: adding or materially changing an **agent provider** or **chat platform** is not complete until the per-file sync tables are satisfied (EN + zh-CN where paired). **Full checklist → [docs/doc-sync-checklist.md](docs/doc-sync-checklist.md)** (new-provider table, new-platform table, bilingual/single-source/install-output conventions).
 
 ## Architecture
 
@@ -130,10 +95,13 @@ No `docs/bots/` change unless the provider is only relevant on one platform (unu
 
 ### Agent Runtime (`src/core/agent/` + `src/core/runtime/`)
 
-- **`core/agent/session.rs`**: Provider-neutral `AgentRuntime` enum; dispatches spawn/send/stop/resume to the active backend.
-- **`core/runtime/session.rs`** / **`core/runtime/protocol.rs`**: Claude Code **stream-json** over stdio.
-- **`core/agent/cursor_acp.rs`**, **`core/agent/opencode_acp.rs`**: **ACP** JSON-RPC clients (gateway is the ACP *client*; the CLI is the *agent*). Shared helpers: `acp_client.rs`.
+- **`core/agent/session.rs`**: Provider-neutral `AgentRuntime` enum; spawn/stop still match here; send/compact/models dispatch via [`core/agent/backend.rs`](src/core/agent/backend.rs) [`AgentBackend`](src/core/agent/backend.rs) trait + `dispatch_agent_backend!` macro.
+- **`core/agent/backend.rs`**: Unified gateway-facing session API (`send_user_message`, `set_model`, `compact_context`, …). Claude stream-json, Pi RPC, and ACP sessions each implement `AgentBackend`.
+- **`core/runtime/session.rs`** / **`core/runtime/protocol.rs`**: Claude Code **stream-json** over stdio (`StreamJsonSession` implements `AgentBackend`).
+- **`core/agent/acp_session.rs`**: Shared **ACP** spawn/prompt/permission/update logic (`GenericAcpSession<H: AcpHooks>`). Provider-specific argv, MCP prep, auth, and extension notifications live in thin `AcpHooks` impls.
+- **`core/agent/cursor_acp.rs`**, **`core/agent/opencode_acp.rs`**: `CursorAcpHooks` / `OpenCodeAcpHooks` only — transport via `acp_client.rs`.
 - **`core/agent/pi_rpc.rs`**: Pi **line-delimited JSON-RPC** (`pi --mode rpc`).
+- **`core/config/agent_registry.rs`**: `AgentCapabilities` + `AGENT_PROVIDER_DEFS` — single source for `/models`, MCP attach, `/compact`, resume, and `default_args` normalization flags.
 - **`core/runtime/controller.rs`**: Owns the active `AgentRuntime`, exposes start/stop/send. Emits `ControllerEvent` (Text, Thinking, ToolUse, ToolResult, PermissionRequest, Error, Done). Manages `work_dir`, MCP attach context, and pending permission/resume state.
 
 ### Command Routing (`src/core/command/` + `src/core/session/`)
@@ -160,13 +128,9 @@ Entry points:
 See **[Adding a New Chat Platform (Bot)](#adding-a-new-chat-platform-bot)** for the full integration checklist. User-facing setup guides: `docs/bots/` (Feishu, Telegram, QQ — EN + zh-CN).
 
 - **`platform.rs`**: Defines the `Platform` trait (`run()` and `shutdown()`). All platform integrations implement this trait so `DaemonEngine` is platform-agnostic.
-- **`platform/feishu.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Gets tenant access token, connects to WS endpoint, handles heartbeats, deduplicates messages, normalizes events into `NormalizedMessage`, routes through `CommandRouter`, and polls `AgentController` events to reply back. Each chat gets its own `ChatSession` (isolated Claude subprocess).
-  - `/ll` in Feishu is intercepted before routing: sends an interactive card listing folders from `default_dir`. Card buttons carry `value: { "cmd": "cd", "path": "...", "chat_id": "..." }`.
-  - `/cd` in Feishu is intercepted before routing: resolves and canonicalizes the path, enforces that the result stays within `default_dir`, then calls `set_work_dir`.
-  - Card callbacks with `cmd == "cd"` are handled directly: call `controller.init_work_dir(path)` and reply with confirmation text.
-  - Unknown slash commands when no session is active receive a list of available commands (see `feishu.unknown_command`).
-- **`platform/telegram.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Each chat gets its own `TgChatSession` (isolated Claude subprocess). Routes messages through `CommandRouter` and streams Claude responses back via `sendMessage`.
-- **`platform/qq.rs`**: QQ 开放平台官方机器人（OpenAPI v2 + Gateway WebSocket）。`app_id` / `app_secret` 换取 access token，连接 `wss` Gateway，处理 `C2C_MESSAGE_CREATE` 与 `GROUP_AT_MESSAGE_CREATE`。频道 id：`u:{openid}`（私聊）、`g:{group_openid}`（群 @）。`/ll` 等为纯文本列表（无卡片按钮）。**MCP `send_file`**: `McpDeliveryTarget::Qq` + 富媒体上传/发送（`platform/qq/api.rs`）；群聊仅支持图片/视频/语音，通用文件需私聊。入站仍为纯文本（无 `inbound_media`）。生产 API：`https://api.sgroup.qq.com`；`qq.sandbox: true` 使用沙箱域名。
+- **`platform/feishu.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Inbound text uses shared `chat_flow::route_and_execute` → `ChatCommandOutcome` (cards for `/ll`, `ListDir`, permissions, etc.). Card callbacks with `cmd == "cd"` are handled in `feishu/ws.rs`. Each chat gets its own isolated agent subprocess.
+- **`platform/telegram.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Shared command pipeline; `/ll` and `/agents` render as **inline keyboards**. Streams agent events back via `sendMessage`.
+- **`platform/qq.rs`**: QQ 开放平台官方机器人（OpenAPI v2 + Gateway WebSocket）。**仅 C2C 私聊**；`GROUP_AT_MESSAGE_CREATE` 回复 `qq.group_chat_unsupported`。频道 id：`u:{openid}`。`/ll` 等为纯文本。**入站附件**（C2C）经 `inbound_media` 转发。**MCP `send_file`**: `McpDeliveryTarget::Qq`（C2C 富媒体）。生产 API：`https://api.sgroup.qq.com`；`qq.sandbox: true` 使用沙箱域名。
 - **`platform/proto.rs`**: Protobuf frame codec for Feishu pbbp2 (METHOD_CONTROL / METHOD_DATA, SERVICE_IM / SERVICE_CARD).
 
 ### Platform Reference Docs
@@ -175,8 +139,8 @@ Official vendor API / console links for building or debugging `src/platform/<nam
 
 ### Configuration (`src/core/config/`)
 
-- **`core/config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` environment variable substitution.
-- **`core/config/model.rs`**: `GatewayConfig` with `log`, `agent` (provider profiles), `platforms` (`feishu` / `telegram` / `qq` sections), plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
+- **`core/config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` substitution; `upgrade_config_json` (flat `agent.<id>` → `agent.providers.<id>`, top-level platforms) + `validate_agent_profile_keys` + `normalize_profiles`; **persists** the file when legacy layout or missing registry provider entries were upgraded.
+- **`core/config/model.rs`**: `GatewayConfig` with `log`, `agent` (`default` + `providers` map), `platforms` (`feishu` / `telegram` / `qq` sections), plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
 - **`core/config/wizard.rs`**: Interactive setup via `cc-gateway init` (also editable in WebUI Settings).
 
 ### Web Server (`src/api/web/`)

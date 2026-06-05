@@ -10,18 +10,18 @@
 |------|------|----------|-----|
 | `Platform`（`run` / `shutdown`） | 有 | 有 | 有 |
 | 配置 + `runtime_defaults()` | 有 | 有 | 有 |
-| Daemon `engine.rs` 启动 | 有 | 有 | 有 |
+| Daemon 经 `platform_registry` 启动 | 有 | 有 | 有 |
 | `SessionSource` + DB `source` | 有 | 有 | 有 |
 | 配对（`require_pairing`） | 有 | 有 | 有 |
 | `ChatCommandExecutor` + `CommandRouter` | 有 | 有 | 有 |
 | `EventPollSink`（流式回复） | 有 | 有 | 有 |
-| **MCP `send_file`** | 有 | 有 | 有（富媒体；群聊仅图片/视频/语音） |
+| **MCP `send_file`** | 有 | 有 | 有（仅 C2C 富媒体；群聊不支持） |
 | 命令路径 `McpContext` | 有 | 有 | 有 |
 | Deliver-bus 文本推送 | 有 | 有 | 有 |
 | WebUI 配置 + `/api/platforms` | 有 | 有 | 有 |
 | Init 向导机器人步骤 | 有 | 有 | 有 |
 | i18n（`<platform>.*`） | 有 | 有 | 有 |
-| 入站媒体转 agent | 有 | 有 | **无**（仅文本入站） |
+| 入站媒体转 agent | 有 | 有 | **有**（C2C 附件） |
 | `/ll`、`/agents` 交互 | 卡片 | 内联按钮 | 纯文本 |
 | 权限确认 UI | 卡片/回调 | 内联按钮 | 文本 + request id |
 | 无会话时未知命令 | 定制帮助 | 帮助文本 | 路由默认 |
@@ -36,10 +36,10 @@
 |---|-----|-------------|
 | A1 | `GatewayConfig` 配置结构 | `src/core/config/model.rs` |
 | A2 | `Default` + `runtime_defaults()` | `model.rs` |
-| A3 | 重启策略字段 | `src/core/config/restart_policy.rs` |
+| A3 | 重启/热更新字段路径 | `src/core/config/platform_registry.rs` + `restart_policy.rs` |
 | A4 | 平台模块 `src/platform/<name>/` | 实现 `Platform` |
 | A5 | `pub mod <name>` | `src/platform.rs` |
-| A6 | Daemon 启动 + pairing | `src/daemon/engine.rs` |
+| A6 | `PlatformDef` 注册 + daemon 启动 | `src/core/config/platform_registry.rs`、`src/daemon/engine.rs` |
 | A7 | 连接状态 | `src/platform/status.rs` |
 | A8 | `SessionSource` | `src/core/session/channel_model.rs`、`src/database.rs`、`channel_manager.rs` |
 | A9 | `with_mcp_context` | 平台入站处理 |

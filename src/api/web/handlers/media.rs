@@ -18,7 +18,7 @@ pub async fn handle_get_media(
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
     let content_type = mime_for_path(&path);
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(
@@ -27,7 +27,7 @@ pub async fn handle_get_media(
         )
         .header(header::CONTENT_LENGTH, meta.len())
         .body(body)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn mime_for_path(path: &std::path::Path) -> &'static str {

@@ -32,11 +32,15 @@ pub fn mcp_context_for_session(session_id: &str) -> McpContext {
     }
 }
 
+/// Max UTF-8 text to inline into the agent prompt on WebUI upload (avoid huge pastes).
+const WEBUI_INLINE_TEXT_MAX_BYTES: usize = 48 * 1024;
+
 pub fn build_file_event_content(
     media_filename: &str,
     display_name: &str,
     size: u64,
     is_image: bool,
+    local_path: &str,
 ) -> String {
     let payload = json!({
         "v": 1,
@@ -45,8 +49,57 @@ pub fn build_file_event_content(
         "name": display_name,
         "size": size,
         "is_image": is_image,
+        "local_path": local_path,
     });
     format!("{WEBUI_FILE_EVENT_PREFIX}{payload}")
+}
+
+/// Agent-facing text for a WebUI upload (caption + readable path or inlined text body).
+pub fn format_webui_upload_agent_message(
+    caption: &str,
+    display_name: &str,
+    saved: &SavedInboundMedia,
+    bytes: &[u8],
+) -> String {
+    let mut parts = Vec::new();
+    let cap = caption.trim();
+    if !cap.is_empty() {
+        parts.push(cap.to_string());
+    }
+    let path = saved.path.display().to_string();
+    if saved.is_image {
+        parts.push(format!("![]({path})"));
+        return parts.join("\n\n");
+    }
+    if should_inline_text_upload(display_name, bytes.len()) {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            parts.push(format!(
+                "[Uploaded file: {display_name}]\n\n```\n{text}\n```"
+            ));
+            return parts.join("\n\n");
+        }
+    }
+    parts.push(format!(
+        "[Uploaded file: {display_name}]\nPath: {path}\n(Read and analyze this file from the path above.)"
+    ));
+    parts.join("\n\n")
+}
+
+fn should_inline_text_upload(filename: &str, size: usize) -> bool {
+    if size == 0 || size > WEBUI_INLINE_TEXT_MAX_BYTES {
+        return false;
+    }
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "md" | "txt" | "json" | "yaml" | "yml" | "toml" | "rs" | "py" | "js" | "ts"
+            | "tsx" | "jsx" | "html" | "css" | "sh" | "bash" | "sql" | "log" | "csv"
+            | "xml" | "ini" | "cfg" | "conf"
+    )
 }
 
 pub fn broadcast_file_attachment(
@@ -56,8 +109,15 @@ pub fn broadcast_file_attachment(
     display_name: &str,
     size: u64,
     is_image: bool,
+    local_path: &str,
 ) {
-    let content = build_file_event_content(media_filename, display_name, size, is_image);
+    let content = build_file_event_content(
+        media_filename,
+        display_name,
+        size,
+        is_image,
+        local_path,
+    );
     broadcast_event(session_id, "webui", session_id, role, &content);
 }
 
@@ -187,15 +247,35 @@ mod tests {
             "a.pdf",
             9,
             false,
+            "/tmp/a.pdf",
         );
         let img = build_file_event_content(
             "550e8400-e29b-41d4-a716-446655440000.png",
             "shot.png",
             9,
             true,
+            "/tmp/shot.png",
         );
         assert!(img.contains("\"is_image\":true"));
         assert!(s.starts_with(WEBUI_FILE_EVENT_PREFIX));
         assert!(s.contains("a.pdf"));
+        assert!(s.contains("local_path"));
+    }
+
+    #[test]
+    fn webui_upload_message_inlines_small_markdown() {
+        let dir = std::env::temp_dir().join(format!("cg-upload-fmt-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("note.md");
+        let body = b"# Title\n\nbody";
+        std::fs::write(&path, body).unwrap();
+        let saved = SavedInboundMedia {
+            path: path.clone(),
+            is_image: false,
+        };
+        let msg = format_webui_upload_agent_message("", "note.md", &saved, body);
+        assert!(msg.contains("# Title"));
+        assert!(msg.contains("```"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

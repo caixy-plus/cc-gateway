@@ -12,7 +12,7 @@
 - **聊天隔离** — 每个聊天/频道独立子进程，消息互不串线
 - **配对放行** — 可在 WebUI 中批准新聊天后再允许使用（建议开启）
 - **WebUI** — 浏览器管理会话、配对、设置与实时事件
-- **目录工具** — `/ll`（飞书为交互卡片，Telegram/QQ/WebUI 为文本列表）
+- **目录工具** — `/ll`（飞书交互卡片、Telegram 内联键盘、QQ/WebUI 文本列表）
 - **守护进程** — `start` / `stop` / `restart` / `log`，端口绑定保证单实例
 
 ## 安装
@@ -52,15 +52,15 @@ cd cc-gateway
    cc-gateway init
    ```
 
-   也可在 `cc-gateway start` 后通过 WebUI **设置** 或编辑 `~/.cc-gateway/config.json`。
+   也可在 `cc-gateway start` 后通过 WebUI **设置** 或编辑 `~/.cc-gateway/config.json`。旧版配置会在首次加载时自动迁移并写回（见 [config.zh-CN.md](docs/config.zh-CN.md)）。
 
    按需启用机器人，例如：
 
    | 平台 | 配置项 | 配置指南 |
    |------|--------|----------|
-   | 飞书 / Lark | `feishu.enabled`、`app_id`、`app_secret` | [docs/bots/feishu.zh-CN.md](docs/bots/feishu.zh-CN.md) |
-   | Telegram | `telegram.enabled`、`bot_token` | [docs/bots/telegram.zh-CN.md](docs/bots/telegram.zh-CN.md) |
-   | QQ | `qq.enabled`、`app_id`、`app_secret`、`sandbox` | [docs/bots/qq.zh-CN.md](docs/bots/qq.zh-CN.md) |
+   | 飞书 / Lark | `platforms.feishu.enabled`、`app_id`、`app_secret` | [docs/bots/feishu.zh-CN.md](docs/bots/feishu.zh-CN.md) |
+   | Telegram | `platforms.telegram.enabled`、`bot_token` | [docs/bots/telegram.zh-CN.md](docs/bots/telegram.zh-CN.md) |
+   | QQ | `platforms.qq.enabled`、`app_id`、`app_secret`、`sandbox` | [docs/bots/qq.zh-CN.md](docs/bots/qq.zh-CN.md) |
 
    将 `default_dir` 设为远程用户可浏览的工作区根目录（如 `~/Workspace`）。多个平台可同时运行。
 
@@ -98,8 +98,8 @@ cd cc-gateway
 | `cc-gateway webui` | 在浏览器打开 WebUI（未运行时会先 start） |
 | `cc-gateway webui-token [--refresh]` | 查看或重新生成 WebUI 访问令牌 |
 | `cc-gateway enable` / `disable` | 开关开机自启（launchd / systemd 用户服务） |
-| `cc-gateway update [-y]` | 检查并安装最新发布版 |
-| `cc-gateway uninstall` | 卸载二进制与服务项 |
+| `cc-gateway update [--check] [-f] [-y]` | 检查或安装最新发布版（`--check` 仅查版本） |
+| `cc-gateway uninstall [-y] [--keep-data]` | 卸载二进制与服务项（`--keep-data` 保留 `~/.cc-gateway`） |
 
 ## 网关命令（聊天内）
 
@@ -115,7 +115,7 @@ cd cc-gateway
 | `/agents [provider]` | 设置本频道默认智能体 |
 | `/agent-history [n]` | 列出最近会话；按序号恢复 |
 | `/pwd` | 显示当前工作目录 |
-| `/ll` | 选择目录（飞书卡片 / 文本列表） |
+| `/ll` | 选择目录（飞书卡片 / Telegram 内联键盘 / QQ·WebUI 文本） |
 | `/mkdir <名称>` | 创建目录 |
 | `/show-thinking` / `/hide-thinking` | 开关 Thinking 输出 |
 | `/stop` / `/clear` / `/status` / `/esc` | 控制当前生成（视平台支持） |
