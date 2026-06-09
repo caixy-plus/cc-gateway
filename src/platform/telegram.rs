@@ -27,9 +27,16 @@ use crate::t_fmt;
 mod inbound;
 use inbound::InboundContent;
 
+const TELEGRAM_DEFAULT_HTTP_TIMEOUT_SECS: u64 = 45;
+
 /// Build an HTTP client for Telegram Bot API. Proxy applies to Telegram only.
 pub(crate) fn build_http_client(proxy: &str) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(45));
+    build_http_client_with_timeout(proxy, Duration::from_secs(TELEGRAM_DEFAULT_HTTP_TIMEOUT_SECS))
+}
+
+/// Same as [`build_http_client`] but with a custom request timeout (e.g. large file uploads).
+pub(crate) fn build_http_client_with_timeout(proxy: &str, timeout: Duration) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder().timeout(timeout);
     let proxy = proxy.trim();
     if !proxy.is_empty() {
         match reqwest::Proxy::all(proxy) {

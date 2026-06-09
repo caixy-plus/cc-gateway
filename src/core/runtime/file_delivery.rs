@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,12 @@ pub const MCP_TARGET_ENV: &str = "CC_GATEWAY_MCP_TARGET";
 pub const MAX_OUTBOUND_FILE_BYTES: u64 = 30 * 1024 * 1024;
 /// Feishu image upload API limit (see open.feishu.cn im/v1/images).
 pub const FEISHU_MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+/// Telegram Bot API `sendPhoto` limit (see core.telegram.org/bots/api#sendphoto).
+pub const TELEGRAM_MAX_PHOTO_BYTES: u64 = 10 * 1024 * 1024;
+const TELEGRAM_UPLOAD_TIMEOUT_MIN_SECS: u64 = 120;
+const TELEGRAM_UPLOAD_TIMEOUT_MAX_SECS: u64 = 600;
+/// Conservative upload throughput for timeout estimation (~200 KiB/s).
+const TELEGRAM_UPLOAD_BYTES_PER_SEC: u64 = 200 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpContext {
@@ -244,12 +251,38 @@ pub(crate) fn telegram_send_photo_url(bot_token: &str) -> String {
     format!("https://api.telegram.org/bot{}/sendPhoto", bot_token)
 }
 
+/// Extensions accepted by Telegram `sendPhoto` (jpeg/png/gif/webp only).
+fn telegram_photo_extension_from_name(name: &str) -> bool {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
+}
+
+/// Route to `sendPhoto` only when Telegram supports the format and size (≤10 MB).
+pub fn telegram_send_as_photo(file: &OutboundFile) -> bool {
+    file.bytes.len() as u64 <= TELEGRAM_MAX_PHOTO_BYTES
+        && telegram_photo_extension_from_name(&file.file_name)
+}
+
+/// Scale HTTP timeout with payload size; default polling client stays at 45s.
+pub fn telegram_upload_timeout(bytes: usize) -> Duration {
+    let estimated = 90 + bytes as u64 / TELEGRAM_UPLOAD_BYTES_PER_SEC;
+    let secs = estimated
+        .max(TELEGRAM_UPLOAD_TIMEOUT_MIN_SECS)
+        .min(TELEGRAM_UPLOAD_TIMEOUT_MAX_SECS);
+    Duration::from_secs(secs)
+}
+
 #[async_trait::async_trait]
 impl FileDelivery for TelegramFileTarget {
     async fn send_file(&self, file: OutboundFile) -> Result<SentFile> {
         let file_name = file.file_name.clone();
+        let file_bytes = file.bytes.len();
         let mime = mime_guess_from_name(&file_name);
-        let (url, field) = if outbound_file_is_image(&file) {
+        let (url, field) = if telegram_send_as_photo(&file) {
             (telegram_send_photo_url(&self.bot_token), "photo")
         } else {
             (telegram_send_document_url(&self.bot_token), "document")
@@ -263,13 +296,27 @@ impl FileDelivery for TelegramFileTarget {
             .text("chat_id", self.chat_id.clone())
             .part(field, part);
 
-        let client = crate::platform::telegram::build_http_client(&self.proxy);
+        let timeout = telegram_upload_timeout(file_bytes);
+        let client =
+            crate::platform::telegram::build_http_client_with_timeout(&self.proxy, timeout);
         let resp = client
             .post(url)
             .multipart(form)
             .send()
             .await
-            .with_context(|| format!("Failed to send Telegram {field}"))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    anyhow::anyhow!(
+                        "Telegram {field} upload timed out after {}s ({} bytes); try a smaller file or set platforms.telegram.proxy",
+                        timeout.as_secs(),
+                        file_bytes
+                    )
+                } else if e.is_connect() {
+                    anyhow::anyhow!("Telegram {field} connection failed: {e}")
+                } else {
+                    anyhow::anyhow!("Failed to send Telegram {field}: {e}")
+                }
+            })?;
         let status = resp.status();
         let body: Value = resp
             .json()
@@ -419,5 +466,42 @@ mod tests {
         let token = "123:ABC";
         assert!(telegram_send_photo_url(token).contains("sendPhoto"));
         assert!(telegram_send_document_url(token).contains("sendDocument"));
+    }
+
+    #[test]
+    fn telegram_send_as_photo_respects_format_and_size() {
+        let small_png = OutboundFile {
+            path: PathBuf::from("a.png"),
+            file_name: "a.png".to_string(),
+            file_type: "image".to_string(),
+            bytes: vec![0; 1024],
+        };
+        assert!(telegram_send_as_photo(&small_png));
+
+        let large_png = OutboundFile {
+            bytes: vec![0; (TELEGRAM_MAX_PHOTO_BYTES + 1) as usize],
+            ..small_png.clone()
+        };
+        assert!(!telegram_send_as_photo(&large_png));
+
+        let bmp = OutboundFile {
+            file_name: "photo.bmp".to_string(),
+            file_type: "image".to_string(),
+            bytes: vec![0; 1024],
+            path: PathBuf::from("photo.bmp"),
+        };
+        assert!(!telegram_send_as_photo(&bmp));
+    }
+
+    #[test]
+    fn telegram_upload_timeout_scales_with_size() {
+        assert_eq!(
+            telegram_upload_timeout(1024),
+            Duration::from_secs(TELEGRAM_UPLOAD_TIMEOUT_MIN_SECS)
+        );
+        let twenty_mb = 20 * 1024 * 1024;
+        let t = telegram_upload_timeout(twenty_mb);
+        assert!(t >= Duration::from_secs(120));
+        assert!(t <= Duration::from_secs(TELEGRAM_UPLOAD_TIMEOUT_MAX_SECS));
     }
 }
