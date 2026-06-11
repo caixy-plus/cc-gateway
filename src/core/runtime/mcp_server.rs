@@ -10,7 +10,7 @@ use crate::runtime::file_delivery::{
 
 pub use crate::runtime::file_delivery::McpContext;
 
-pub(crate) fn send_file_tool_schema() -> Value {
+fn send_file_tool_schema() -> Value {
     let max_mb = MAX_OUTBOUND_FILE_BYTES / 1024 / 1024;
     json!({
         "name": "send_file",

@@ -132,7 +132,7 @@ impl FileDelivery for crate::web::files::WebUiFileTarget {
 }
 
 /// Whether MCP outbound should use platform **image** APIs (inline preview), not generic file/document.
-pub fn outbound_file_is_image(file: &OutboundFile) -> bool {
+fn outbound_file_is_image(file: &OutboundFile) -> bool {
     if file.file_type == "image" {
         return true;
     }
@@ -243,11 +243,11 @@ impl FileDelivery for FeishuFileTarget {
     }
 }
 
-pub(crate) fn telegram_send_document_url(bot_token: &str) -> String {
+fn telegram_send_document_url(bot_token: &str) -> String {
     format!("https://api.telegram.org/bot{}/sendDocument", bot_token)
 }
 
-pub(crate) fn telegram_send_photo_url(bot_token: &str) -> String {
+fn telegram_send_photo_url(bot_token: &str) -> String {
     format!("https://api.telegram.org/bot{}/sendPhoto", bot_token)
 }
 
@@ -262,13 +262,13 @@ fn telegram_photo_extension_from_name(name: &str) -> bool {
 }
 
 /// Route to `sendPhoto` only when Telegram supports the format and size (≤10 MB).
-pub fn telegram_send_as_photo(file: &OutboundFile) -> bool {
+fn telegram_send_as_photo(file: &OutboundFile) -> bool {
     file.bytes.len() as u64 <= TELEGRAM_MAX_PHOTO_BYTES
         && telegram_photo_extension_from_name(&file.file_name)
 }
 
 /// Scale HTTP timeout with payload size; default polling client stays at 45s.
-pub fn telegram_upload_timeout(bytes: usize) -> Duration {
+fn telegram_upload_timeout(bytes: usize) -> Duration {
     let estimated = 90 + bytes as u64 / TELEGRAM_UPLOAD_BYTES_PER_SEC;
     let secs = estimated
         .max(TELEGRAM_UPLOAD_TIMEOUT_MIN_SECS)
@@ -379,7 +379,7 @@ impl FileDelivery for QqFileTarget {
 }
 
 /// Known file extensions and their Feishu-compatible file_type mapping.
-pub fn detect_file_type(path: &str) -> &str {
+fn detect_file_type(path: &str) -> &str {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())

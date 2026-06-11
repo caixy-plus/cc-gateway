@@ -881,7 +881,7 @@ impl AgentController {
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    pub(crate) async fn process_agent_event(
+    async fn process_agent_event(
         event_tx: &mpsc::UnboundedSender<ControllerEvent>,
         pending_perm: &Arc<RwLock<Option<(String, String, String)>>>,
         session_arc: &Arc<RwLock<Option<AgentRuntime>>>,

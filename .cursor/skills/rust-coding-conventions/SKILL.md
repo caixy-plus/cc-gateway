@@ -76,6 +76,7 @@ src/core/config/model.rs
 ## When making changes
 - If you modify Rust code, ensure `cargo fmt` and `cargo test` for relevant scope.
 - If adding new behavior, add a focused test first (TDD preferred).
+- **cc-gateway:** unit tests belong in the same `.rs` (`#[cfg(test)] mod tests` at file bottom). Reserve `src/tests/` for integration/smoke flows; never make production helpers `pub`/`pub(crate)` solely so another file can unit-test them.
 
 ## Output expectations (when responding with code)
 - Keep diffs minimal and intention-revealing.

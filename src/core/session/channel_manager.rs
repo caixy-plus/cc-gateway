@@ -1111,7 +1111,7 @@ fn should_try_provider_resume(agent_session: &AgentSession, provider: &AgentProv
 }
 
 /// Whether gateway history (`~/.cc-gateway/history/{agent_session.id}.jsonl`) contains a user line.
-pub fn gateway_session_has_user_history(agent_session: &AgentSession) -> bool {
+pub(crate) fn gateway_session_has_user_history(agent_session: &AgentSession) -> bool {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return false,

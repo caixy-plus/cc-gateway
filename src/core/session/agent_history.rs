@@ -77,7 +77,7 @@ pub async fn run(
     }
 }
 
-pub fn parse_history_arg(arg: &str) -> Result<(usize, bool), String> {
+pub(crate) fn parse_history_arg(arg: &str) -> Result<(usize, bool), String> {
     let tokens: Vec<&str> = arg.split_whitespace().collect();
     let (start_new, idx_token) = match tokens.as_slice() {
         [idx] => (false, *idx),

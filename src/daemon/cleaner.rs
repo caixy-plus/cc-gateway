@@ -194,7 +194,7 @@ fn remove_agent_session_record(session: &AgentSession) {
 /// Pick up to `max` sessions per channel: pin the latest-updated per work_dir, then fill by
 /// `updated_at` (newest first). When work_dir count exceeds `max`, only the newest `max` pinned
 /// sessions survive.
-pub(crate) fn select_sessions_to_keep(sessions: &[AgentSession], max: usize) -> HashSet<String> {
+fn select_sessions_to_keep(sessions: &[AgentSession], max: usize) -> HashSet<String> {
     if sessions.len() <= max {
         return sessions.iter().map(|s| s.id.clone()).collect();
     }

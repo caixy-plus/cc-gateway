@@ -875,7 +875,7 @@ impl FeishuPlatform {
 // Free functions: text splitting, HTTP response, content extraction
 // ---------------------------------------------------------------------------
 
-pub(crate) fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
+fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
     if text.chars().count() <= max_chars {
         return vec![text.to_string()];
     }

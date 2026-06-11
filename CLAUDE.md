@@ -24,8 +24,10 @@ src/
 ├── utils/               # env helpers + i18n
 ├── types.rs             # shared type re-exports
 ├── update.rs, uninstall.rs
-└── tests/               # integration tests (#[cfg(test)] in lib)
+└── tests/               # cross-module integration / smoke tests only (`#[cfg(test)]` in lib)
 ```
+
+**Tests:** put **unit tests** in the same `.rs` file (`#[cfg(test)] mod tests` at the bottom). Use `src/tests/` only for flows that need fake CLIs, DB, HTTP, or global session state; register new modules in `src/tests.rs`. Do not widen `pub`/`pub(crate)` on production helpers just to test from another file.
 
 - Embeds WebUI static files via `rust-embed` (`src/api/web/handlers/ui.rs` → `webui/dist/`).
 - Internal code may use `crate::config::…` via `lib.rs` re-exports; prefer `crate::core::config::…` in new code.

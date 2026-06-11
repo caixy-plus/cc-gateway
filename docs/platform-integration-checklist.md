@@ -49,7 +49,7 @@ Document any intentional **No** in your platform’s `docs/bots/<id>.md`.
 | A13 | Web config save / mask secrets / platforms API | `src/api/web/handlers/config.rs` |
 | A14 | Init wizard menu entry | `src/core/config/wizard.rs` |
 | A15 | i18n keys (EN + ZhCN) | `src/utils/i18n/dict.rs` |
-| A16 | Tests | `src/tests/<name>_*.rs`, `tests.rs` |
+| A16 | Tests | Unit tests in the same `.rs`; integration/smoke in `src/tests/` + `tests.rs` when needed |
 
 ## B. Platform Reference Docs (required)
 

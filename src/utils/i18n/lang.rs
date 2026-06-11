@@ -20,7 +20,7 @@ impl Language {
     /// On Windows, `LANG`/`LC_ALL` are often set to `en_US.UTF-8` by Git or other dev
     /// tools even when the UI locale is Chinese, so the OS locale is consulted first
     /// (after `CC_GATEWAY_LANG`).
-    pub(crate) fn detect_from(
+    fn detect_from(
         cc_gateway_lang: Option<&str>,
         lc_all: Option<&str>,
         lang: Option<&str>,
@@ -57,7 +57,7 @@ impl Language {
         Self::En
     }
 
-    pub(crate) fn from_str(s: &str) -> Self {
+    fn from_str(s: &str) -> Self {
         Self::from_locale(s).unwrap_or(Self::En)
     }
 
@@ -104,7 +104,7 @@ fn detect_system_locale() -> Option<String> {
     None
 }
 
-pub(crate) fn first_apple_language(output: &str) -> Option<String> {
+fn first_apple_language(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let lang = line.trim().trim_end_matches(',').trim_matches('"').trim();
         if lang.is_empty() || lang == "(" || lang == ")" {

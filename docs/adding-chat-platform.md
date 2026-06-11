@@ -74,7 +74,7 @@ Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` onl
 | **P. Web API** | `src/api/web/handlers/config.rs` | Mask secrets in `handle_get_config`; merge body in `handle_save_config`; include in `handle_get_platforms` when `enabled`; extend `handle_set_require_pairing` allowlist. |
 | **Q. Init wizard** | `src/core/config/wizard.rs` | `configure_bot_step`: menu entry, enable flag, credential prompts, incomplete warnings. |
 | **R. i18n** | `src/utils/i18n/dict.rs` | Prefix `<name>.` for help, errors, shutdown notice, permission titles, command menu labels. |
-| **S. Tests** | `src/tests/<name>_*.rs`, `src/tests.rs` | Card/layout unit tests (Feishu), flow tests with mocks, pairing if special-cased. Register module in `tests.rs`. |
+| **S. Tests** | Same-file `#[cfg(test)]` in platform modules; optional `src/tests/<name>_*.rs` | Card/layout and parsing unit tests stay in the platform `.rs` (e.g. `feishu/cards.rs`, `qq/api.rs`). Use `src/tests/` only for full chat/session flows with mocks; register in `src/tests.rs`. Do not widen visibility on handlers/helpers for unit tests. |
 | **T. Platform Reference Docs** | [platform-reference.md](platform-reference.md) | **Required:** add a new `## <Platform>` subsection with console + auth + transport + events + send APIs (table of URLs). Mirror links in `docs/bots/<platform>.md` **References**. |
 | **U. User documentation** | See § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) | **Required:** new `docs/bots/<platform>.md` + `.zh-CN.md`, update `docs/bots/README`, `docs/config`, `docs/usage`, README, `scripts/install-docs.*`. |
 

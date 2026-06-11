@@ -49,7 +49,7 @@
 | A13 | Web 配置读写 / 平台列表 | `src/api/web/handlers/config.rs` |
 | A14 | Init 向导 | `src/core/config/wizard.rs` |
 | A15 | i18n 中英文 | `src/utils/i18n/dict.rs` |
-| A16 | 测试 | `src/tests/`、`tests.rs` |
+| A16 | 测试 | 单元测试写在对应 `.rs` 末尾；仅跨模块流程测试放 `src/tests/` + `tests.rs` |
 
 ## B. Platform Reference Docs（必填）
 

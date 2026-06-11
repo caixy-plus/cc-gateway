@@ -4,7 +4,7 @@ use crate::web::handlers::session::AppState;
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde_json::json;
 
-pub(crate) fn mask_secret(s: &str) -> String {
+fn mask_secret(s: &str) -> String {
     crate::config::secrets::mask_secret(s)
 }
 
