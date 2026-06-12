@@ -1416,3 +1416,54 @@ async fn webui_upload_forward_skips_duplicate_user_bubble() -> Result<()> {
     let _ = short_timeout("stop", handle_stop_session(Path(session_id))).await;
     Ok(())
 }
+
+/// WebUI settings posts `agent` with the canonical `providers` map (stale, from
+/// GET /api/config) AND edited flat per-provider keys side by side. The edited
+/// flat values must win and persist to disk.
+#[tokio::test]
+async fn webui_save_config_persists_flat_agent_default_args() -> Result<()> {
+    use crate::config::loader::ConfigLoader;
+    let _env = super::helpers::TestEnv::new();
+
+    // Seed an on-disk config so the save path starts from a real file.
+    let mut seed = crate::config::model::GatewayConfig::default();
+    seed.agent
+        .providers
+        .insert("claude".to_string(), Default::default());
+    ConfigLoader::save(&seed)?;
+
+    // WebUI form shape: nested `providers` holds the OLD value, flat key the edit.
+    let body = serde_json::json!({
+        "agent": {
+            "default": "claude",
+            "providers": {
+                "claude": { "enabled": true, "default_args": "" }
+            },
+            "claude": { "enabled": true, "default_args": "--dangerously-skip-permissions" },
+            "gemini": { "enabled": true, "default_args": "--yolo" }
+        }
+    });
+    let (status, _resp) =
+        crate::web::handlers::config::handle_save_config(Json(body)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let saved = ConfigLoader::load()?;
+    assert_eq!(
+        saved
+            .agent
+            .providers
+            .get("claude")
+            .and_then(|p| p.default_args.as_deref()),
+        Some("--dangerously-skip-permissions"),
+        "edited flat default_args must persist"
+    );
+    assert_eq!(
+        saved
+            .agent
+            .providers
+            .get("gemini")
+            .and_then(|p| p.default_args.as_deref()),
+        Some("--yolo"),
+    );
+    Ok(())
+}

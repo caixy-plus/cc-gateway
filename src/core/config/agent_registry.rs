@@ -417,6 +417,32 @@ pub fn provider_config_to_json(cfg: &AgentProviderConfig) -> Value {
 }
 
 /// WebUI / API catalog: integrated providers with current profile settings.
+/// Parse the `agent` section of a `POST /api/config` payload.
+///
+/// Accepts the canonical `{ "default", "providers" }` shape and the WebUI form
+/// shape where edited per-provider profiles sit as flat keys *next to* the
+/// (stale) `providers` map — flat keys win because those are what the UI edits.
+/// Unknown provider keys are rejected so typos surface instead of vanishing.
+pub fn agent_profiles_from_api_json(value: &Value) -> Result<AgentProfiles> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("\"agent\" must be a JSON object"))?;
+    let mut profiles: AgentProfiles = serde_json::from_value(value.clone())
+        .map_err(|e| anyhow::anyhow!("invalid \"agent\" section: {e}"))?;
+    for (key, profile_value) in obj {
+        if key == "default" || key == "providers" {
+            continue;
+        }
+        if def_by_id(key).is_none() {
+            anyhow::bail!("unknown agent provider key '{key}' in \"agent\" section");
+        }
+        let parsed: AgentProviderConfig = serde_json::from_value(profile_value.clone())
+            .map_err(|e| anyhow::anyhow!("invalid profile for agent '{key}': {e}"))?;
+        profiles.providers.insert(key.clone(), parsed);
+    }
+    Ok(profiles)
+}
+
 pub fn build_agents_api_response(profiles: &AgentProfiles) -> Value {
     let providers: Vec<Value> = AGENT_PROVIDER_DEFS
         .iter()
@@ -531,6 +557,49 @@ mod tests {
         assert!(providers
             .iter()
             .any(|p| p.get("id") == Some(&json!("opencode"))));
+    }
+
+    #[test]
+    fn agent_profiles_from_api_json_flat_keys_win_over_stale_providers() {
+        let value = json!({
+            "default": "claude",
+            "providers": { "claude": { "default_args": "old" } },
+            "claude": { "default_args": "new" }
+        });
+        let profiles = agent_profiles_from_api_json(&value).expect("parse");
+        assert_eq!(
+            profiles
+                .providers
+                .get("claude")
+                .and_then(|p| p.default_args.as_deref()),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn agent_profiles_from_api_json_accepts_canonical_shape() {
+        let value = json!({
+            "default": "gemini",
+            "providers": { "gemini": { "default_args": "--yolo" } }
+        });
+        let profiles = agent_profiles_from_api_json(&value).expect("parse");
+        assert_eq!(profiles.default.to_string(), "gemini");
+        assert_eq!(
+            profiles
+                .providers
+                .get("gemini")
+                .and_then(|p| p.default_args.as_deref()),
+            Some("--yolo")
+        );
+    }
+
+    #[test]
+    fn agent_profiles_from_api_json_rejects_unknown_provider_key() {
+        let value = json!({
+            "default": "claude",
+            "clade": { "default_args": "typo" }
+        });
+        assert!(agent_profiles_from_api_json(&value).is_err());
     }
 
     #[test]

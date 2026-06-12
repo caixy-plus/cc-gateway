@@ -104,8 +104,12 @@ pub async fn handle_save_config(Json(body): Json<serde_json::Value>) -> (StatusC
         }
     }
     if let Some(v) = body.get("agent") {
-        if let Ok(c) = serde_json::from_value(v.clone()) {
-            config.agent = c;
+        match crate::config::agent_registry::agent_profiles_from_api_json(v) {
+            Ok(c) => config.agent = c,
+            Err(e) => {
+                let body = json!({ "error": e.to_string() });
+                return (StatusCode::BAD_REQUEST, body.to_string());
+            }
         }
     }
     if let Some(platforms) = body.get("platforms").and_then(|v| v.as_object()) {
