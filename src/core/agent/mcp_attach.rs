@@ -214,6 +214,14 @@ mod tests {
             ProviderMcpSupport::AcpSession
         );
         assert_eq!(
+            provider_mcp_support(AgentProvider::Kimi),
+            ProviderMcpSupport::AcpSession
+        );
+        assert_eq!(
+            provider_mcp_support(AgentProvider::Gemini),
+            ProviderMcpSupport::AcpSession
+        );
+        assert_eq!(
             provider_mcp_support(AgentProvider::Pi),
             ProviderMcpSupport::ProjectMcpJson
         );

@@ -19,8 +19,8 @@ impl AcpHooks for CursorAcpHooks {
         "Cursor"
     }
 
-    fn authenticate_method_id(&self) -> &str {
-        "cursor_login"
+    fn authenticate_method_id(&self) -> Option<&str> {
+        Some("cursor_login")
     }
 
     fn default_permission_label(&self) -> &'static str {
@@ -225,6 +225,7 @@ mod tests {
             }),
             &tx,
             &done,
+            None,
         );
 
         match rx.try_recv().expect("event should be sent") {
@@ -241,6 +242,7 @@ mod tests {
             &json!({ "sessionUpdate": "agent_message_complete" }),
             &tx,
             &done,
+            None,
         );
         assert!(matches!(rx.try_recv(), Ok(AgentEvent::Done)));
     }

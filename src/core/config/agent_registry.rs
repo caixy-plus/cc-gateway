@@ -126,6 +126,51 @@ impl AgentCapabilities {
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: false,
     };
+
+    pub const KIMI: Self = Self {
+        session_resume: true,
+        context_compact: false,
+        compact_via_user_message: false,
+        memory_init: false,
+        platform_bound: false,
+        list_models: ListModelsSource::InSessionRpc,
+        in_session_model_switch: true,
+        active_model_from_session: false,
+        default_args_policy: DefaultArgsPolicy::StripUnsupported,
+        mcp: ProviderMcpSupport::AcpSession,
+        restart_shows_fresh_hint: false,
+        uses_claude_idle_copy: false,
+    };
+
+    pub const GEMINI: Self = Self {
+        session_resume: true,
+        context_compact: false,
+        compact_via_user_message: false,
+        memory_init: false,
+        platform_bound: false,
+        list_models: ListModelsSource::InSessionRpc,
+        in_session_model_switch: true,
+        active_model_from_session: false,
+        default_args_policy: DefaultArgsPolicy::StripUnsupported,
+        mcp: ProviderMcpSupport::AcpSession,
+        restart_shows_fresh_hint: false,
+        uses_claude_idle_copy: false,
+    };
+
+    pub const CODEX: Self = Self {
+        session_resume: true,
+        context_compact: false,
+        compact_via_user_message: false,
+        memory_init: false,
+        platform_bound: false,
+        list_models: ListModelsSource::InSessionRpc,
+        in_session_model_switch: true,
+        active_model_from_session: false,
+        default_args_policy: DefaultArgsPolicy::StripUnsupported,
+        mcp: ProviderMcpSupport::AcpSession,
+        restart_shows_fresh_hint: false,
+        uses_claude_idle_copy: false,
+    };
 }
 
 #[derive(Debug, Clone)]
@@ -139,9 +184,15 @@ pub struct AgentProviderDef {
     pub cli_binary: &'static str,
     /// Extra `/agent <alias>` tokens beyond `id`.
     pub slash_aliases: &'static [&'static str],
+    /// Optional `wizard.*` i18n key printed in init when the CLI is missing or listed in the menu.
+    pub install_hint_key: Option<&'static str>,
+    /// CLI flags offered as quick-select chips for `default_args` in WebUI settings
+    /// (served via `GET /api/agents` so new providers need no frontend change).
+    pub default_args_suggestions: &'static [&'static str],
     pub capabilities: AgentCapabilities,
 }
 
+// Array order is the display order in `/agents`, WebUI settings, and the init wizard.
 pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
     AgentProviderDef {
         provider: AgentProvider::Claude,
@@ -149,7 +200,22 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
         display_name: "claude",
         cli_binary: "claude",
         slash_aliases: &[],
+        install_hint_key: None,
+        default_args_suggestions: &["--dangerously-skip-permissions", "--yolo"],
         capabilities: AgentCapabilities::CLAUDE,
+    },
+    AgentProviderDef {
+        provider: AgentProvider::Codex,
+        id: "codex",
+        display_name: "codex",
+        // Zed's ACP adapter for the Codex CLI: `npm i -g @zed-industries/codex-acp`.
+        cli_binary: "codex-acp",
+        slash_aliases: &[],
+        install_hint_key: Some("wizard.install_hint_codex"),
+        // codex-acp only takes `-c key=value` config overrides; permissions are
+        // governed by the provider `mode` setting (session/set_mode), not flags.
+        default_args_suggestions: &[],
+        capabilities: AgentCapabilities::CODEX,
     },
     AgentProviderDef {
         provider: AgentProvider::Cursor,
@@ -157,15 +223,9 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
         display_name: "cursor",
         cli_binary: "agent",
         slash_aliases: &[],
+        install_hint_key: None,
+        default_args_suggestions: &["--yolo"],
         capabilities: AgentCapabilities::CURSOR,
-    },
-    AgentProviderDef {
-        provider: AgentProvider::Pi,
-        id: "pi",
-        display_name: "pi",
-        cli_binary: "pi",
-        slash_aliases: &[],
-        capabilities: AgentCapabilities::PI,
     },
     AgentProviderDef {
         provider: AgentProvider::OpenCode,
@@ -173,7 +233,40 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
         display_name: "opencode",
         cli_binary: "opencode",
         slash_aliases: &[],
+        install_hint_key: None,
+        default_args_suggestions: &["--yolo"],
         capabilities: AgentCapabilities::OPENCODE,
+    },
+    AgentProviderDef {
+        provider: AgentProvider::Kimi,
+        id: "kimi",
+        display_name: "kimi",
+        cli_binary: "kimi",
+        slash_aliases: &[],
+        install_hint_key: None,
+        // Root-level flag, placed before the `acp` subcommand: `kimi --yolo acp`.
+        default_args_suggestions: &["--yolo"],
+        capabilities: AgentCapabilities::KIMI,
+    },
+    AgentProviderDef {
+        provider: AgentProvider::Gemini,
+        id: "gemini",
+        display_name: "gemini",
+        cli_binary: "gemini",
+        slash_aliases: &[],
+        install_hint_key: None,
+        default_args_suggestions: &["--yolo"],
+        capabilities: AgentCapabilities::GEMINI,
+    },
+    AgentProviderDef {
+        provider: AgentProvider::Pi,
+        id: "pi",
+        display_name: "pi",
+        cli_binary: "pi",
+        slash_aliases: &[],
+        install_hint_key: None,
+        default_args_suggestions: &["--yolo"],
+        capabilities: AgentCapabilities::PI,
     },
 ];
 
@@ -336,6 +429,7 @@ pub fn build_agents_api_response(profiles: &AgentProfiles) -> Value {
                 "display_name": def.display_name,
                 "cli_binary": def.cli_binary,
                 "aliases": def.slash_aliases,
+                "default_args_suggestions": def.default_args_suggestions,
                 "config": provider_config_to_json(&profile),
             })
         })
@@ -353,15 +447,46 @@ mod tests {
 
     #[test]
     fn registry_lists_all_provider_variants() {
-        assert_eq!(AGENT_PROVIDER_DEFS.len(), 4);
+        assert_eq!(AGENT_PROVIDER_DEFS.len(), 7);
         for def in AGENT_PROVIDER_DEFS {
             assert_eq!(def_for_provider(def.provider.clone()).id, def.id);
         }
     }
 
     #[test]
+    fn parse_codex_id() {
+        assert_eq!(parse_provider_id("codex"), Some(AgentProvider::Codex));
+    }
+
+    #[test]
+    fn codex_registry_has_install_hint() {
+        let def = def_for_provider(AgentProvider::Codex);
+        assert_eq!(def.cli_binary, "codex-acp");
+        assert_eq!(def.install_hint_key, Some("wizard.install_hint_codex"));
+    }
+
+    #[test]
     fn parse_opencode_id() {
         assert_eq!(parse_provider_id("opencode"), Some(AgentProvider::OpenCode));
+    }
+
+    #[test]
+    fn registry_display_order() {
+        let ids: Vec<_> = AGENT_PROVIDER_DEFS.iter().map(|d| d.id).collect();
+        assert_eq!(
+            ids,
+            vec!["claude", "codex", "cursor", "opencode", "kimi", "gemini", "pi"]
+        );
+    }
+
+    #[test]
+    fn parse_kimi_id() {
+        assert_eq!(parse_provider_id("kimi"), Some(AgentProvider::Kimi));
+    }
+
+    #[test]
+    fn parse_gemini_id() {
+        assert_eq!(parse_provider_id("gemini"), Some(AgentProvider::Gemini));
     }
 
     #[test]
@@ -371,6 +496,8 @@ mod tests {
         assert!(profiles.profile_for(&AgentProvider::Claude).unwrap().enabled);
         assert!(profiles.profile_for(&AgentProvider::Cursor).unwrap().enabled);
         assert!(profiles.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(profiles.profile_for(&AgentProvider::Kimi).unwrap().enabled);
+        assert!(profiles.profile_for(&AgentProvider::Gemini).unwrap().enabled);
     }
 
     #[test]
@@ -380,6 +507,7 @@ mod tests {
         assert!(!profiles.profile_for(&AgentProvider::Claude).unwrap().enabled);
         assert!(!profiles.profile_for(&AgentProvider::Cursor).unwrap().enabled);
         assert!(profiles.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(!profiles.profile_for(&AgentProvider::Kimi).unwrap().enabled);
     }
 
     #[test]
@@ -392,6 +520,7 @@ mod tests {
         assert!(profiles.profile_for(&AgentProvider::Cursor).unwrap().enabled);
         assert!(profiles.profile_for(&AgentProvider::Pi).unwrap().enabled);
         assert!(!profiles.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(!profiles.profile_for(&AgentProvider::Kimi).unwrap().enabled);
     }
 
     #[test]
@@ -402,6 +531,30 @@ mod tests {
         assert!(providers
             .iter()
             .any(|p| p.get("id") == Some(&json!("opencode"))));
+    }
+
+    #[test]
+    fn agents_api_exposes_default_args_suggestions() {
+        let body = build_agents_api_response(&AgentProfiles::default());
+        let providers = body.get("providers").unwrap().as_array().unwrap();
+        let suggestions_of = |id: &str| {
+            providers
+                .iter()
+                .find(|p| p.get("id") == Some(&json!(id)))
+                .and_then(|p| p.get("default_args_suggestions"))
+                .cloned()
+                .expect("default_args_suggestions present")
+        };
+        assert_eq!(
+            suggestions_of("claude"),
+            json!(["--dangerously-skip-permissions", "--yolo"])
+        );
+        assert_eq!(suggestions_of("gemini"), json!(["--yolo"]));
+        // Verified locally: `kimi --yolo acp` starts the ACP server normally.
+        assert_eq!(suggestions_of("kimi"), json!(["--yolo"]));
+        // Codex permissions are governed by its mode setting (session/set_mode);
+        // codex-acp only accepts `-c key=value` config overrides.
+        assert_eq!(suggestions_of("codex"), json!([]));
     }
 
     #[test]
@@ -493,6 +646,22 @@ mod tests {
         let cursor = capabilities_for(&AgentProvider::Cursor);
         assert!(!cursor.context_compact);
         assert_eq!(cursor.mcp, ProviderMcpSupport::ProjectMcpJson);
+
+        let kimi = capabilities_for(&AgentProvider::Kimi);
+        assert!(kimi.session_resume);
+        assert!(kimi.in_session_model_switch);
+        assert_eq!(kimi.list_models, ListModelsSource::InSessionRpc);
+        assert_eq!(kimi.mcp, ProviderMcpSupport::AcpSession);
+
+        let gemini = capabilities_for(&AgentProvider::Gemini);
+        assert!(gemini.session_resume);
+        assert!(gemini.in_session_model_switch);
+        assert_eq!(gemini.list_models, ListModelsSource::InSessionRpc);
+        assert_eq!(gemini.mcp, ProviderMcpSupport::AcpSession);
+
+        let codex = capabilities_for(&AgentProvider::Codex);
+        assert!(codex.in_session_model_switch);
+        assert_eq!(codex.list_models, ListModelsSource::InSessionRpc);
     }
 
     #[test]

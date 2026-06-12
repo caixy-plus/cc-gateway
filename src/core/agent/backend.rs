@@ -177,6 +177,7 @@ impl<H: crate::agent::acp_session::AcpHooks> AgentBackend for GenericAcpSession<
     ) -> Result<String> {
         if self.hooks.supports_acp_set_model() {
             self.hooks.set_session_model(self, model_id).await?;
+            self.set_session_active_model(model_id);
             return Ok(model_id.to_string());
         }
         let caps = crate::config::agent_registry::capabilities_for(provider);
@@ -211,6 +212,14 @@ impl<H: crate::agent::acp_session::AcpHooks> AgentBackend for GenericAcpSession<
         ctx: &NewProviderSessionCtx<'_>,
     ) -> Result<Option<String>> {
         GenericAcpSession::new_provider_session(self, &ctx.work_dir, ctx.config).await
+    }
+
+    async fn active_model_id(&mut self) -> Result<Option<String>> {
+        Ok(self.session_active_model().map(str::to_string))
+    }
+
+    async fn list_available_models_in_session(&mut self) -> Result<Vec<String>> {
+        Ok(self.session_model_catalog().to_vec())
     }
 
     fn is_alive(&mut self) -> bool {
@@ -298,9 +307,12 @@ macro_rules! dispatch_agent_backend {
     ($self:expr, |$b:ident| $body:expr) => {
         match $self {
             $crate::agent::session::AgentRuntime::Claude($b) => $body,
+            $crate::agent::session::AgentRuntime::Codex($b) => $body,
             $crate::agent::session::AgentRuntime::Cursor($b) => $body,
             $crate::agent::session::AgentRuntime::Pi($b) => $body,
             $crate::agent::session::AgentRuntime::OpenCode($b) => $body,
+            $crate::agent::session::AgentRuntime::Kimi($b) => $body,
+            $crate::agent::session::AgentRuntime::Gemini($b) => $body,
         }
     };
 }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
@@ -9,6 +9,12 @@ use crate::runtime::controller::{AgentController, ControllerEvent};
 /// After `Done`, keep draining the event channel briefly so late ACP `session/update`
 /// chunks (Cursor/OpenCode ACP) are not dropped when the prompt RPC returns early.
 const LATE_EVENT_GRACE: Duration = Duration::from_millis(2000);
+
+/// Last-resort guard: stop polling if the controller emits no events at all for this long.
+/// Provider-level watchdogs fire first (ACP prompt idle watchdog: 10 min), so this only
+/// catches a fully wedged pipeline. Must stay **longer** than every provider watchdog —
+/// breaking the poll loop early strands events in the channel until the next turn.
+const TURN_SILENCE_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// Cap tool input/result payload length to avoid flooding chat channels.
 ///
@@ -342,16 +348,27 @@ impl AgentEventPoller {
         // any thinking content (whether hidden or shown), so all providers/channels
         // have consistent UX.
         let mut thinking_placeholder_sent = false;
+        let mut last_event_at = Instant::now();
         loop {
+            let silence_deadline =
+                tokio::time::Instant::from_std(last_event_at + TURN_SILENCE_TIMEOUT);
             let deadline = sink.next_deadline();
             let event = match deadline {
                 Some(when) => {
+                    let when = tokio::time::Instant::from_std(when);
+                    let effective = when.min(silence_deadline);
                     let mut rx = self.event_rx.lock().await;
-                    match tokio::time::timeout_at(tokio::time::Instant::from_std(when), rx.recv())
-                        .await
-                    {
+                    match tokio::time::timeout_at(effective, rx.recv()).await {
                         Ok(ev) => ev,
                         Err(_) => {
+                            if effective == silence_deadline {
+                                sink.flush(
+                                    &format!("Error: {}", crate::t!("agent.turn_stalled")),
+                                    false,
+                                )
+                                .await?;
+                                break;
+                            }
                             // Timer tick: flush pending buffer.
                             sink.flush_buffer(false).await?;
                             continue;
@@ -360,9 +377,23 @@ impl AgentEventPoller {
                 }
                 None => {
                     let mut rx = self.event_rx.lock().await;
-                    rx.recv().await
+                    match tokio::time::timeout_at(silence_deadline, rx.recv()).await {
+                        Ok(ev) => ev,
+                        Err(_) => {
+                            sink.flush(
+                                &format!("Error: {}", crate::t!("agent.turn_stalled")),
+                                false,
+                            )
+                            .await?;
+                            break;
+                        }
+                    }
                 }
             };
+
+            if event.is_some() {
+                last_event_at = Instant::now();
+            }
 
             match event {
                 Some(ControllerEvent::Text(text)) => {
@@ -436,7 +467,8 @@ impl AgentEventPoller {
                     sink.on_question_request(&request_id, &questions).await?;
                 }
                 Some(ControllerEvent::Error(text)) => {
-                    sink.flush(&format!("Error: {}", text), false).await?;
+                    let friendly = crate::command::agents::friendly_spawn_error(&text);
+                    sink.flush(&format!("Error: {}", friendly), false).await?;
                 }
                 Some(ControllerEvent::Done) | None => {
                     sink.flush_buffer(true).await?;
@@ -510,7 +542,8 @@ impl AgentEventPoller {
                     sink.flush(&formatted, false).await?;
                 }
                 Some(ControllerEvent::Error(text)) => {
-                    sink.flush(&format!("Error: {}", text), false).await?;
+                    let friendly = crate::command::agents::friendly_spawn_error(&text);
+                    sink.flush(&format!("Error: {}", friendly), false).await?;
                 }
                 Some(
                     ControllerEvent::PermissionRequest { .. }

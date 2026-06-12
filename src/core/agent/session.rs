@@ -2,9 +2,12 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 
 use crate::agent::backend::AgentBackend;
+use crate::agent::codex_acp::CodexAcpSession;
 use crate::agent::cursor_acp::CursorAcpSession;
 use crate::agent::event::{AgentEvent, QuestionItem, QuestionOption};
 use crate::agent::mcp_attach::{log_unsupported_mcp, supports_mcp_attach};
+use crate::agent::gemini_acp::GeminiAcpSession;
+use crate::agent::kimi_acp::KimiAcpSession;
 use crate::agent::opencode_acp::OpenCodeAcpSession;
 use crate::agent::pi_rpc::PiRpcSession;
 use crate::config::model::{AgentConfig, AgentProvider};
@@ -22,18 +25,24 @@ pub struct NewProviderSessionCtx<'a> {
 
 pub enum AgentRuntime {
     Claude(StreamJsonSession),
+    Codex(CodexAcpSession),
     Cursor(CursorAcpSession),
     Pi(PiRpcSession),
     OpenCode(OpenCodeAcpSession),
+    Kimi(KimiAcpSession),
+    Gemini(GeminiAcpSession),
 }
 
 impl AgentRuntime {
     pub fn provider_kind(&self) -> AgentProvider {
         match self {
             Self::Claude(_) => AgentProvider::Claude,
+            Self::Codex(_) => AgentProvider::Codex,
             Self::Cursor(_) => AgentProvider::Cursor,
             Self::Pi(_) => AgentProvider::Pi,
             Self::OpenCode(_) => AgentProvider::OpenCode,
+            Self::Kimi(_) => AgentProvider::Kimi,
+            Self::Gemini(_) => AgentProvider::Gemini,
         }
     }
 
@@ -70,6 +79,18 @@ impl AgentRuntime {
                 });
                 Ok((Self::Claude(session), session_id))
             }
+            AgentProvider::Codex => {
+                let (session, session_id) = CodexAcpSession::spawn(
+                    work_dir,
+                    extra_args,
+                    config,
+                    event_tx,
+                    resume_session_id,
+                    mcp_context,
+                )
+                .await?;
+                Ok((Self::Codex(session), session_id))
+            }
             AgentProvider::Cursor => {
                 let (session, session_id) = CursorAcpSession::spawn(
                     work_dir,
@@ -105,6 +126,30 @@ impl AgentRuntime {
                 )
                 .await?;
                 Ok((Self::OpenCode(session), session_id))
+            }
+            AgentProvider::Kimi => {
+                let (session, session_id) = KimiAcpSession::spawn(
+                    work_dir,
+                    extra_args,
+                    config,
+                    event_tx,
+                    resume_session_id,
+                    mcp_context,
+                )
+                .await?;
+                Ok((Self::Kimi(session), session_id))
+            }
+            AgentProvider::Gemini => {
+                let (session, session_id) = GeminiAcpSession::spawn(
+                    work_dir,
+                    extra_args,
+                    config,
+                    event_tx,
+                    resume_session_id,
+                    mcp_context,
+                )
+                .await?;
+                Ok((Self::Gemini(session), session_id))
             }
         }
     }
@@ -168,9 +213,12 @@ impl AgentRuntime {
     pub async fn stop(self) -> Result<()> {
         match self {
             Self::Claude(session) => session.stop().await,
+            Self::Codex(session) => session.stop().await,
             Self::Cursor(session) => session.stop().await,
             Self::Pi(session) => session.stop().await,
             Self::OpenCode(session) => session.stop().await,
+            Self::Kimi(session) => session.stop().await,
+            Self::Gemini(session) => session.stop().await,
         }
     }
 
@@ -181,9 +229,12 @@ impl AgentRuntime {
     pub async fn force_stop(self) -> Result<()> {
         match self {
             Self::Claude(session) => session.force_stop().await,
+            Self::Codex(session) => session.force_stop().await,
             Self::Cursor(session) => session.force_stop().await,
             Self::Pi(session) => session.force_stop().await,
             Self::OpenCode(session) => session.force_stop().await,
+            Self::Kimi(session) => session.force_stop().await,
+            Self::Gemini(session) => session.force_stop().await,
         }
     }
 

@@ -6,33 +6,33 @@ use crate::agent::mcp_attach::build_acp_mcp_servers;
 use crate::config::model::AgentConfig;
 use crate::runtime::mcp_server::McpContext;
 
-/// OpenCode ACP client (`opencode acp` — NDJSON JSON-RPC over stdio).
-pub type OpenCodeAcpSession = GenericAcpSession<OpenCodeAcpHooks>;
+/// Kimi Code CLI ACP client (`kimi acp` — NDJSON JSON-RPC over stdio).
+pub type KimiAcpSession = GenericAcpSession<KimiAcpHooks>;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OpenCodeAcpHooks;
+pub struct KimiAcpHooks;
 
 #[async_trait::async_trait]
-impl AcpHooks for OpenCodeAcpHooks {
+impl AcpHooks for KimiAcpHooks {
     fn log_provider_name(&self) -> &'static str {
-        "OpenCode"
+        "Kimi"
     }
 
     fn authenticate_method_id(&self) -> Option<&str> {
-        Some("opencode-login")
+        Some("login")
     }
 
     fn default_permission_label(&self) -> &'static str {
-        "opencode_permission"
+        "kimi_permission"
     }
 
     fn prompt_channel_closed_error(&self) -> &'static str {
-        "OpenCode ACP prompt response channel closed"
+        "Kimi ACP prompt response channel closed"
     }
 
     fn spawn_failure_message(config: &AgentConfig, cli_path: &str) -> String {
         format!(
-            "Failed to spawn OpenCode ACP. Is '{}' installed and on PATH? Tried '{} acp'.",
+            "Failed to spawn Kimi Code CLI. Is '{}' installed and on PATH? Tried '{} acp'.",
             config.cli_path, cli_path
         )
     }
@@ -40,7 +40,7 @@ impl AcpHooks for OpenCodeAcpHooks {
     fn session_resume_error(session_id: &str, err: &str) -> anyhow::Error {
         anyhow::anyhow!(
             "{}",
-            crate::t_fmt!("opencode.session_resume_failed", ID = session_id, ERR = err)
+            crate::t_fmt!("kimi.session_resume_failed", ID = session_id, ERR = err)
         )
     }
 
@@ -74,24 +74,35 @@ impl AcpHooks for OpenCodeAcpHooks {
         false
     }
 
+    fn no_output_message(&self) -> String {
+        crate::t!("agent.kimi_no_response").to_string()
+    }
+
     fn supports_acp_set_model(&self) -> bool {
         true
     }
 
-    async fn set_session_model(
-        &self,
-        session: &OpenCodeAcpSession,
-        model_id: &str,
-    ) -> Result<()> {
-        let params = json!({
-            "sessionId": session.acp_session_id(),
+    async fn set_session_model(&self, session: &KimiAcpSession, model_id: &str) -> Result<()> {
+        let session_id = session.acp_session_id();
+        let set_model_params = json!({
+            "sessionId": session_id,
             "modelId": model_id
         });
-        match session.acp_request("session/set_model", params.clone()).await {
+        match session
+            .acp_request("session/set_model", set_model_params.clone())
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) if e.to_string().contains("Method not found") => {
                 session
-                    .acp_request("unstable_setSessionModel", params)
+                    .acp_request(
+                        "session/set_config_option",
+                        json!({
+                            "sessionId": session_id,
+                            "configId": "model",
+                            "value": model_id
+                        }),
+                    )
                     .await?;
                 Ok(())
             }
@@ -103,24 +114,13 @@ impl AcpHooks for OpenCodeAcpHooks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::acp_client::resolve_acp_spawn_session_id;
     use crate::agent::acp_session::{extract_permission_label, handle_session_update};
     use crate::agent::event::AgentEvent;
     use std::sync::atomic::AtomicBool;
     use tokio::sync::mpsc;
 
     #[test]
-    fn resolve_acp_spawn_session_id_prefers_result_session_id() {
-        let id = resolve_acp_spawn_session_id(
-            &json!({ "sessionId": "from-result" }),
-            Some("from-load-request"),
-        )
-        .expect("should resolve");
-        assert_eq!(id, "from-result");
-    }
-
-    #[test]
-    fn maps_opencode_text_update_to_agent_event() {
+    fn maps_kimi_text_update_to_agent_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let done = AtomicBool::new(false);
         handle_session_update(
@@ -140,8 +140,8 @@ mod tests {
     }
 
     #[test]
-    fn opencode_session_resume_error_is_user_visible() {
-        let err = OpenCodeAcpHooks::session_resume_error("sess-1", "timeout");
+    fn kimi_session_resume_error_is_user_visible() {
+        let err = KimiAcpHooks::session_resume_error("sess-1", "timeout");
         let msg = err.to_string();
         assert!(msg.contains("sess-1"));
         assert!(msg.contains("timeout"));
@@ -156,5 +156,11 @@ mod tests {
             extract_permission_label(&params),
             Some("mcp__cc-gateway__send_file".to_string())
         );
+    }
+
+    #[test]
+    fn authenticate_method_id_is_login() {
+        let hooks = KimiAcpHooks;
+        assert_eq!(AcpHooks::authenticate_method_id(&hooks), Some("login"));
     }
 }

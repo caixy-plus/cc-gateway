@@ -302,6 +302,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "  Note: '{NAME}' was not detected on PATH; this agent will be unavailable until it is installed.",
             Language::ZhCN => "  注意: 未在 PATH 中检测到 '{NAME}'，安装前该智能体不可用。",
         },
+        "wizard.install_hint_codex" => match lang {
+            Language::En => "Requires Zed's ACP adapter: npm i -g @zed-industries/codex-acp (not the raw codex CLI). Auth: codex login or OPENAI_API_KEY.",
+            Language::ZhCN => "需安装 Zed 的 ACP 适配器：npm i -g @zed-industries/codex-acp（不是裸 codex CLI）。登录：codex login 或设置 OPENAI_API_KEY。",
+        },
         "wizard.agent_configured" => match lang {
             Language::En => "  Agent set to: {NAME}",
             Language::ZhCN => "  智能体已设为: {NAME}",
@@ -599,7 +603,19 @@ pub fn t(key: &str) -> &str {
             Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
             Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
         },
+        "builtin.esc_sent_codex" => match lang {
+            Language::En => "ESC sent — current generation cancelled via ACP.",
+            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
+        },
         "builtin.esc_sent_opencode" => match lang {
+            Language::En => "ESC sent — current generation cancelled via ACP.",
+            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
+        },
+        "builtin.esc_sent_kimi" => match lang {
+            Language::En => "ESC sent — current generation cancelled via ACP.",
+            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
+        },
+        "builtin.esc_sent_gemini" => match lang {
             Language::En => "ESC sent — current generation cancelled via ACP.",
             Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
         },
@@ -627,7 +643,19 @@ pub fn t(key: &str) -> &str {
             Language::En => "Message forwarded: {MSG}",
             Language::ZhCN => "消息已转发：{MSG}",
         },
+        "builtin.esc_with_prompt_sent_codex" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
         "builtin.esc_with_prompt_sent_opencode" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
+        "builtin.esc_with_prompt_sent_kimi" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
+        "builtin.esc_with_prompt_sent_gemini" => match lang {
             Language::En => "Message forwarded: {MSG}",
             Language::ZhCN => "消息已转发：{MSG}",
         },
@@ -651,7 +679,19 @@ pub fn t(key: &str) -> &str {
             Language::En => "Stop sent — current operation aborted.",
             Language::ZhCN => "Stop 已发送 — 已中止当前操作。",
         },
+        "builtin.stop_sent_codex" => match lang {
+            Language::En => "Stop sent — current generation cancelled via ACP.",
+            Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
+        },
         "builtin.stop_sent_opencode" => match lang {
+            Language::En => "Stop sent — current generation cancelled via ACP.",
+            Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
+        },
+        "builtin.stop_sent_kimi" => match lang {
+            Language::En => "Stop sent — current generation cancelled via ACP.",
+            Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
+        },
+        "builtin.stop_sent_gemini" => match lang {
             Language::En => "Stop sent — current generation cancelled via ACP.",
             Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
         },
@@ -758,6 +798,42 @@ pub fn t(key: &str) -> &str {
         "agent.acp_request_timeout" => match lang {
             Language::En => "Agent connection timed out (often during session load with long history). Try again or start a new session.",
             Language::ZhCN => "连接智能体超时（恢复长会话历史时较常见）。请重试或新建会话。",
+        },
+        "agent.acp_no_response" => match lang {
+            Language::En => "{NAME} returned no output for this turn. Retry, or run the provider CLI in a terminal for details.",
+            Language::ZhCN => "{NAME} 本轮未返回任何内容。请重试，或在终端运行该 CLI 查看详细错误。",
+        },
+        "agent.acp_prompt_idle_timeout" => match lang {
+            Language::En => "The agent sent nothing for 10 minutes; this turn was ended. Retry, or use /stop to terminate the session.",
+            Language::ZhCN => "智能体连续 10 分钟无任何输出，本轮已结束。请重试，或用 /stop 终止会话。",
+        },
+        "agent.turn_stalled" => match lang {
+            Language::En => "No agent output for 15 minutes — stopped forwarding this turn. Any remaining output will be delivered with your next message; use /stop to terminate.",
+            Language::ZhCN => "智能体长时间（15 分钟）无输出，本轮转发已停止；剩余输出将随下一条消息补发。可用 /stop 终止会话。",
+        },
+        "agent.kimi_auth_required" => match lang {
+            Language::En => "Kimi Code is not signed in. Run `kimi login` in a terminal, or check your Kimi account.",
+            Language::ZhCN => "Kimi Code 未登录。请在终端运行 `kimi login`，或检查 Kimi 账号状态。",
+        },
+        "agent.kimi_subscription_required" => match lang {
+            Language::En => "Kimi Code requires an active subscription or plan. Check your Kimi account billing.",
+            Language::ZhCN => "Kimi Code 需要有效套餐或订阅。请检查 Kimi 账号的套餐/订阅状态。",
+        },
+        "agent.kimi_no_response" => match lang {
+            Language::En => "Kimi returned no output for this turn. If your membership is inactive, check your Kimi account subscription; otherwise retry or run `kimi -p \"test\"` in a terminal for details.",
+            Language::ZhCN => "Kimi 本轮未返回任何内容。若套餐未生效，请检查 Kimi 账号订阅状态；否则请重试，或在终端运行 `kimi -p \"test\"` 查看详细错误。",
+        },
+        "agent.gemini_auth_required" => match lang {
+            Language::En => "Gemini CLI is not signed in. Run `gemini` in a terminal to sign in (or set GEMINI_API_KEY), then retry.",
+            Language::ZhCN => "Gemini CLI 未登录。请在终端运行 `gemini` 完成登录（或设置 GEMINI_API_KEY）后重试。",
+        },
+        "agent.auth_required" => match lang {
+            Language::En => "The agent CLI is not signed in. Sign in with the provider's CLI in a terminal, then retry.",
+            Language::ZhCN => "智能体 CLI 未登录。请在终端使用对应 CLI 完成登录后重试。",
+        },
+        "agent.subscription_required" => match lang {
+            Language::En => "The provider account has a plan, billing, or quota issue. Check your account status, then retry.",
+            Language::ZhCN => "提供方账号存在套餐/订阅或配额问题。请检查账号状态后重试。",
         },
         "agent.process_exited_no_stderr" => match lang {
             Language::En => "The agent process exited immediately after start; no error output was captured. Check that the CLI is installed and on PATH.",
@@ -1202,9 +1278,21 @@ pub fn t(key: &str) -> &str {
             Language::En => "Failed to restore Cursor session ({ID}): {ERR}. Use /agent to start a new session if needed.",
             Language::ZhCN => "无法恢复 Cursor 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
         },
+        "codex.session_resume_failed" => match lang {
+            Language::En => "Failed to restore Codex session ({ID}): {ERR}. Use /agent to start a new session if needed.",
+            Language::ZhCN => "无法恢复 Codex 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
+        },
         "opencode.session_resume_failed" => match lang {
             Language::En => "Failed to restore OpenCode session ({ID}): {ERR}. Use /agent to start a new session if needed.",
             Language::ZhCN => "无法恢复 OpenCode 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
+        },
+        "kimi.session_resume_failed" => match lang {
+            Language::En => "Failed to restore Kimi session ({ID}): {ERR}. Use /agent to start a new session if needed.",
+            Language::ZhCN => "无法恢复 Kimi 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
+        },
+        "gemini.session_resume_failed" => match lang {
+            Language::En => "Failed to restore Gemini session ({ID}): {ERR}. Use /agent to start a new session if needed.",
+            Language::ZhCN => "无法恢复 Gemini 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
         },
         "pi.session_resume_failed" => match lang {
             Language::En => "Failed to restore Pi session ({PATH}): {ERR}. Use /agent to start a new session if needed.",
@@ -1227,8 +1315,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "其他文本将直接发送给活动智能体。",
         },
         "telegram.help_text" => match lang {
-            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/models List/switch models\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode).\nAny other text will be forwarded to the active agent.",
-            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/models 列出/切换模型\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode）。\n其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/models List/switch models\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode, kimi, gemini).\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/models 列出/切换模型\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode、kimi、gemini）。\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",

@@ -128,12 +128,44 @@ pub fn session_stopped_message(provider: &AgentProvider) -> String {
 }
 
 /// Map raw spawn/resume errors (often English `anyhow` text) to localized user messages.
+/// Auth/subscription guidance is generic; use [`friendly_spawn_error_for`] when the
+/// provider is known so users get the right sign-in command.
 pub fn friendly_spawn_error(raw: &str) -> String {
+    friendly_spawn_error_for(None, raw)
+}
+
+pub fn friendly_spawn_error_for(provider: Option<&AgentProvider>, raw: &str) -> String {
     if raw.contains("ACP did not return a session id") {
         return t!("agent.acp_no_session_id").to_string();
     }
-    if raw.contains("ACP request timed out") {
+    if raw.contains("ACP request timed out") || raw.contains("等待智能体响应超时") {
         return t!("agent.acp_request_timeout").to_string();
+    }
+    if raw.contains("authRequired")
+        || raw.contains("Authentication required")
+        || (raw.contains("-32000") && (raw.contains("auth") || raw.contains("login")))
+    {
+        return match provider {
+            Some(AgentProvider::Kimi) => t!("agent.kimi_auth_required").to_string(),
+            Some(AgentProvider::Gemini) => t!("agent.gemini_auth_required").to_string(),
+            _ => t!("agent.auth_required").to_string(),
+        };
+    }
+    if raw.contains("subscription")
+        || raw.contains("套餐")
+        || raw.contains("订阅")
+        || raw.contains("membership")
+        || raw.contains("billing")
+        || raw.contains("quota")
+        || raw.contains("402")
+    {
+        return match provider {
+            Some(AgentProvider::Kimi) => t!("agent.kimi_subscription_required").to_string(),
+            _ => t!("agent.subscription_required").to_string(),
+        };
+    }
+    if raw.contains("Kimi returned no output") || raw.contains("Kimi 本轮未返回") {
+        return t!("agent.kimi_no_response").to_string();
     }
     if raw.contains("process exited immediately after spawn; no stderr") {
         return t!("agent.process_exited_no_stderr").to_string();
@@ -161,7 +193,7 @@ pub fn failed_start_agent_message(provider: &AgentProvider, err: impl std::fmt::
     t_fmt!(
         "builtin.failed_start_agent",
         NAME = provider_display_name(provider),
-        ERR = friendly_spawn_error(&raw)
+        ERR = friendly_spawn_error_for(Some(provider), &raw)
     )
 }
 
@@ -187,9 +219,12 @@ pub fn stop_already_idle_message(provider: &AgentProvider) -> String {
 pub fn stop_sent_message(provider: &AgentProvider) -> String {
     match provider {
         AgentProvider::Claude => t!("builtin.stop_sent_claude").to_string(),
+        AgentProvider::Codex => t!("builtin.stop_sent_codex").to_string(),
         AgentProvider::Cursor => t!("builtin.stop_sent_cursor").to_string(),
         AgentProvider::Pi => t!("builtin.stop_sent_pi").to_string(),
         AgentProvider::OpenCode => t!("builtin.stop_sent_opencode").to_string(),
+        AgentProvider::Kimi => t!("builtin.stop_sent_kimi").to_string(),
+        AgentProvider::Gemini => t!("builtin.stop_sent_gemini").to_string(),
     }
 }
 
@@ -197,9 +232,12 @@ pub fn stop_sent_message(provider: &AgentProvider) -> String {
 pub fn esc_sent_message(provider: &AgentProvider) -> String {
     match provider {
         AgentProvider::Claude => t!("builtin.esc_sent_claude").to_string(),
+        AgentProvider::Codex => t!("builtin.esc_sent_codex").to_string(),
         AgentProvider::Cursor => t!("builtin.esc_sent_cursor").to_string(),
         AgentProvider::Pi => t!("builtin.esc_sent_pi").to_string(),
         AgentProvider::OpenCode => t!("builtin.esc_sent_opencode").to_string(),
+        AgentProvider::Kimi => t!("builtin.esc_sent_kimi").to_string(),
+        AgentProvider::Gemini => t!("builtin.esc_sent_gemini").to_string(),
     }
 }
 
@@ -207,9 +245,12 @@ pub fn esc_sent_message(provider: &AgentProvider) -> String {
 pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> String {
     match provider {
         AgentProvider::Claude => t_fmt!("builtin.esc_with_prompt_sent_claude", MSG = msg),
+        AgentProvider::Codex => t_fmt!("builtin.esc_with_prompt_sent_codex", MSG = msg),
         AgentProvider::Cursor => t_fmt!("builtin.esc_with_prompt_sent_cursor", MSG = msg),
         AgentProvider::Pi => t_fmt!("builtin.esc_with_prompt_sent_pi", MSG = msg),
         AgentProvider::OpenCode => t_fmt!("builtin.esc_with_prompt_sent_opencode", MSG = msg),
+        AgentProvider::Kimi => t_fmt!("builtin.esc_with_prompt_sent_kimi", MSG = msg),
+        AgentProvider::Gemini => t_fmt!("builtin.esc_with_prompt_sent_gemini", MSG = msg),
     }
 }
 
@@ -226,8 +267,11 @@ mod tests {
     fn build_provider_items_marks_current_default() {
         let profiles = test_profiles_both();
         let items = build_provider_items(&profiles, &AgentProvider::Cursor);
-        // All four providers enabled by default
-        assert_eq!(items.len(), 4);
+        // All registered providers enabled by default
+        assert_eq!(
+            items.len(),
+            crate::config::agent_registry::AGENT_PROVIDER_DEFS.len()
+        );
         assert!(items.iter().any(|(label, _)| label.contains("claude")));
         assert!(items.iter().any(|(label, _)| label.contains("cursor")));
     }
@@ -279,10 +323,40 @@ mod tests {
     fn available_providers_filters_by_configured_cli_path() {
         let profiles = test_profiles_both();
         let available = available_providers(&profiles);
-        // All four providers default to enabled=true
-        assert_eq!(available.len(), 4);
+        // All registered providers default to enabled=true
+        assert_eq!(
+            available.len(),
+            crate::config::agent_registry::AGENT_PROVIDER_DEFS.len()
+        );
         assert!(available.contains(&AgentProvider::Claude));
         assert!(available.contains(&AgentProvider::Cursor));
+    }
+
+    #[test]
+    fn friendly_spawn_error_maps_kimi_auth_and_subscription() {
+        let auth = crate::command::agents::friendly_spawn_error("authRequired: login required");
+        assert_ne!(auth, "authRequired: login required");
+        let sub = crate::command::agents::friendly_spawn_error("subscription inactive");
+        assert_ne!(sub, "subscription inactive");
+    }
+
+    #[test]
+    fn friendly_spawn_error_auth_guidance_is_provider_scoped() {
+        let kimi = friendly_spawn_error_for(Some(&AgentProvider::Kimi), "authRequired");
+        let gemini = friendly_spawn_error_for(Some(&AgentProvider::Gemini), "authRequired");
+        let unknown = friendly_spawn_error_for(None, "authRequired");
+        assert!(kimi.contains("kimi"));
+        assert!(gemini.to_lowercase().contains("gemini"));
+        assert!(!unknown.to_lowercase().contains("kimi"));
+        assert!(!unknown.to_lowercase().contains("gemini"));
+    }
+
+    #[test]
+    fn friendly_spawn_error_subscription_guidance_only_kimi_branded_for_kimi() {
+        let kimi = friendly_spawn_error_for(Some(&AgentProvider::Kimi), "402 membership inactive");
+        let other = friendly_spawn_error_for(Some(&AgentProvider::Claude), "quota exceeded");
+        assert!(kimi.contains("Kimi") || kimi.contains("kimi"));
+        assert!(!other.contains("Kimi") && !other.contains("kimi"));
     }
 
     #[test]
@@ -307,21 +381,20 @@ mod tests {
         let mut profiles = AgentProfiles::default();
         profiles.profile_mut(&AgentProvider::Cursor).enabled = false;
         let available = available_providers(&profiles);
-        // claude is enabled (default), cursor is disabled, pi & opencode enabled by default → 3 total.
-        assert_eq!(available.len(), 3);
+        // Only cursor was disabled; every other registered provider stays enabled by default.
+        assert_eq!(
+            available.len(),
+            crate::config::agent_registry::AGENT_PROVIDER_DEFS.len() - 1
+        );
         assert!(available.contains(&AgentProvider::Claude));
+        assert!(!available.contains(&AgentProvider::Cursor));
     }
 
     #[test]
     fn available_providers_returns_empty_when_none_configured() {
         let mut profiles = AgentProfiles::default();
-        for provider in [
-            AgentProvider::Claude,
-            AgentProvider::Cursor,
-            AgentProvider::Pi,
-            AgentProvider::OpenCode,
-        ] {
-            profiles.profile_mut(&provider).enabled = false;
+        for def in crate::config::agent_registry::AGENT_PROVIDER_DEFS {
+            profiles.profile_mut(&def.provider).enabled = false;
         }
         let available = available_providers(&profiles);
         assert!(available.is_empty());

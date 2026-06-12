@@ -69,6 +69,9 @@ pub async fn list_models_via_cli(
             .map(|s| s.to_string())
             .collect()),
         AgentProvider::Pi => Ok(vec![]),
+        AgentProvider::Codex => Ok(vec![]),
+        AgentProvider::Kimi => Ok(vec![]),
+        AgentProvider::Gemini => Ok(vec![]),
     }
 }
 

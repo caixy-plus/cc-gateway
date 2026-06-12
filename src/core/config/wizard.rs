@@ -95,6 +95,9 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
             aliases,
             status_label(cli_installed(def.cli_binary))
         );
+        if let Some(key) = def.install_hint_key {
+            println!("      {}", crate::utils::i18n::dict::t(key));
+        }
     }
     println!("  {}", t!("wizard.opt_skip"));
 
@@ -122,6 +125,9 @@ fn configure_agent_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) 
             "{}",
             t_fmt!("wizard.agent_unavailable_warn", NAME = defaults.cli_path)
         );
+        if let Some(key) = def.install_hint_key {
+            println!("  {}", crate::utils::i18n::dict::t(key));
+        }
         warnings.push(t_fmt!(
             "wizard.warn_agent_missing",
             NAME = provider.to_string()
@@ -251,9 +257,15 @@ mod tests {
     #[test]
     fn resolve_agent_menu_choice_by_index_and_alias() {
         assert_eq!(resolve_agent_menu_choice("1"), Some(AgentProvider::Claude));
+        assert_eq!(resolve_agent_menu_choice("2"), Some(AgentProvider::Codex));
         assert_eq!(
             resolve_agent_menu_choice("opencode"),
             Some(AgentProvider::OpenCode)
+        );
+        assert_eq!(resolve_agent_menu_choice("kimi"), Some(AgentProvider::Kimi));
+        assert_eq!(
+            resolve_agent_menu_choice("gemini"),
+            Some(AgentProvider::Gemini)
         );
         assert_eq!(resolve_agent_menu_choice("skip"), None);
     }
@@ -264,9 +276,12 @@ mod tests {
 
         use crate::config::model::AgentProvider;
         assert!(!config.agent.profile_for(&AgentProvider::Claude).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Codex).unwrap().enabled);
         assert!(!config.agent.profile_for(&AgentProvider::Cursor).unwrap().enabled);
         assert!(!config.agent.profile_for(&AgentProvider::Pi).unwrap().enabled);
         assert!(!config.agent.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Kimi).unwrap().enabled);
+        assert!(!config.agent.profile_for(&AgentProvider::Gemini).unwrap().enabled);
         assert!(!config.platforms.feishu.enabled);
         assert!(!config.platforms.telegram.enabled);
         assert!(!config.platforms.qq.enabled);

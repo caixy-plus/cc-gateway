@@ -1,8 +1,11 @@
 pub mod acp_client;
 pub mod acp_session;
 pub mod backend;
+pub mod codex_acp;
 pub mod cursor_acp;
 pub mod event;
+pub mod gemini_acp;
+pub mod kimi_acp;
 pub mod mcp_attach;
 pub mod opencode_acp;
 pub mod pi_rpc;

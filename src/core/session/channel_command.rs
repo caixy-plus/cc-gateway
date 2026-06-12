@@ -811,7 +811,13 @@ async fn resume_or_fallback(
                     context.channel_id,
                     e
                 );
-                let detail = crate::command::agents::friendly_spawn_error(&e.to_string());
+                let session_provider = GLOBAL_CHANNEL_SESSIONS
+                    .get_agent_session(sid)
+                    .map(|s| s.stored_provider());
+                let detail = crate::command::agents::friendly_spawn_error_for(
+                    session_provider.as_ref(),
+                    &e.to_string(),
+                );
                 anyhow::bail!(crate::t_fmt!("builtin.failed_resume_session", ERR = detail))
             }
         }
@@ -840,7 +846,10 @@ async fn resume_or_fallback(
                     return Ok(active);
                 }
                 Err(e) => {
-                    let detail = crate::command::agents::friendly_spawn_error(&e.to_string());
+                    let detail = crate::command::agents::friendly_spawn_error_for(
+                        Some(&latest.stored_provider()),
+                        &e.to_string(),
+                    );
                     tracing::warn!(
                         "Failed to auto-resume latest session {} for channel {}: {}",
                         latest.id,

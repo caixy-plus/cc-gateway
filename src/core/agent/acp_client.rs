@@ -137,7 +137,7 @@ impl AcpClient {
                 if let Some(id) = msg.get("id").and_then(parse_response_id) {
                     if msg.get("result").is_some() || msg.get("error").is_some() {
                         let result = if let Some(error) = msg.get("error") {
-                            Err(error.to_string())
+                            Err(format_rpc_error(error))
                         } else {
                             Ok(msg.get("result").cloned().unwrap_or(Value::Null))
                         };
@@ -161,6 +161,10 @@ impl AcpClient {
             .lock()
             .map(|lines| lines.join("\n"))
             .unwrap_or_default()
+    }
+
+    pub fn stderr_buffer(&self) -> Arc<StdMutex<Vec<String>>> {
+        self.stderr_lines.clone()
     }
 
     pub fn spawn_stderr_reader(&self, stderr: ChildStderr) {
@@ -243,6 +247,38 @@ pub(crate) async fn kill_child_process_tree(child: &mut Child) {
     let _ = child.wait().await;
 }
 
+/// Extract a user-visible message from a JSON-RPC `error` value.
+pub fn format_rpc_error(error: &Value) -> String {
+    if let Some(s) = error.as_str() {
+        return s.to_string();
+    }
+    let message = error
+        .get("message")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let data = error.get("data");
+    let data_text = data.and_then(|d| {
+        if let Some(s) = d.as_str() {
+            (!s.is_empty()).then(|| s.to_string())
+        } else if d.is_object() {
+            d.get("message")
+                .or_else(|| d.get("reason"))
+                .or_else(|| d.get("error"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    });
+    match (message, data_text) {
+        (Some(msg), Some(extra)) if msg != extra => format!("{msg}: {extra}"),
+        (Some(msg), _) => msg.to_string(),
+        (None, Some(extra)) => extra,
+        (None, None) => error.to_string(),
+    }
+}
+
 /// Whether an ACP `session/update` marks the end of an assistant turn.
 pub fn is_acp_turn_complete_update(kind: &str) -> bool {
     matches!(
@@ -270,6 +306,75 @@ pub fn emit_acp_turn_done(
 pub fn reset_acp_turn_done(done_sent: &std::sync::atomic::AtomicBool) {
     use std::sync::atomic::Ordering;
     done_sent.store(false, Ordering::SeqCst);
+}
+
+/// Reset the per-turn "had user-visible output" guard before a new prompt.
+pub fn reset_acp_turn_content(had_content: &std::sync::atomic::AtomicBool) {
+    use std::sync::atomic::Ordering;
+    had_content.store(false, Ordering::SeqCst);
+}
+
+pub fn mark_acp_turn_content(had_content: Option<&std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    if let Some(flag) = had_content {
+        flag.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Kimi (and some ACP agents) may return `session/prompt` success with `stopReason: end_turn`
+/// but emit no `agent_message_chunk` when the provider API fails (e.g. inactive membership).
+/// `fallback` is the provider-specific "no output" message
+/// ([`crate::agent::acp_session::AcpHooks::no_output_message`]).
+pub fn resolve_acp_empty_turn_message(result: &Value, stderr: &str, fallback: &str) -> String {
+    if let Some(msg) = parse_provider_stderr_user_error(stderr) {
+        return msg;
+    }
+    if let Some(stop) = result.get("stopReason").and_then(|v| v.as_str()) {
+        if matches!(stop, "refusal" | "cancelled" | "max_tokens" | "max_turn_requests")
+            || stop.contains("error")
+        {
+            return stop.to_string();
+        }
+    }
+    fallback.to_string()
+}
+
+fn parse_provider_stderr_user_error(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let payload = trimmed
+            .strip_prefix("error:")
+            .map(str::trim)
+            .unwrap_or(trimmed);
+        if payload.contains("provider.api_error")
+            || payload.contains("membership")
+            || payload.contains("402")
+        {
+            return Some(friendly_provider_api_error(payload));
+        }
+    }
+    None
+}
+
+fn friendly_provider_api_error(raw: &str) -> String {
+    if raw.contains("402")
+        || raw.contains("membership")
+        || raw.contains("subscription")
+        || raw.contains("套餐")
+        || raw.contains("订阅")
+    {
+        return crate::t!("agent.kimi_subscription_required").to_string();
+    }
+    raw
+        .split("provider.api_error:")
+        .nth(1)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(raw)
+        .to_string()
 }
 
 pub fn extract_acp_session_id(value: &Value) -> Option<String> {
@@ -320,5 +425,40 @@ mod tests {
         assert!(is_acp_turn_complete_update("agent_message_complete"));
         assert!(is_acp_turn_complete_update("turn_complete"));
         assert!(!is_acp_turn_complete_update("agent_message_chunk"));
+    }
+
+    #[test]
+    fn resolve_acp_empty_turn_message_maps_membership_stderr() {
+        let stderr = "error: failed to run prompt: provider.api_error: 402 membership inactive";
+        let msg =
+            resolve_acp_empty_turn_message(&json!({"stopReason": "end_turn"}), stderr, "fallback");
+        assert_ne!(msg, "end_turn");
+        assert_ne!(msg, "fallback");
+    }
+
+    #[test]
+    fn resolve_acp_empty_turn_message_uses_provider_fallback_when_silent_end_turn() {
+        let msg = resolve_acp_empty_turn_message(
+            &json!({"stopReason": "end_turn"}),
+            "",
+            "Gemini returned no output",
+        );
+        assert_eq!(msg, "Gemini returned no output");
+    }
+
+    #[test]
+    fn format_rpc_error_extracts_message_and_data() {
+        assert_eq!(
+            format_rpc_error(&json!({
+                "code": -32000,
+                "message": "authRequired",
+                "data": { "reason": "login required" }
+            })),
+            "authRequired: login required"
+        );
+        assert_eq!(
+            format_rpc_error(&json!("subscription expired")),
+            "subscription expired"
+        );
     }
 }

@@ -55,9 +55,12 @@ pub struct LogConfig {
 pub enum AgentProvider {
     #[default]
     Claude,
+    Codex,
     Cursor,
     Pi,
     OpenCode,
+    Kimi,
+    Gemini,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,9 +189,12 @@ impl std::fmt::Display for AgentProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AgentProvider::Claude => write!(f, "claude"),
+            AgentProvider::Codex => write!(f, "codex"),
             AgentProvider::Cursor => write!(f, "cursor"),
             AgentProvider::Pi => write!(f, "pi"),
             AgentProvider::OpenCode => write!(f, "opencode"),
+            AgentProvider::Kimi => write!(f, "kimi"),
+            AgentProvider::Gemini => write!(f, "gemini"),
         }
     }
 }
@@ -215,6 +221,15 @@ impl AgentConfig {
     pub fn default_for_provider(provider: AgentProvider) -> Self {
         match provider {
             AgentProvider::Claude => Self::default(),
+            // `codex-acp` ignores `mode` in session/new and defaults to read-only;
+            // "auto" is applied post-spawn via session/set_mode (Codex's own default preset).
+            AgentProvider::Codex => Self {
+                provider: AgentProvider::Codex,
+                cli_path: "codex-acp".to_string(),
+                default_args: String::new(),
+                mode: "auto".to_string(),
+                permission: "prompt".to_string(),
+            },
             AgentProvider::Cursor => Self {
                 provider: AgentProvider::Cursor,
                 cli_path: "agent".to_string(),
@@ -232,6 +247,20 @@ impl AgentConfig {
             AgentProvider::OpenCode => Self {
                 provider: AgentProvider::OpenCode,
                 cli_path: "opencode".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
+            AgentProvider::Kimi => Self {
+                provider: AgentProvider::Kimi,
+                cli_path: "kimi".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
+            AgentProvider::Gemini => Self {
+                provider: AgentProvider::Gemini,
+                cli_path: "gemini".to_string(),
                 default_args: String::new(),
                 mode: "agent".to_string(),
                 permission: "prompt".to_string(),

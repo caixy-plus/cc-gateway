@@ -705,7 +705,12 @@ impl AgentController {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
         let caps = crate::config::agent_registry::capabilities_for(&provider);
-        if caps.active_model_from_session {
+        if caps.active_model_from_session
+            || matches!(
+                caps.list_models,
+                crate::config::agent_registry::ListModelsSource::InSessionRpc
+            )
+        {
             let mut s = self.session.write().await;
             if let Some(session) = s.as_mut() {
                 if let Ok(Some(id)) = session.active_model_id().await {
@@ -720,7 +725,8 @@ impl AgentController {
 
     /// List models available for the current active provider, using provider-specific mechanisms.
     ///
-    /// - OpenCode: run official CLI (`opencode models`)
+    /// - OpenCode: official CLI (`opencode models`)
+    /// - Codex / Kimi / Gemini ACP: model catalog from `session/new` (`configOptions` or `models`)
     /// - Pi: RPC `get_available_models`
     /// - Claude/Cursor: not supported (platform-bound agents)
     pub async fn list_available_models(&self) -> Result<Vec<String>> {
@@ -756,7 +762,7 @@ impl AgentController {
     /// Switch model for the current provider.
     ///
     /// - Pi: RPC `set_model` (no restart)
-    /// - OpenCode: ACP `session/set_model` (no restart)
+    /// - OpenCode / Kimi: ACP `session/set_model` (no restart)
     pub async fn switch_model(&self, model_arg: &str) -> Result<String> {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);

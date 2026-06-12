@@ -1101,9 +1101,12 @@ fn should_try_provider_resume(agent_session: &AgentSession, provider: &AgentProv
         return false;
     }
     match provider {
-        AgentProvider::Pi | AgentProvider::Cursor | AgentProvider::OpenCode => {
-            gateway_session_has_user_history(agent_session)
-        }
+        AgentProvider::Pi
+        | AgentProvider::Codex
+        | AgentProvider::Cursor
+        | AgentProvider::OpenCode
+        | AgentProvider::Kimi
+        | AgentProvider::Gemini => gateway_session_has_user_history(agent_session),
         // Claude: resume when gateway history shows a user turn (avoids WebUI start→stop→start
         // with no chat).
         AgentProvider::Claude => gateway_session_has_user_history(agent_session),
@@ -1213,5 +1216,57 @@ mod gateway_history_tests {
         assert!(!file_contains_user_role(&path));
         assert!(!file_contains_user_role(&dir.join("missing.jsonl")));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Codex and Gemini should attempt session/load when all three gate conditions pass.
+    #[test]
+    fn should_resume_codex_and_gemini_when_all_conditions_met() {
+        use crate::config::model::AgentProvider;
+        use crate::tests::helpers::TestEnv;
+        let env = TestEnv::new();
+        let hist = env.home().join(".cc-gateway/history");
+        std::fs::create_dir_all(&hist).unwrap();
+
+        for provider in [AgentProvider::Codex, AgentProvider::Gemini] {
+            let session = AgentSession {
+                id: "sess-resume".to_string(),
+                provider_session_id: Some("acp-sid-123".to_string()),
+                ..AgentSession::new("ch", "t", "/tmp")
+            };
+            // No history yet → should NOT attempt resume.
+            assert!(
+                !should_try_provider_resume(&session, &provider),
+                "{provider:?}: should not resume without history"
+            );
+            // Write a user history line.
+            std::fs::write(
+                hist.join("sess-resume.jsonl"),
+                r#"{"role":"user","content":"hi"}"#,
+            )
+            .unwrap();
+            // All three conditions met → should attempt resume (triggers session/load).
+            assert!(
+                should_try_provider_resume(&session, &provider),
+                "{provider:?}: should resume when provider_session_id + history present"
+            );
+            std::fs::remove_file(hist.join("sess-resume.jsonl")).ok();
+        }
+    }
+
+    /// No provider_session_id → skip resume for any ACP provider.
+    #[test]
+    fn should_not_resume_without_provider_session_id() {
+        use crate::config::model::AgentProvider;
+        let session = AgentSession {
+            id: "sess-no-pid".to_string(),
+            provider_session_id: None,
+            ..AgentSession::new("ch", "t", "/tmp")
+        };
+        for provider in [AgentProvider::Codex, AgentProvider::Gemini, AgentProvider::Cursor] {
+            assert!(
+                !should_try_provider_resume(&session, &provider),
+                "{provider:?}: should not resume without provider_session_id"
+            );
+        }
     }
 }

@@ -366,6 +366,8 @@ mod tests {
             .and_then(|v| v.as_object())
             .expect("agent.providers object");
         assert!(providers.contains_key("opencode"));
+        assert!(providers.contains_key("kimi"));
+        assert!(providers.contains_key("gemini"));
         assert!(providers.contains_key("pi"));
         assert!(!on_disk
             .get("agent")
@@ -393,7 +395,7 @@ mod tests {
             .and_then(|v| v.get("providers"))
             .and_then(|v| v.as_object())
             .expect("agent.providers object");
-        for id in ["cursor", "pi", "opencode"] {
+        for id in ["cursor", "pi", "opencode", "kimi", "gemini"] {
             assert!(
                 providers.contains_key(id),
                 "normalized config should include {id} on disk"

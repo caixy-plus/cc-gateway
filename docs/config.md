@@ -13,14 +13,16 @@ Top-level layout:
 | Section | Purpose |
 |---------|---------|
 | `log` | Daemon log level, path, rotation |
-| `agent` | `default` provider id + `providers` map (one object per **registered** id: `claude`, `cursor`, `pi`, `opencode`, …) |
+| `agent` | `default` provider id + `providers` map (one object per **registered** id: `claude`, `codex`, `cursor`, `opencode`, `kimi`, `gemini`, `pi`, …) |
 | `platforms` | Bot integrations (`feishu`, `telegram`, `qq`) — **not** top-level keys |
 | `default_dir`, `show_thinking`, `media_retention_days`, `session_retention_per_channel` | Session / UI defaults |
 | `port`, `bind_address`, `allowed_ips`, `webui_token` | HTTP / WebUI |
 
 `agent` has two keys: `default` and `providers` (a map keyed by provider id). Legacy flat `agent.<id>` keys are migrated into `agent.providers` on load. After the first load on an old file, every catalog id is present on disk even if you never enabled that provider.
 
-CLI binaries (`claude`, `agent`, `pi`, `opencode`) are **not** stored per profile — they come from the gateway [agent registry](adding-agent-provider.md). Profiles only hold `enabled`, `default_args`, `mode`, and `permission`.
+CLI binaries (`claude`, `codex-acp`, `agent`, `pi`, `opencode`, `kimi`, `gemini`) are **not** stored per profile — they come from the gateway [agent registry](adding-agent-provider.md). Profiles only hold `enabled`, `default_args`, `mode`, and `permission`.
+
+**Codex** uses Zed's ACP adapter, not the raw `codex` CLI: `npm i -g @zed-industries/codex-acp`. Auth is shared with the Codex CLI (`codex login` or `OPENAI_API_KEY`).
 
 ## Example
 
@@ -41,6 +43,9 @@ Typical `~/.cc-gateway/config.json` after `init` or auto-migration:
         "enabled": true,
         "default_args": "--dangerously-skip-permissions"
       },
+      "codex": {
+        "enabled": false
+      },
       "cursor": {
         "enabled": false
       },
@@ -49,6 +54,12 @@ Typical `~/.cc-gateway/config.json` after `init` or auto-migration:
         "default_args": "--provider anthropic"
       },
       "opencode": {
+        "enabled": false
+      },
+      "kimi": {
+        "enabled": false
+      },
+      "gemini": {
         "enabled": false
       }
     }
@@ -133,7 +144,7 @@ Each provider profile (`agent.providers.<id>`):
 | `mode` | string? | Provider mode when supported (omitted = registry default) |
 | `permission` | string? | `prompt`, `allow`, or `deny` (omitted = registry default) |
 
-CLI executable names are **not** configurable here; the gateway resolves them from the agent registry (`claude`, `agent`, `pi`, `opencode`).
+CLI executable names are **not** configurable here; the gateway resolves them from the agent registry (`claude`, `codex-acp`, `agent`, `pi`, `opencode`, `kimi`, `gemini`).
 
 Override per session: `/agent [provider] <extra args>`.
 

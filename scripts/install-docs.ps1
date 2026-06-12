@@ -26,6 +26,12 @@ function Print-InstallDocs {
     }
 
     Write-Msg "" ""
+    Write-Msg "Agent providers (install separately on your machine):" "智能体 CLI（需在本机单独安装）："
+    Write-Msg "  Claude Code, Cursor (agent), OpenCode, Kimi, Gemini, Pi — see config guide." "  Claude Code、Cursor (agent)、OpenCode、Kimi、Gemini、Pi — 见配置说明。"
+    Write-Msg "  Codex: npm i -g @zed-industries/codex-acp" "  Codex：npm i -g @zed-industries/codex-acp"
+    Write-Msg "    (Zed ACP adapter for the Codex CLI — not the raw 'codex' binary; auth: codex login or OPENAI_API_KEY)" "    （Codex CLI 的 Zed ACP 适配器，不是裸 codex 可执行文件；登录：codex login 或 OPENAI_API_KEY）"
+
+    Write-Msg "" ""
     Write-Msg "Documentation:" "文档与配置指南："
     Write-Msg "  Overview (pairing, multi-platform): $overview" "  总览（配对、多平台）: $overview"
     Write-Msg "  Feishu / Lark bot setup:            $feishu" "  飞书 / Lark 机器人:                  $feishu"

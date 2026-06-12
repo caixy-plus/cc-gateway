@@ -8,25 +8,36 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info};
 
 use crate::agent::acp_client::{
-    emit_acp_turn_done, is_acp_turn_complete_update, reset_acp_turn_done,
-    resolve_acp_spawn_session_id, AcpClient, NotificationHandler,
+    emit_acp_turn_done, is_acp_turn_complete_update, mark_acp_turn_content, reset_acp_turn_content,
+    reset_acp_turn_done, resolve_acp_empty_turn_message, resolve_acp_spawn_session_id, AcpClient,
+    NotificationHandler,
 };
 use crate::agent::event::AgentEvent;
 use crate::config::model::AgentConfig;
 use crate::runtime::mcp_server::McpContext;
+
+/// End a turn only when the agent has sent **no ACP traffic at all** for this long.
+/// The `session/prompt` response legitimately takes minutes (it returns at end of turn),
+/// so the watchdog keys off inbound activity, not total turn duration. Tool executions
+/// can stay silent between status updates — keep this generous; it only catches
+/// genuinely hung providers (e.g. Kimi with an inactive membership).
+const PROMPT_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+const PROMPT_IDLE_TICK: Duration = Duration::from_secs(10);
 
 /// Context passed to provider-specific ACP notification handlers.
 pub struct AcpNotifyCtx {
     pub event_tx: mpsc::UnboundedSender<AgentEvent>,
     pub pending_permissions: Arc<Mutex<HashMap<String, Value>>>,
     pub turn_done_sent: Arc<AtomicBool>,
+    pub turn_had_content: Arc<AtomicBool>,
     pub client_stdin: Arc<Mutex<ChildStdin>>,
 }
 
@@ -35,7 +46,9 @@ pub struct AcpNotifyCtx {
 pub trait AcpHooks: Send + Sync + Copy + Default + 'static {
     fn log_provider_name(&self) -> &'static str;
 
-    fn authenticate_method_id(&self) -> &str;
+    /// ACP `authenticate` methodId, or `None` to skip the authenticate RPC
+    /// (providers like Gemini reuse cached CLI credentials and reject unknown methods).
+    fn authenticate_method_id(&self) -> Option<&str>;
 
     fn default_permission_label(&self) -> &'static str;
 
@@ -72,9 +85,25 @@ pub trait AcpHooks: Send + Sync + Copy + Default + 'static {
     ) {
     }
 
+    /// Runs after the ACP session id is established. Providers that ignore the
+    /// `mode` param in `session/new` (e.g. Codex) can apply it here via
+    /// `session/set_mode`. Failures must not abort the spawn.
+    async fn after_session_setup(
+        &self,
+        _session: &GenericAcpSession<Self>,
+        _config: &AgentConfig,
+    ) {
+    }
+
     /// When true, [`GenericAcpSession`] implements in-session model switch via ACP.
     fn supports_acp_set_model(&self) -> bool {
         false
+    }
+
+    /// Message shown when `session/prompt` succeeds but no user-visible output
+    /// was streamed during the turn.
+    fn no_output_message(&self) -> String {
+        crate::t_fmt!("agent.acp_no_response", NAME = self.log_provider_name())
     }
 
     /// ACP `session/set_model` (and provider-specific fallbacks). Only used when
@@ -93,8 +122,64 @@ pub struct GenericAcpSession<H: AcpHooks> {
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     session_id: String,
     turn_done_sent: Arc<AtomicBool>,
+    turn_had_content: Arc<AtomicBool>,
+    /// Updated on every inbound ACP notification; drives the prompt idle watchdog.
+    last_activity: Arc<StdMutex<Instant>>,
     mcp_servers: Value,
+    /// Model ids from ACP `session/new` / `session/load` (`configOptions` or Gemini `models`).
+    available_models: Vec<String>,
+    active_model: Option<String>,
     pub(crate) hooks: H,
+}
+
+/// Parse model catalog + current selection from an ACP `session/new` or `session/load` result.
+pub fn parse_acp_session_models(result: &Value) -> (Vec<String>, Option<String>) {
+    if let Some(models) = result.get("models") {
+        let current = models
+            .get("currentModelId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let ids: Vec<String> = models
+            .get("availableModels")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| m.get("modelId").and_then(|v| v.as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !ids.is_empty() {
+            return (ids, current);
+        }
+    }
+
+    let Some(opts) = result.get("configOptions").and_then(|v| v.as_array()) else {
+        return (vec![], None);
+    };
+    for opt in opts {
+        if opt.get("id").and_then(|v| v.as_str()) != Some("model") {
+            continue;
+        }
+        let current = opt
+            .get("currentValue")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let mut ids = Vec::new();
+        if let Some(options) = opt.get("options").and_then(|v| v.as_array()) {
+            for o in options {
+                if let Some(s) = o.as_str() {
+                    ids.push(s.to_string());
+                } else if let Some(v) = o.get("value").and_then(|v| v.as_str()) {
+                    ids.push(v.to_string());
+                } else if let Some(id) = o.get("id").and_then(|v| v.as_str()) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+        return (ids, current);
+    }
+    (vec![], None)
 }
 
 impl<H: AcpHooks> GenericAcpSession<H> {
@@ -151,21 +236,43 @@ impl<H: AcpHooks> GenericAcpSession<H> {
         let tx = event_tx.clone();
         let pp = pending_permissions.clone();
         let turn_done = Arc::new(AtomicBool::new(false));
+        let turn_had_content = Arc::new(AtomicBool::new(false));
+        let last_activity = Arc::new(StdMutex::new(Instant::now()));
+        // session/load replays prior conversation via session/update before its
+        // response; the gateway renders history from its own JSONL, so replayed
+        // chunks must not be re-emitted as live agent output.
+        let replaying = Arc::new(AtomicBool::new(false));
         let turn_done_notify = turn_done.clone();
+        let turn_had_content_notify = turn_had_content.clone();
+        let last_activity_notify = last_activity.clone();
         let stdin_for_notify = client_stdin.clone();
+        let replaying_notify = replaying.clone();
         let hooks_for_notify = hooks;
         let on_notification: NotificationHandler = Arc::new(move |msg: &Value| {
+            if let Ok(mut at) = last_activity_notify.lock() {
+                *at = Instant::now();
+            }
             let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
             let ctx = AcpNotifyCtx {
                 event_tx: tx.clone(),
                 pending_permissions: pp.clone(),
                 turn_done_sent: turn_done_notify.clone(),
+                turn_had_content: turn_had_content_notify.clone(),
                 client_stdin: stdin_for_notify.clone(),
             };
             match method {
                 "session/update" => {
+                    if replaying_notify.load(std::sync::atomic::Ordering::SeqCst) {
+                        debug!("Suppressed replayed session/update during session/load");
+                        return;
+                    }
                     if let Some(update) = msg.get("params").and_then(|p| p.get("update")) {
-                        handle_session_update(update, &ctx.event_tx, &ctx.turn_done_sent);
+                        handle_session_update(
+                            update,
+                            &ctx.event_tx,
+                            &ctx.turn_done_sent,
+                            Some(&ctx.turn_had_content),
+                        );
                     }
                 }
                 "session/request_permission" => {
@@ -197,12 +304,16 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             event_tx: event_tx.clone(),
             session_id: String::new(),
             turn_done_sent: turn_done,
+            turn_had_content,
+            last_activity,
             mcp_servers,
+            available_models: vec![],
+            active_model: None,
             hooks,
         };
 
         session
-            .send_request(
+            .spawn_request(
                 "initialize",
                 json!({
                     "protocolVersion": 1,
@@ -215,12 +326,11 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             )
             .await?;
 
-        session
-            .send_request(
-                "authenticate",
-                json!({ "methodId": session.hooks.authenticate_method_id() }),
-            )
-            .await?;
+        if let Some(method_id) = session.hooks.authenticate_method_id() {
+            session
+                .spawn_request("authenticate", json!({ "methodId": method_id }))
+                .await?;
+        }
 
         let mode = acp_mode(config);
         let will_resume = resume_session_id.is_some();
@@ -229,8 +339,9 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             .before_session_setup(&event_tx, config, will_resume);
 
         let (result, loaded_session_id) = if let Some(ref sid) = resume_session_id {
-            let v = session
-                .send_request(
+            replaying.store(true, std::sync::atomic::Ordering::SeqCst);
+            let load_result = session
+                .spawn_request(
                     "session/load",
                     json!({
                         "sessionId": sid,
@@ -239,12 +350,34 @@ impl<H: AcpHooks> GenericAcpSession<H> {
                         "mcpServers": session.mcp_servers
                     }),
                 )
-                .await
-                .map_err(|e| H::session_resume_error(sid, &e.to_string()))?;
-            (v, Some(sid.clone()))
+                .await;
+            replaying.store(false, std::sync::atomic::Ordering::SeqCst);
+            match load_result {
+                Ok(v) => (v, Some(sid.clone())),
+                Err(e) => {
+                    // session/load can fail when the provider doesn't implement it or
+                    // the session has expired. Fall back to session/new so the spawn
+                    // succeeds and the user gets a fresh session instead of a hard error.
+                    tracing::warn!(
+                        "[{}] session/load for {sid} failed: {e}; falling back to session/new",
+                        session.hooks.log_provider_name()
+                    );
+                    let v = session
+                        .spawn_request(
+                            "session/new",
+                            json!({
+                                "cwd": work_dir,
+                                "mode": mode,
+                                "mcpServers": session.mcp_servers
+                            }),
+                        )
+                        .await?;
+                    (v, None)
+                }
+            }
         } else {
             let v = session
-                .send_request(
+                .spawn_request(
                     "session/new",
                     json!({
                         "cwd": work_dir,
@@ -259,13 +392,17 @@ impl<H: AcpHooks> GenericAcpSession<H> {
         let session_id = resolve_acp_spawn_session_id(&result, loaded_session_id.as_deref())?;
         let mut session = session;
         session.session_id = session_id.clone();
+        session.apply_session_models_from_result(&result);
         let _ = event_tx.send(AgentEvent::SessionId(session_id.clone()));
+
+        session.hooks.after_session_setup(&session, config).await;
 
         Ok((session, Some(session_id)))
     }
 
     pub async fn send_user_message(&self, text: &str) -> Result<()> {
         reset_acp_turn_done(&self.turn_done_sent);
+        reset_acp_turn_content(&self.turn_had_content);
         let rx = self
             .send_request_detached(
                 "session/prompt",
@@ -277,18 +414,50 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             .await?;
         let event_tx = self.event_tx.clone();
         let turn_done = self.turn_done_sent.clone();
+        let turn_had_content = self.turn_had_content.clone();
+        let last_activity = self.last_activity.clone();
+        let stderr_buf = self.client.stderr_buffer();
         let closed_err = self.hooks.prompt_channel_closed_error().to_string();
+        let no_output_msg = self.hooks.no_output_message();
+        if let Ok(mut at) = last_activity.lock() {
+            *at = Instant::now();
+        }
         tokio::spawn(async move {
-            match rx.await {
-                Ok(Ok(_)) => {
+            use std::sync::atomic::Ordering;
+            match await_prompt_response(rx, last_activity, PROMPT_IDLE_TIMEOUT, PROMPT_IDLE_TICK)
+                .await
+            {
+                PromptWait::Completed(Ok(result)) => {
+                    if !turn_had_content.load(Ordering::SeqCst) {
+                        let stderr = stderr_buf
+                            .lock()
+                            .map(|lines| lines.join("\n"))
+                            .unwrap_or_default();
+                        let msg = resolve_acp_empty_turn_message(&result, &stderr, &no_output_msg);
+                        tracing::warn!(
+                            "ACP prompt completed with no streamed output (stopReason={:?})",
+                            result.get("stopReason")
+                        );
+                        let _ = event_tx.send(AgentEvent::Error(msg));
+                    }
                     emit_acp_turn_done(&event_tx, &turn_done);
                 }
-                Ok(Err(err)) => {
+                PromptWait::Completed(Err(err)) => {
                     let _ = event_tx.send(AgentEvent::Error(err));
                     emit_acp_turn_done(&event_tx, &turn_done);
                 }
-                Err(_) => {
+                PromptWait::ChannelClosed => {
                     let _ = event_tx.send(AgentEvent::Error(closed_err));
+                    emit_acp_turn_done(&event_tx, &turn_done);
+                }
+                PromptWait::IdleTimeout => {
+                    tracing::warn!(
+                        "ACP prompt watchdog: no inbound traffic for {:?}, ending turn",
+                        PROMPT_IDLE_TIMEOUT
+                    );
+                    let _ = event_tx.send(AgentEvent::Error(
+                        crate::t!("agent.acp_prompt_idle_timeout").to_string(),
+                    ));
                     emit_acp_turn_done(&event_tx, &turn_done);
                 }
             }
@@ -325,10 +494,29 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             .await?;
         let session_id = resolve_acp_spawn_session_id(&result, None)?;
         self.session_id = session_id.clone();
+        self.apply_session_models_from_result(&result);
         let _ = self
             .event_tx
             .send(AgentEvent::SessionId(session_id.clone()));
         Ok(Some(session_id))
+    }
+
+    fn apply_session_models_from_result(&mut self, result: &Value) {
+        let (models, current) = parse_acp_session_models(result);
+        self.available_models = models;
+        self.active_model = current;
+    }
+
+    pub fn session_model_catalog(&self) -> &[String] {
+        &self.available_models
+    }
+
+    pub fn session_active_model(&self) -> Option<&str> {
+        self.active_model.as_deref()
+    }
+
+    pub(crate) fn set_session_active_model(&mut self, model_id: &str) {
+        self.active_model = Some(model_id.to_string());
     }
 
     pub async fn send_permission_response(&self, request_id: &str, allow: bool) -> Result<()> {
@@ -385,6 +573,13 @@ impl<H: AcpHooks> GenericAcpSession<H> {
         self.client.send_request(method, params).await
     }
 
+    /// Spawn-time RPC: attach recent stderr so subscription/auth failures surface in chat.
+    async fn spawn_request(&self, method: &str, params: Value) -> Result<Value> {
+        self.send_request(method, params)
+            .await
+            .map_err(|e| append_client_stderr(&self.client, e))
+    }
+
     async fn send_request_detached(
         &self,
         method: &str,
@@ -404,8 +599,8 @@ impl AcpHooks for NoAcpHooks {
         "acp"
     }
 
-    fn authenticate_method_id(&self) -> &str {
-        ""
+    fn authenticate_method_id(&self) -> Option<&str> {
+        None
     }
 
     fn default_permission_label(&self) -> &'static str {
@@ -475,6 +670,43 @@ pub fn build_base_spawn_args(config: &AgentConfig, extra_args: Vec<String>) -> V
     }
     args.extend(extra_args);
     args
+}
+
+/// Outcome of waiting for a `session/prompt` response.
+#[derive(Debug)]
+pub(crate) enum PromptWait {
+    /// The prompt RPC completed (turn ended) — `Ok(result)` or provider `Err(message)`.
+    Completed(std::result::Result<Value, String>),
+    /// The response channel dropped (client/process torn down).
+    ChannelClosed,
+    /// No inbound ACP traffic for `idle_timeout` — provider considered hung.
+    IdleTimeout,
+}
+
+/// Wait for the prompt response with an **activity-based** watchdog: the turn may run
+/// arbitrarily long as long as the provider keeps sending notifications; only a fully
+/// silent provider trips `IdleTimeout`.
+pub(crate) async fn await_prompt_response(
+    mut rx: tokio::sync::oneshot::Receiver<std::result::Result<Value, String>>,
+    last_activity: Arc<StdMutex<Instant>>,
+    idle_timeout: Duration,
+    tick: Duration,
+) -> PromptWait {
+    loop {
+        match tokio::time::timeout(tick, &mut rx).await {
+            Ok(Ok(result)) => return PromptWait::Completed(result),
+            Ok(Err(_)) => return PromptWait::ChannelClosed,
+            Err(_) => {
+                let idle = last_activity
+                    .lock()
+                    .map(|at| at.elapsed())
+                    .unwrap_or(idle_timeout);
+                if idle >= idle_timeout {
+                    return PromptWait::IdleTimeout;
+                }
+            }
+        }
+    }
 }
 
 fn acp_mode(config: &AgentConfig) -> &str {
@@ -554,10 +786,21 @@ fn handle_session_request_permission(
     });
 }
 
+fn append_client_stderr(client: &AcpClient, err: anyhow::Error) -> anyhow::Error {
+    let stderr_buf = client.recent_stderr();
+    let stderr = stderr_buf.trim();
+    if stderr.is_empty() {
+        err
+    } else {
+        anyhow::anyhow!("{err}\n{stderr}")
+    }
+}
+
 pub fn handle_session_update(
     update: &Value,
     event_tx: &mpsc::UnboundedSender<AgentEvent>,
     turn_done_sent: &AtomicBool,
+    turn_had_content: Option<&AtomicBool>,
 ) {
     let kind = update
         .get("sessionUpdate")
@@ -574,6 +817,7 @@ pub fn handle_session_update(
         .and_then(|v| v.as_str())
     {
         let _ = event_tx.send(AgentEvent::Thinking(thinking.to_string()));
+        mark_acp_turn_content(turn_had_content);
         if is_acp_turn_complete_update(kind) {
             emit_acp_turn_done(event_tx, turn_done_sent);
         }
@@ -585,7 +829,10 @@ pub fn handle_session_update(
         .and_then(|c| c.get("text"))
         .and_then(|v| v.as_str())
     {
-        let _ = event_tx.send(AgentEvent::Text(text.to_string()));
+        if !text.is_empty() {
+            let _ = event_tx.send(AgentEvent::Text(text.to_string()));
+            mark_acp_turn_content(turn_had_content);
+        }
         if is_acp_turn_complete_update(kind) {
             emit_acp_turn_done(event_tx, turn_done_sent);
         }
@@ -597,8 +844,10 @@ pub fn handle_session_update(
             kind.to_string(),
             serde_json::to_string(update).unwrap_or_default(),
         ));
+        mark_acp_turn_content(turn_had_content);
     } else if kind.contains("error") {
         let _ = event_tx.send(AgentEvent::Error(update.to_string()));
+        mark_acp_turn_content(turn_had_content);
     } else if is_acp_turn_complete_update(kind) {
         emit_acp_turn_done(event_tx, turn_done_sent);
     }
@@ -653,6 +902,7 @@ mod tests {
             }),
             &tx,
             &done,
+            None,
         );
 
         match rx.try_recv().expect("event should be sent") {
@@ -673,6 +923,7 @@ mod tests {
             }),
             &tx,
             &done,
+            None,
         );
 
         match rx.try_recv().expect("event should be sent") {
@@ -689,6 +940,7 @@ mod tests {
             &json!({ "sessionUpdate": "agent_message_complete" }),
             &tx,
             &done,
+            None,
         );
         assert!(matches!(rx.try_recv(), Ok(AgentEvent::Done)));
     }
@@ -705,6 +957,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_acp_session_models_reads_config_options() {
+        let result = json!({
+            "sessionId": "s1",
+            "configOptions": [{
+                "id": "model",
+                "currentValue": "gpt-5.4-mini",
+                "options": ["gpt-5.5", "gpt-5.4-mini"]
+            }]
+        });
+        let (models, current) = parse_acp_session_models(&result);
+        assert_eq!(models, vec!["gpt-5.5", "gpt-5.4-mini"]);
+        assert_eq!(current.as_deref(), Some("gpt-5.4-mini"));
+    }
+
+    #[test]
+    fn parse_acp_session_models_reads_gemini_models_field() {
+        let result = json!({
+            "sessionId": "s1",
+            "models": {
+                "currentModelId": "auto",
+                "availableModels": [
+                    { "modelId": "auto", "name": "Auto" },
+                    { "modelId": "gemini-3-flash-preview", "name": "gemini-3-flash-preview" }
+                ]
+            }
+        });
+        let (models, current) = parse_acp_session_models(&result);
+        assert_eq!(models, vec!["auto", "gemini-3-flash-preview"]);
+        assert_eq!(current.as_deref(), Some("auto"));
+    }
+
+    #[test]
     fn extracts_permission_tool_name_falls_back_to_title() {
         let params = json!({
             "toolCall": { "title": "cc-gateway send_file" }
@@ -713,5 +997,79 @@ mod tests {
             extract_permission_label(&params),
             Some("cc-gateway send_file".to_string())
         );
+    }
+
+    fn activity_at_now() -> Arc<StdMutex<Instant>> {
+        Arc::new(StdMutex::new(Instant::now()))
+    }
+
+    #[tokio::test]
+    async fn prompt_wait_completes_when_response_arrives_late() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let _ = tx.send(Ok(json!({"stopReason": "end_turn"})));
+        });
+        // idle_timeout far larger than the response delay: no false trigger.
+        let outcome = await_prompt_response(
+            rx,
+            activity_at_now(),
+            Duration::from_secs(60),
+            Duration::from_millis(5),
+        )
+        .await;
+        assert!(matches!(outcome, PromptWait::Completed(Ok(_))));
+    }
+
+    #[tokio::test]
+    async fn prompt_wait_times_out_only_when_provider_fully_silent() {
+        let (_tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<Value, String>>();
+        let outcome = await_prompt_response(
+            rx,
+            activity_at_now(),
+            Duration::from_millis(50),
+            Duration::from_millis(10),
+        )
+        .await;
+        assert!(matches!(outcome, PromptWait::IdleTimeout));
+    }
+
+    #[tokio::test]
+    async fn prompt_wait_survives_long_turn_with_ongoing_activity() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let activity = activity_at_now();
+        let activity_refresher = activity.clone();
+        // Simulate a turn 4x longer than idle_timeout that keeps streaming updates.
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                if let Ok(mut at) = activity_refresher.lock() {
+                    *at = Instant::now();
+                }
+            }
+            let _ = tx.send(Ok(json!({"stopReason": "end_turn"})));
+        });
+        let outcome = await_prompt_response(
+            rx,
+            activity,
+            Duration::from_millis(50),
+            Duration::from_millis(5),
+        )
+        .await;
+        assert!(matches!(outcome, PromptWait::Completed(Ok(_))));
+    }
+
+    #[tokio::test]
+    async fn prompt_wait_reports_channel_closed_when_client_drops() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<Value, String>>();
+        drop(tx);
+        let outcome = await_prompt_response(
+            rx,
+            activity_at_now(),
+            Duration::from_secs(60),
+            Duration::from_millis(5),
+        )
+        .await;
+        assert!(matches!(outcome, PromptWait::ChannelClosed));
     }
 }

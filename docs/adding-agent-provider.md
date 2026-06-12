@@ -2,7 +2,7 @@
 
 > Back: [CLAUDE.md](../CLAUDE.md). Companion: [Adding a New Chat Platform](adding-chat-platform.md), [Platform Reference Docs](platform-reference.md).
 
-Use this checklist when wiring a new CLI/agent into cc-gateway. Current providers: **Claude** (stream-json), **Cursor** & **OpenCode** (ACP), **Pi** (RPC). Pick the integration style that matches the upstream CLI. **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) (agent provider table).
+Use this checklist when wiring a new CLI/agent into cc-gateway. Current providers: **Claude** (stream-json), **Codex** (ACP via `codex-acp`), **Cursor**, **OpenCode**, **Kimi** & **Gemini** (ACP), **Pi** (RPC). Pick the integration style that matches the upstream CLI. **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) (agent provider table).
 
 ## 1. Choose an integration style
 
@@ -22,7 +22,7 @@ flowchart TD
 | Style | Reference module | Spawn pattern | MCP `send_file` |
 |-------|------------------|---------------|-----------------|
 | Stream-json | `runtime/session.rs` | `claude --input-format stream-json …` | `--mcp-config` via `mcp_attach::build_claude_mcp_servers_object` |
-| ACP | `agent/acp_session.rs` + thin `agent/<name>.rs` implementing [`AcpHooks`](../../src/core/agent/acp_session.rs) (see `cursor_acp.rs`, `opencode_acp.rs`) | e.g. `agent acp`, `opencode acp` | `session/new` `mcpServers` via `mcp_attach` (`build_acp_mcp_servers` or `prepare_cursor_mcp`) |
+| ACP | `agent/acp_session.rs` + thin `agent/<name>.rs` implementing [`AcpHooks`](../../src/core/agent/acp_session.rs) (see `codex_acp.rs`, `cursor_acp.rs`, `opencode_acp.rs`, `kimi_acp.rs`, `gemini_acp.rs`) | e.g. `codex-acp`, `agent acp`, `opencode acp`, `kimi acp`, `gemini --acp` | `session/new` `mcpServers` via `mcp_attach` (`build_acp_mcp_servers` or `prepare_cursor_mcp`) |
 | Custom RPC | `agent/pi_rpc.rs` | Provider-specific argv | Add `ProviderMcpSupport` when upstream supports it |
 
 ## 2. Backend checklist (this repo)
@@ -77,7 +77,9 @@ Commit and push the **frontend repo** only when changing WebUI behavior; local `
     "claude": { "enabled": true, "default_args": "", "mode": "agent", "permission": "prompt" },
     "cursor": { "enabled": false },
     "pi": { "enabled": false },
-    "opencode": { "enabled": false }
+    "opencode": { "enabled": false },
+    "kimi": { "enabled": false },
+    "gemini": { "enabled": false }
   }
 }
 ```
