@@ -1,7 +1,6 @@
 /target
 /test_work_dir/
 **/*.rs.bk
-Cargo.lock
 .DS_Store
 *.log
 *.pid
