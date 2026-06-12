@@ -550,11 +550,88 @@ pub async fn restart(config_path: Option<PathBuf>) -> Result<()> {
     start(config_path).await
 }
 
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// launchd starts agents with a bare `/usr/bin:/bin:/usr/sbin:/sbin` PATH, so
+/// provider CLIs under nvm/homebrew vanish after an auto-restart. Embed the
+/// PATH of the shell that ran `cc-gateway enable` into the plist.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn build_macos_launchd_plist(exe: &str, config_dir: &str, path_env: &str) -> String {
+    let env_block = if path_env.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r##"    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{}</string>
+    </dict>
+"##,
+            xml_escape(path_env)
+        )
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cc-gateway.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+        <string>start</string>
+    </array>
+{env_block}    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{config_dir}/logs/daemon.stdout</string>
+    <key>StandardErrorPath</key>
+    <string>{config_dir}/logs/daemon.stderr</string>
+</dict>
+</plist>"##
+    )
+}
+
+/// systemd user services also run with a minimal PATH; embed the enabling
+/// shell's PATH (systemd `%` specifiers escaped).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn build_systemd_service(exe: &str, path_env: &str) -> String {
+    let env_line = if path_env.is_empty() {
+        String::new()
+    } else {
+        format!("Environment=\"PATH={}\"\n", path_env.replace('%', "%%"))
+    };
+    format!(
+        r#"[Unit]
+Description=cc-gateway daemon
+After=network.target
+
+[Service]
+Type=simple
+{env_line}ExecStart={exe} start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"#
+    )
+}
+
 pub async fn enable() -> Result<()> {
     let exe = std::env::current_exe().context("Failed to determine cc-gateway executable path")?;
     let exe_str = exe.to_string_lossy();
     let config_dir = ConfigLoader::ensure_config_dir()?;
     let config_dir_str = config_dir.to_string_lossy();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let path_env = std::env::var("PATH").unwrap_or_default();
 
     #[cfg(target_os = "macos")]
     {
@@ -564,30 +641,7 @@ pub async fn enable() -> Result<()> {
         fs::create_dir_all(&plist_dir)?;
         let plist_path = plist_dir.join("com.cc-gateway.daemon.plist");
 
-        let plist_content = format!(
-            r##"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.cc-gateway.daemon</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{}</string>
-        <string>start</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{}/logs/daemon.stdout</string>
-    <key>StandardErrorPath</key>
-    <string>{}/logs/daemon.stderr</string>
-</dict>
-</plist>"##,
-            exe_str, config_dir_str, config_dir_str
-        );
+        let plist_content = build_macos_launchd_plist(&exe_str, &config_dir_str, &path_env);
         fs::write(&plist_path, plist_content)?;
 
         let status = std::process::Command::new("launchctl")
@@ -611,22 +665,7 @@ pub async fn enable() -> Result<()> {
         fs::create_dir_all(&systemd_dir)?;
         let service_path = systemd_dir.join("cc-gateway.service");
 
-        let service_content = format!(
-            r#"[Unit]
-Description=cc-gateway daemon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={} start
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-"#,
-            exe_str
-        );
+        let service_content = build_systemd_service(&exe_str, &path_env);
         fs::write(&service_path, service_content)?;
 
         let _ = std::process::Command::new("systemctl")
@@ -762,5 +801,47 @@ pub(crate) fn is_process_alive(pid: u32) -> bool {
             .output()
             .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macos_plist_embeds_enabling_shell_path_for_launchd() {
+        let plist = build_macos_launchd_plist(
+            "/Users/u/.local/bin/cc-gateway",
+            "/Users/u/.cc-gateway",
+            "/opt/homebrew/bin:/Users/u/.nvm/versions/node/v22.20.0/bin:/usr/bin",
+        );
+        assert!(plist.contains("<key>EnvironmentVariables</key>"));
+        assert!(plist.contains(
+            "<string>/opt/homebrew/bin:/Users/u/.nvm/versions/node/v22.20.0/bin:/usr/bin</string>"
+        ));
+        assert!(plist.contains("<string>/Users/u/.local/bin/cc-gateway</string>"));
+        assert!(plist.contains("<key>KeepAlive</key>"));
+    }
+
+    #[test]
+    fn macos_plist_omits_env_block_when_path_empty_and_escapes_xml() {
+        let empty = build_macos_launchd_plist("/bin/cc", "/cfg", "");
+        assert!(!empty.contains("EnvironmentVariables"));
+
+        let escaped = build_macos_launchd_plist("/bin/cc", "/cfg", "/weird&dir:<x>");
+        assert!(escaped.contains("/weird&amp;dir:&lt;x&gt;"));
+    }
+
+    #[test]
+    fn systemd_service_embeds_enabling_shell_path() {
+        let unit = build_systemd_service(
+            "/usr/local/bin/cc-gateway",
+            "/usr/bin:/home/u/.local/bin:/home/u/dir%1",
+        );
+        assert!(unit.contains("Environment=\"PATH=/usr/bin:/home/u/.local/bin:/home/u/dir%%1\""));
+        assert!(unit.contains("ExecStart=/usr/local/bin/cc-gateway start"));
+
+        let empty = build_systemd_service("/usr/bin/cc-gateway", "");
+        assert!(!empty.contains("Environment="));
     }
 }
