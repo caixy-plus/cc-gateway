@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::db;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::channel_model::AgentSessionState;
+use crate::web::files::WEBUI_FILE_EVENT_PREFIX;
 use crate::web::handlers::cmd::{handle_cd, CdRequest};
 use crate::web::handlers::session::{
     handle_create_session, handle_delete_session, handle_get_history, handle_list_sessions,
@@ -13,7 +14,6 @@ use crate::web::handlers::session::{
     handle_upload_file, AppState, CreateSessionRequest, ListSessionsQuery, PermissionRequest,
     SendMessageRequest, StartSessionRequest,
 };
-use crate::web::files::WEBUI_FILE_EVENT_PREFIX;
 use crate::web::state::EVENT_BUS;
 
 use super::helpers::{ensure_gateway_history, TestEnv};
@@ -1373,11 +1373,7 @@ async fn webui_upload_forward_skips_duplicate_user_bubble() -> Result<()> {
 
     let (status, body) = short_timeout(
         "upload",
-        handle_upload_file(
-            State(state.clone()),
-            Path(session_id.clone()),
-            multipart,
-        ),
+        handle_upload_file(State(state.clone()), Path(session_id.clone()), multipart),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "upload response: {body}");
@@ -1443,8 +1439,7 @@ async fn webui_save_config_persists_flat_agent_default_args() -> Result<()> {
             "gemini": { "enabled": true, "default_args": "--yolo" }
         }
     });
-    let (status, _resp) =
-        crate::web::handlers::config::handle_save_config(Json(body)).await;
+    let (status, _resp) = crate::web::handlers::config::handle_save_config(Json(body)).await;
     assert_eq!(status, StatusCode::OK);
 
     let saved = ConfigLoader::load()?;

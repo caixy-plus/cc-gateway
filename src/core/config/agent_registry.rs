@@ -1,7 +1,21 @@
-//! Canonical list of agent providers integrated into cc-gateway.
+//! Agent provider registry (canonical manifest).
 //!
-//! Used by CLI pickers, WebUI (`GET /api/agents`), and `/agent` prefix parsing so new
-//! providers only need a registry entry plus the usual runtime wiring.
+//! # Purpose
+//!
+//! This module describes which providers are integrated into the gateway and the capability matrix for each.
+//! All code requiring branching by provider (like `/models`, MCP injection, `/compact`, session resume,
+//! `default_args` normalization, WebUI `/api/agents`, init wizard) reads from [`AGENT_PROVIDER_DEFS`] here,
+//! rather than hardcoding the provider list in business logic.
+//!
+//! Steps to add a new provider:
+//!
+//! 1. Add a variant in [`super::model::AgentProvider`];
+//! 2. Add a set of capability constants in [`AgentCapabilities`] (e.g., `QODER`) in this module;
+//! 3. Append an [`AgentProviderDef`] entry to [`AGENT_PROVIDER_DEFS`];
+//! 4. Implement the corresponding backend (e.g., [`crate::core::agent::qoder_acp::QoderAcpSession`]),
+//!    and integrate it into [`crate::core::agent::session::AgentRuntime`] and the `dispatch_agent_backend!` macro.
+//!
+//! See § User-facing documentation in [`CLAUDE.md`](../../../../../CLAUDE.md) for document synchronization.
 
 use std::collections::BTreeMap;
 
@@ -10,60 +24,101 @@ use serde_json::{json, Value};
 
 use super::model::{AgentProfiles, AgentProvider, AgentProviderConfig};
 
-/// How a provider can receive gateway MCP `send_file` context.
+/// The way a provider supports gateway MCP (e.g., `send_file`).
+///
+/// Different providers expose the MCP server provided by the gateway to their CLI through different paths:
+///
+/// - [`ProviderMcpSupport::ClaudeMcpConfig`]: Claude uses the `--mcp-config` JSON file;
+/// - [`ProviderMcpSupport::AcpSession`]: ACP providers use the `mcpServers` field in `session/new`;
+/// - [`ProviderMcpSupport::ProjectMcpJson`]: Cursor / Pi use the project-level `.cursor/mcp.json`
+///   / `.pi/mcp.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderMcpSupport {
     /// Claude Code `--mcp-config` JSON file.
     ClaudeMcpConfig,
-    /// ACP `session/new` / `session/load` `mcpServers` array (OpenCode).
+    /// ACP `session/new` / `session/load` `mcpServers` array (OpenCode / Kimi /
+    /// Gemini / Codex / Qoder).
     AcpSession,
-    /// Project-level `mcp.json` under `.cursor/` or `.pi/` (Cursor, Pi).
+    /// Project-level `mcp.json` (Cursor, Pi).
     ProjectMcpJson,
 }
 
-/// How profile `default_args` are normalized for a provider CLI.
+/// How default_args in the profile are normalized before being passed to the provider CLI.
+///
+/// Different providers have different tolerances for flags from other providers—for example, passing `--yolo`
+/// (exclusive to Claude/Cursor) as-is to OpenCode / Kimi will trigger an error, and needs to be stripped by the
+/// gateway before passing to the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultArgsPolicy {
-    /// Claude defaults only (clear wrong cross-provider permission flag).
+    /// Claude-exclusive default (only cleans up incorrect cross-provider permission flags).
     Claude,
-    /// Strip Cursor/Claude-only tokens (OpenCode).
+    /// Strips Cursor / Claude-exclusive tokens (OpenCode / Kimi / Gemini / Codex / Qoder).
     StripUnsupported,
-    /// Strip Pi-only tokens such as `--no-session`.
+    /// Strips Pi-exclusive tokens (such as `--no-session`).
     StripPi,
-    /// No provider-specific stripping beyond the global Claude-default guard.
+    /// No provider-level stripping, only keeps the global Claude default guards (used by Cursor).
     Passthrough,
 }
 
-/// How `/models` discovers available model ids for a provider.
+/// How `/models` discovers available model IDs for the provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListModelsSource {
-    /// Vendor-tied models (Claude, Cursor) — `/models` is rejected.
+    /// Bound to a specific vendor, does not support the `/models` command (Claude / Cursor).
     NotSupported,
-    /// Official CLI subcommand (e.g. `opencode models`).
+    /// Calls the official CLI subcommand (e.g., `opencode models`).
     CliSubcommand,
-    /// In-session RPC (`get_available_models` on Pi).
+    /// In-session RPC (Pi's `get_available_models`).
     InSessionRpc,
 }
 
-/// Single source of truth for provider feature flags (commands, runtime, MCP).
+/// Capabilities flags for a single provider—single source of truth.
+///
+/// All checks on whether "a provider supports X" must go through this struct. Do NOT hardcode provider
+/// checks like `if provider == AgentProvider::Foo { … }` in business logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentCapabilities {
+    /// Whether the session can be resumed after gateway restart using the persisted `provider_session_id`.
     pub session_resume: bool,
+    /// Whether `/compact` is supported.
     pub context_compact: bool,
-    /// `/compact` is implemented by sending `/compact` as a user message (Claude).
+    /// Whether `/compact` is implemented by sending "/compact" as a user message (Claude-exclusive).
     pub compact_via_user_message: bool,
+    /// Whether `/memory` initialization is supported (Claude-exclusive).
     pub memory_init: bool,
+    /// Whether the provider is tied to a specific chat platform (currently only Claude / Cursor are restricted to
+    /// "only usable on one of Feishu / Telegram / QQ"; other providers are platform-independent).
     pub platform_bound: bool,
+    /// Discovery mechanism used by `/models`.
     pub list_models: ListModelsSource,
+    /// Whether the model can be switched in-session (called after selected in `/models`).
     pub in_session_model_switch: bool,
-    /// `active_model_id()` is read from the live session (Pi `get_state`).
+    /// Whether the currently active model is read from the session state (Pi's `get_state`).
     pub active_model_from_session: bool,
+    /// `default_args` normalization policy.
     pub default_args_policy: DefaultArgsPolicy,
+    /// MCP injection method.
     pub mcp: ProviderMcpSupport,
-    /// Restart/history reload shows "started" + Pi hint instead of "resumed".
+    /// Whether to display a "started" hint on restart / history reload + Pi-specific hint (Pi cannot resume sessions,
+    /// so every restart is treated as a fresh start displaying a specific message).
     pub restart_shows_fresh_hint: bool,
-    /// `/esc` and `/stop` "already idle" copy uses Claude-specific i18n keys.
+    /// Whether `/esc` and `/stop` use Claude-exclusive messages when already idle (only Claude requires special copy,
+    /// other providers use the generic copy).
     pub uses_claude_idle_copy: bool,
+    /// CLI tokens to inject when the gateway-level `--yolo` alias has been
+    /// stripped and the final `permission` resolves to `allow`.
+    ///
+    /// Each provider has its own "auto-approve tools" flag:
+    ///
+    /// | Provider     | flag / mechanism                                            |
+    /// |--------------|-----------------------------------------------------------|
+    /// | Claude       | `--dangerously-skip-permissions` (kept verbatim, no injection here) |
+    /// | Qoder CLI CN | `--permission-mode bypass_permissions`                    |
+    /// | Others       | `&[]` (no injection; provider default / gateway-level allow handles it) |
+    ///
+    /// The gateway-level `--yolo` alias has already been stripped by
+    /// `parse_gateway_default_args` and mapped to `permission: allow`.
+    /// This field decides how that semantic is re-applied to the spawned CLI.
+    pub yolo_cli_tokens: &'static [&'static str],
 }
 
 impl AgentCapabilities {
@@ -80,6 +135,7 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::ClaudeMcpConfig,
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: true,
+        yolo_cli_tokens: &[],
     };
 
     pub const CURSOR: Self = Self {
@@ -95,6 +151,7 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::ProjectMcpJson,
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: false,
+        yolo_cli_tokens: &[],
     };
 
     pub const PI: Self = Self {
@@ -110,6 +167,7 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::ProjectMcpJson,
         restart_shows_fresh_hint: true,
         uses_claude_idle_copy: false,
+        yolo_cli_tokens: &[],
     };
 
     pub const OPENCODE: Self = Self {
@@ -125,6 +183,7 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::AcpSession,
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: false,
+        yolo_cli_tokens: &[],
     };
 
     pub const KIMI: Self = Self {
@@ -140,6 +199,12 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::AcpSession,
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: false,
+        // `kimi --yolo acp` (root-level flag before the `acp` subcommand).
+        // Verified: `kimi --help` documents `-y, --yolo  Automatically approve all actions`.
+        // In ACP mode kimi currently emits 0 `session/request_permission` notifications,
+        // so this flag is redundant at runtime, but we forward it when the user sets `--yolo`
+        // so the CLI behaves as documented if that ever changes.
+        yolo_cli_tokens: &["--yolo"],
     };
 
     pub const GEMINI: Self = Self {
@@ -155,6 +220,7 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::AcpSession,
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: false,
+        yolo_cli_tokens: &[],
     };
 
     pub const CODEX: Self = Self {
@@ -170,29 +236,68 @@ impl AgentCapabilities {
         mcp: ProviderMcpSupport::AcpSession,
         restart_shows_fresh_hint: false,
         uses_claude_idle_copy: false,
+        yolo_cli_tokens: &[],
+    };
+
+    pub const QODER: Self = Self {
+        session_resume: true,
+        context_compact: false,
+        compact_via_user_message: false,
+        memory_init: false,
+        platform_bound: false,
+        list_models: ListModelsSource::InSessionRpc,
+        in_session_model_switch: true,
+        active_model_from_session: false,
+        default_args_policy: DefaultArgsPolicy::StripUnsupported,
+        mcp: ProviderMcpSupport::AcpSession,
+        restart_shows_fresh_hint: false,
+        uses_claude_idle_copy: false,
+        // qoderclicn does NOT accept `--yolo`; its real "auto-approve everything"
+        // flag is `--permission-mode bypass_permissions`. Verified locally:
+        // with this flag set, qoderclicn in ACP mode emits **zero**
+        // `session/request_permission` notifications for file writes and shell
+        // commands.
+        yolo_cli_tokens: &["--permission-mode", "bypass_permissions"],
     };
 }
 
+/// Registration metadata for a single provider.
+///
+/// Combined with [`AgentCapabilities`], this constitutes the gateway's complete knowledge of the provider.
+/// Note that `id` must be identical to [`super::model::AgentProvider::to_string()`], otherwise `config.json`
+/// parsing will fail to find the provider.
 #[derive(Debug, Clone)]
 pub struct AgentProviderDef {
     pub provider: AgentProvider,
-    /// `config.json` key and primary id (`AgentProvider::to_string()`).
+    /// The key in `config.json`, which is also returned by [`AgentProvider::to_string()`].
     pub id: &'static str,
-    /// Short label in `/agents` pickers and WebUI.
+    /// Short label displayed in the `/agents` list and WebUI.
     pub display_name: &'static str,
-    /// Binary checked by `cc-gateway init` / wizard (`which` on PATH).
+    /// Binary name checked with `which` in `cc-gateway init` / wizard.
     pub cli_binary: &'static str,
-    /// Extra `/agent <alias>` tokens beyond `id`.
+    /// Additional aliases for the `/agent <alias>` command besides `id` (empty for most providers).
     pub slash_aliases: &'static [&'static str],
-    /// Optional `wizard.*` i18n key printed in init when the CLI is missing or listed in the menu.
+    /// Optional `wizard.*` i18n key—when `cli_binary` is not on PATH, the init wizard displays this install hint.
     pub install_hint_key: Option<&'static str>,
-    /// CLI flags offered as quick-select chips for `default_args` in WebUI settings
-    /// (served via `GET /api/agents` so new providers need no frontend change).
+    /// Quick `default_args` chips shown to users in the WebUI settings panel.
+    ///
+    /// The gateway sends this list to the frontend via `GET /api/agents`, which renders them as clickable tags.
+    /// New providers get their chips without modifying frontend code.
     pub default_args_suggestions: &'static [&'static str],
+    /// Capability flags.
     pub capabilities: AgentCapabilities,
 }
 
-// Array order is the display order in `/agents`, WebUI settings, and the init wizard.
+/// **Display order** of registered providers.
+///
+/// The array order directly determines:
+///
+/// - The order of appearance in the `/agents` list;
+/// - The order of provider cards in the WebUI Settings panel;
+/// - The order of CLI checks in the `cc-gateway init` wizard.
+///
+/// When adding a new provider, insert it alphabetically or by historical integration order. Do NOT change the existing
+/// relative order, otherwise it will break the `registry_display_order` unit test and WebUI visual consistency.
 pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
     AgentProviderDef {
         provider: AgentProvider::Claude,
@@ -212,9 +317,9 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
         cli_binary: "codex-acp",
         slash_aliases: &[],
         install_hint_key: Some("wizard.install_hint_codex"),
-        // codex-acp only takes `-c key=value` config overrides; permissions are
-        // governed by the provider `mode` setting (session/set_mode), not flags.
-        default_args_suggestions: &[],
+        // codex-acp has no `--yolo` CLI flag. Gateway `--yolo` maps to
+        // `permission: allow` + `session/set_mode full-access` in `codex_acp.rs`.
+        default_args_suggestions: &["--yolo"],
         capabilities: AgentCapabilities::CODEX,
     },
     AgentProviderDef {
@@ -259,6 +364,16 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
         capabilities: AgentCapabilities::GEMINI,
     },
     AgentProviderDef {
+        provider: AgentProvider::Qoder,
+        id: "qoder",
+        display_name: "qoder",
+        cli_binary: "qoderclicn",
+        slash_aliases: &[],
+        install_hint_key: None,
+        default_args_suggestions: &["--yolo"],
+        capabilities: AgentCapabilities::QODER,
+    },
+    AgentProviderDef {
         provider: AgentProvider::Pi,
         id: "pi",
         display_name: "pi",
@@ -270,11 +385,21 @@ pub const AGENT_PROVIDER_DEFS: &[AgentProviderDef] = &[
     },
 ];
 
+/// Queries the capability flags of the specified provider.
+///
+/// Returns a `'static` reference, which callers can safely `Copy`.
+/// Panics if the provider is not registered in [`AGENT_PROVIDER_DEFS`] (to catch development errors early).
 pub fn capabilities_for(provider: &AgentProvider) -> &'static AgentCapabilities {
     &def_for_provider(provider.clone()).capabilities
 }
 
-/// Reject unknown keys under `config.json` → `"agent"` / `"agent.providers"`.
+/// Validates whether unknown keys appear under the `agent` and `agent.providers` fields in `config.json`.
+///
+/// - The top-level `agent.*` only allows `default` and `providers` (old flat keys have been migrated by
+///   `upgrade_config_json`, so any remaining ones are typos);
+/// - The keys under `agent.providers.*` must find a corresponding id in [`AGENT_PROVIDER_DEFS`].
+///
+/// Returns an error with a clear message if validation fails, enabling the loader to prompt the user for corrections.
 pub fn validate_agent_profile_keys(value: &Value) -> Result<()> {
     let Some(agent) = value.get("agent").and_then(|v| v.as_object()) else {
         return Ok(());
@@ -303,22 +428,22 @@ pub fn validate_agent_profile_keys(value: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Returns a list of IDs of all registered providers (used for error messages).
 fn registered_agent_profile_ids() -> Vec<&'static str> {
     AGENT_PROVIDER_DEFS.iter().map(|d| d.id).collect()
 }
 
-/// Normalize `default_args` for a provider using the registry policy.
-pub fn normalize_default_args_for_provider(
-    provider: &AgentProvider,
-    default_args: &str,
-) -> String {
+/// Normalizes the profile's `default_args` according to the provider's [`DefaultArgsPolicy`].
+///
+/// - If a non-Claude provider has a value exactly equal to `--dangerously-skip-permissions`, it is cleared immediately
+///   (this is Claude's "skip all permissions" switch, which is invalid and dangerous for other providers);
+/// - Fine-grained stripping is then executed according to the provider's policy (Pi / StripUnsupported / Passthrough).
+pub fn normalize_default_args_for_provider(provider: &AgentProvider, default_args: &str) -> String {
     use super::model::{strip_pi_cli_args, AgentProvider};
 
     let caps = capabilities_for(provider);
     let mut args = default_args.to_string();
-    if !matches!(provider, AgentProvider::Claude)
-        && args == "--dangerously-skip-permissions"
-    {
+    if !matches!(provider, AgentProvider::Claude) && args == "--dangerously-skip-permissions" {
         args.clear();
     }
     match caps.default_args_policy {
@@ -328,6 +453,7 @@ pub fn normalize_default_args_for_provider(
     }
 }
 
+/// Finds the corresponding registration entry using the [`AgentProvider`] enum.
 pub fn def_for_provider(provider: AgentProvider) -> &'static AgentProviderDef {
     AGENT_PROVIDER_DEFS
         .iter()
@@ -335,6 +461,7 @@ pub fn def_for_provider(provider: AgentProvider) -> &'static AgentProviderDef {
         .expect("every AgentProvider variant must be registered")
 }
 
+/// Finds the corresponding registration entry by ID (lowercase, optional spaces) or alias; returns `None` if not found.
 pub fn def_by_id(id: &str) -> Option<&'static AgentProviderDef> {
     let key = id.trim().to_ascii_lowercase();
     AGENT_PROVIDER_DEFS
@@ -342,10 +469,14 @@ pub fn def_by_id(id: &str) -> Option<&'static AgentProviderDef> {
         .find(|d| d.id == key || d.slash_aliases.contains(&key.as_str()))
 }
 
+/// Parses the provider token entered by the user in the chat (e.g., `/agent qoder`, `/agent claude`).
+///
+/// Supports both primary ID and `slash_aliases`. Unknown tokens return `None` for the caller to handle gracefully.
 pub fn parse_provider_id(token: &str) -> Option<AgentProvider> {
     def_by_id(token).map(|d| d.provider.clone())
 }
 
+/// Locates the corresponding profile in the profiles using [`AgentProviderDef`].
 pub fn profile_for_def<'a>(
     profiles: &'a AgentProfiles,
     def: &AgentProviderDef,
@@ -353,6 +484,7 @@ pub fn profile_for_def<'a>(
     profiles.profile_by_id(def.id)
 }
 
+/// Locates the corresponding profile in the profiles using [`AgentProviderDef`] and gets a mutable reference.
 pub fn profile_mut_for_def<'a>(
     profiles: &'a mut AgentProfiles,
     def: &AgentProviderDef,
@@ -360,7 +492,8 @@ pub fn profile_mut_for_def<'a>(
     profiles.profile_mut_by_id(def.id)
 }
 
-/// Default profiles with one entry per registered provider id.
+/// Default profiles: each registered provider id has a default profile;
+/// `default` defaults to `claude`.
 pub fn default_agent_profiles() -> AgentProfiles {
     let mut providers = BTreeMap::new();
     for def in AGENT_PROVIDER_DEFS {
@@ -369,7 +502,10 @@ pub fn default_agent_profiles() -> AgentProfiles {
     AgentProfiles::from_parts(AgentProvider::Claude, providers)
 }
 
-/// Ensure every registered provider id exists (after load or registry extension).
+/// Normalizes profiles: ensures every registered provider id has an entry in the `providers` map.
+///
+/// Used after `config.json` is loaded—if an old file lacks a newly added provider (e.g., `qoder`),
+/// calling this function fills it in, so downstream code can safely call `profile_by_id(id)` without handling `None`.
 pub fn normalize_profiles(mut profiles: AgentProfiles) -> AgentProfiles {
     for def in AGENT_PROVIDER_DEFS {
         profiles.profile_mut_by_id(def.id);
@@ -377,7 +513,8 @@ pub fn normalize_profiles(mut profiles: AgentProfiles) -> AgentProfiles {
     profiles
 }
 
-/// Daemon / pre-init defaults: all registered providers disabled.
+/// In-memory default values before daemon start / first `init`: all registered providers have `enabled = false`,
+/// preventing the gateway from automatically enabling a CLI without the user's explicit choice.
 pub fn runtime_agent_profiles() -> AgentProfiles {
     let mut profiles = default_agent_profiles();
     for def in AGENT_PROVIDER_DEFS {
@@ -407,6 +544,7 @@ pub fn apply_init_agent_enablement(
     }
 }
 
+/// Serializes a profile into the shape of a single provider object output by `GET /api/agents`.
 pub fn provider_config_to_json(cfg: &AgentProviderConfig) -> Value {
     json!({
         "enabled": cfg.enabled,
@@ -416,13 +554,17 @@ pub fn provider_config_to_json(cfg: &AgentProviderConfig) -> Value {
     })
 }
 
-/// WebUI / API catalog: integrated providers with current profile settings.
-/// Parse the `agent` section of a `POST /api/config` payload.
+/// Constructs the complete response body for `GET /api/agents`: sends all registered providers along with current profile
+/// configurations down to the WebUI.
 ///
-/// Accepts the canonical `{ "default", "providers" }` shape and the WebUI form
-/// shape where edited per-provider profiles sit as flat keys *next to* the
-/// (stale) `providers` map — flat keys win because those are what the UI edits.
-/// Unknown provider keys are rejected so typos surface instead of vanishing.
+/// The frontend can render the provider card list with this JSON: id, display_name, cli_binary,
+/// optional `default_args` suggestions (chips), and the user's current `enabled` / `default_args` / `mode`
+/// / `permission`.
+///
+/// Compatible with both "flat key" and "nested canonical" shapes in WebUI `POST /api/config`:
+/// Older WebUI versions place edited profiles under the `agent` object on the same level as `providers`
+/// (e.g., `{ "default": "claude", "providers": {...}, "claude": {...} }`).
+/// Here, flat keys are preferred (as they represent the user's latest edits in the UI); unknown keys will trigger errors.
 pub fn agent_profiles_from_api_json(value: &Value) -> Result<AgentProfiles> {
     let obj = value
         .as_object()
@@ -443,13 +585,13 @@ pub fn agent_profiles_from_api_json(value: &Value) -> Result<AgentProfiles> {
     Ok(profiles)
 }
 
+/// Constructs the `GET /api/agents` response body: bundles and returns all registered provider IDs, display names,
+/// default CLIs, `default_args` suggestions, and current profiles.
 pub fn build_agents_api_response(profiles: &AgentProfiles) -> Value {
     let providers: Vec<Value> = AGENT_PROVIDER_DEFS
         .iter()
         .map(|def| {
-            let profile = profile_for_def(profiles, def)
-                .cloned()
-                .unwrap_or_default();
+            let profile = profile_for_def(profiles, def).cloned().unwrap_or_default();
             json!({
                 "id": def.id,
                 "display_name": def.display_name,
@@ -473,10 +615,15 @@ mod tests {
 
     #[test]
     fn registry_lists_all_provider_variants() {
-        assert_eq!(AGENT_PROVIDER_DEFS.len(), 7);
+        assert_eq!(AGENT_PROVIDER_DEFS.len(), 8);
         for def in AGENT_PROVIDER_DEFS {
             assert_eq!(def_for_provider(def.provider.clone()).id, def.id);
         }
+    }
+
+    #[test]
+    fn parse_qoder_id() {
+        assert_eq!(parse_provider_id("qoder"), Some(AgentProvider::Qoder));
     }
 
     #[test]
@@ -501,7 +648,7 @@ mod tests {
         let ids: Vec<_> = AGENT_PROVIDER_DEFS.iter().map(|d| d.id).collect();
         assert_eq!(
             ids,
-            vec!["claude", "codex", "cursor", "opencode", "kimi", "gemini", "pi"]
+            vec!["claude", "codex", "cursor", "opencode", "kimi", "gemini", "qoder", "pi"]
         );
     }
 
@@ -519,21 +666,58 @@ mod tests {
     fn init_enablement_enables_all_installed() {
         let mut profiles = AgentProfiles::default();
         apply_init_agent_enablement(&mut profiles, AgentProvider::Claude, |_| true);
-        assert!(profiles.profile_for(&AgentProvider::Claude).unwrap().enabled);
-        assert!(profiles.profile_for(&AgentProvider::Cursor).unwrap().enabled);
-        assert!(profiles.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::Claude)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::Cursor)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::OpenCode)
+                .unwrap()
+                .enabled
+        );
         assert!(profiles.profile_for(&AgentProvider::Kimi).unwrap().enabled);
-        assert!(profiles.profile_for(&AgentProvider::Gemini).unwrap().enabled);
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::Gemini)
+                .unwrap()
+                .enabled
+        );
+        assert!(profiles.profile_for(&AgentProvider::Qoder).unwrap().enabled);
     }
 
     #[test]
     fn init_enablement_only_selected_when_none_installed() {
         let mut profiles = AgentProfiles::default();
         apply_init_agent_enablement(&mut profiles, AgentProvider::OpenCode, |_| false);
-        assert!(!profiles.profile_for(&AgentProvider::Claude).unwrap().enabled);
-        assert!(!profiles.profile_for(&AgentProvider::Cursor).unwrap().enabled);
-        assert!(profiles.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(
+            !profiles
+                .profile_for(&AgentProvider::Claude)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !profiles
+                .profile_for(&AgentProvider::Cursor)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::OpenCode)
+                .unwrap()
+                .enabled
+        );
         assert!(!profiles.profile_for(&AgentProvider::Kimi).unwrap().enabled);
+        assert!(!profiles.profile_for(&AgentProvider::Qoder).unwrap().enabled);
     }
 
     #[test]
@@ -542,11 +726,27 @@ mod tests {
         apply_init_agent_enablement(&mut profiles, AgentProvider::Pi, |bin| {
             matches!(bin, "claude" | "agent")
         });
-        assert!(profiles.profile_for(&AgentProvider::Claude).unwrap().enabled);
-        assert!(profiles.profile_for(&AgentProvider::Cursor).unwrap().enabled);
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::Claude)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            profiles
+                .profile_for(&AgentProvider::Cursor)
+                .unwrap()
+                .enabled
+        );
         assert!(profiles.profile_for(&AgentProvider::Pi).unwrap().enabled);
-        assert!(!profiles.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
+        assert!(
+            !profiles
+                .profile_for(&AgentProvider::OpenCode)
+                .unwrap()
+                .enabled
+        );
         assert!(!profiles.profile_for(&AgentProvider::Kimi).unwrap().enabled);
+        assert!(!profiles.profile_for(&AgentProvider::Qoder).unwrap().enabled);
     }
 
     #[test]
@@ -621,9 +821,10 @@ mod tests {
         assert_eq!(suggestions_of("gemini"), json!(["--yolo"]));
         // Verified locally: `kimi --yolo acp` starts the ACP server normally.
         assert_eq!(suggestions_of("kimi"), json!(["--yolo"]));
-        // Codex permissions are governed by its mode setting (session/set_mode);
-        // codex-acp only accepts `-c key=value` config overrides.
-        assert_eq!(suggestions_of("codex"), json!([]));
+        assert_eq!(suggestions_of("qoder"), json!(["--yolo"]));
+        // Codex: `--yolo` is a gateway-level flag mapped to `full-access` mode;
+        // no other CLI flags are suggested (codex-acp only takes `-c key=value`).
+        assert_eq!(suggestions_of("codex"), json!(["--yolo"]));
     }
 
     #[test]
@@ -641,7 +842,12 @@ mod tests {
         let restored: AgentProfiles =
             serde_json::from_value(json).expect("deserialize nested agent profiles");
         let normalized = normalize_profiles(restored);
-        assert!(normalized.profile_for(&AgentProvider::Claude).unwrap().enabled);
+        assert!(
+            normalized
+                .profile_for(&AgentProvider::Claude)
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
@@ -661,10 +867,7 @@ mod tests {
     fn profile_for_errors_when_registry_id_missing() {
         let profiles = AgentProfiles::from_parts(
             AgentProvider::Claude,
-            BTreeMap::from([(
-                "claude".to_string(),
-                AgentProviderConfig::default(),
-            )]),
+            BTreeMap::from([("claude".to_string(), AgentProviderConfig::default())]),
         );
         assert!(profiles.profile_for(&AgentProvider::Pi).is_err());
     }
@@ -682,7 +885,12 @@ mod tests {
             )]),
         );
         let normalized = normalize_profiles(profiles);
-        assert!(!normalized.profile_for(&AgentProvider::Claude).unwrap().enabled);
+        assert!(
+            !normalized
+                .profile_for(&AgentProvider::Claude)
+                .unwrap()
+                .enabled
+        );
         assert!(normalized.profile_for(&AgentProvider::Pi).unwrap().enabled);
     }
 
@@ -731,6 +939,12 @@ mod tests {
         let codex = capabilities_for(&AgentProvider::Codex);
         assert!(codex.in_session_model_switch);
         assert_eq!(codex.list_models, ListModelsSource::InSessionRpc);
+
+        let qoder = capabilities_for(&AgentProvider::Qoder);
+        assert!(qoder.session_resume);
+        assert!(qoder.in_session_model_switch);
+        assert_eq!(qoder.list_models, ListModelsSource::InSessionRpc);
+        assert_eq!(qoder.mcp, ProviderMcpSupport::AcpSession);
     }
 
     #[test]

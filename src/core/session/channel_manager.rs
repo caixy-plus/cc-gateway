@@ -1106,7 +1106,8 @@ fn should_try_provider_resume(agent_session: &AgentSession, provider: &AgentProv
         | AgentProvider::Cursor
         | AgentProvider::OpenCode
         | AgentProvider::Kimi
-        | AgentProvider::Gemini => gateway_session_has_user_history(agent_session),
+        | AgentProvider::Gemini
+        | AgentProvider::Qoder => gateway_session_has_user_history(agent_session),
         // Claude: resume when gateway history shows a user turn (avoids WebUI start→stop→start
         // with no chat).
         AgentProvider::Claude => gateway_session_has_user_history(agent_session),
@@ -1262,7 +1263,11 @@ mod gateway_history_tests {
             provider_session_id: None,
             ..AgentSession::new("ch", "t", "/tmp")
         };
-        for provider in [AgentProvider::Codex, AgentProvider::Gemini, AgentProvider::Cursor] {
+        for provider in [
+            AgentProvider::Codex,
+            AgentProvider::Gemini,
+            AgentProvider::Cursor,
+        ] {
             assert!(
                 !should_try_provider_resume(&session, &provider),
                 "{provider:?}: should not resume without provider_session_id"

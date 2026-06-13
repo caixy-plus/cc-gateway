@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+pub(crate) mod api;
 pub(crate) mod auth_middleware;
 pub(crate) mod cards;
-pub(crate) mod api;
 pub(crate) mod inbound;
 pub(crate) mod interaction;
 pub(crate) mod media;

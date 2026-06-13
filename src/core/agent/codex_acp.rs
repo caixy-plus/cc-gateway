@@ -21,6 +21,19 @@ pub type CodexAcpSession = GenericAcpSession<CodexAcpHooks>;
 /// Modes advertised by codex-acp (`read-only` is its own default).
 const CODEX_MODES: &[&str] = &["read-only", "auto", "full-access"];
 
+/// Maps the gateway `--yolo` flag to `full-access` mode.
+///
+/// When the user sets `--yolo` in `default_args`, `parse_gateway_default_args` strips
+/// the flag and sets `permission = "allow"`. Codex has no `--yolo` CLI flag, so the
+/// equivalent intent is expressed by upgrading the provider mode to `full-access`.
+fn effective_mode(config: &AgentConfig) -> &str {
+    if config.permission == "allow" {
+        "full-access"
+    } else {
+        config.mode.trim()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexAcpHooks;
 
@@ -87,7 +100,7 @@ impl AcpHooks for CodexAcpHooks {
     }
 
     async fn after_session_setup(&self, session: &CodexAcpSession, config: &AgentConfig) {
-        let mode = config.mode.trim();
+        let mode = effective_mode(config);
         if !CODEX_MODES.contains(&mode) {
             return;
         }
@@ -162,5 +175,33 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("sess-1"));
         assert!(msg.contains("timeout"));
+    }
+
+    /// Gateway-level `--yolo` (stripped to `permission: allow`) must map to
+    /// `full-access` mode, since codex-acp has no `--yolo` CLI flag.
+    #[test]
+    fn codex_yolo_maps_to_full_access_mode() {
+        let mut config = AgentConfig::default_for_provider(AgentProvider::Codex);
+        config.default_args = String::new();
+        config.permission = "allow".to_string();
+        assert_eq!(effective_mode(&config), "full-access");
+    }
+
+    /// Without `--yolo`, the explicitly-configured mode is used unchanged.
+    #[test]
+    fn codex_explicit_mode_respected_without_yolo() {
+        let mut config = AgentConfig::default_for_provider(AgentProvider::Codex);
+        config.mode = "read-only".to_string();
+        config.permission = "prompt".to_string();
+        assert_eq!(effective_mode(&config), "read-only");
+    }
+
+    /// `--yolo` overrides an explicit `mode` setting (full-access is the stronger intent).
+    #[test]
+    fn codex_yolo_overrides_explicit_mode() {
+        let mut config = AgentConfig::default_for_provider(AgentProvider::Codex);
+        config.mode = "read-only".to_string();
+        config.permission = "allow".to_string();
+        assert_eq!(effective_mode(&config), "full-access");
     }
 }

@@ -97,7 +97,8 @@ async fn by_index(
     index: usize,
     start_new_flag: bool,
 ) -> AgentHistoryOutcome {
-    let sessions = GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&req.channel_id, Some(LIST_LIMIT));
+    let sessions =
+        GLOBAL_CHANNEL_SESSIONS.list_agent_sessions_by_channel(&req.channel_id, Some(LIST_LIMIT));
     if index == 0 || index > sessions.len() {
         return AgentHistoryOutcome::Error {
             message: t!("builtin.invalid_history_index").to_string(),
@@ -159,11 +160,8 @@ async fn start_new(
     req: &AgentHistoryRequest,
     work_dir: String,
 ) -> AgentHistoryOutcome {
-    let provider = GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(
-        &req.channel_id,
-        &env.agent_settings,
-        None,
-    );
+    let provider =
+        GLOBAL_CHANNEL_SESSIONS.resolve_start_provider(&req.channel_id, &env.agent_settings, None);
     match GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(StartAgentSessionForPlatformArgs {
             channel_id: req.channel_id.clone(),

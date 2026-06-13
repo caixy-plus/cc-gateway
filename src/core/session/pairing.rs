@@ -288,12 +288,12 @@ mod tests {
         mgr.approve(&code);
         assert!(mgr.is_approved("telegram", "123"));
 
-        // Suspend (取消放行): record kept, access denied.
+        // Suspend (revoke access): record kept, access denied.
         assert!(mgr.set_approval_enabled("telegram", "123", false));
         assert!(!mgr.is_approved("telegram", "123"));
         assert_eq!(mgr.list_approved().len(), 1);
 
-        // Resume (重新放行): no new pairing needed.
+        // Resume (restore access): no new pairing needed.
         assert!(mgr.set_approval_enabled("telegram", "123", true));
         assert!(mgr.is_approved("telegram", "123"));
 

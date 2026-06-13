@@ -1,3 +1,16 @@
+//! Command routing: parses chat messages into [`CommandAction`], then passes them to [`super::executor`] for execution.
+//!
+//! # Flow
+//!
+//! 1. The user sends a text message in Feishu / Telegram / QQ / WebUI;
+//! 2. [`CommandRouter::route`] evaluates the text to determine if it is a gateway control command (e.g., `/help`, `/agent`,
+//!    `/cd`, `/ll`, `/models`, `/allow`, `/deny`, etc.) or a regular text message;
+//! 3. It returns a [`CommandAction`] semantic action;
+//! 4. The caller (platform / WebUI) passes the action to [`super::executor::ChatCommandExecutor`]
+//!    for execution.
+//!
+//! Parsing rules are consolidated into a single function, [`CommandRouter::route`], so the platform layer does not need to duplicate string matching.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -11,71 +24,75 @@ use crate::runtime::protocol::{build_permission_allow, build_permission_deny};
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::{t, t_fmt};
 
-/// Semantic action produced by parsing a user message.
+/// Semantic action parsed from a user message.
 ///
-/// All command parsing happens in one place (`CommandRouter::route`) and
-/// platforms/WebUI only execute the resulting action.
+/// All command parsing is completed in one place ([`CommandRouter::route`]). The platform/WebUI only executes
+/// the resulting action and does not need to repeat string matching.
 #[derive(Debug, Clone)]
 pub enum CommandAction {
-    /// Immediate text reply (e.g. /help, error messages)
+    /// Reply directly with text (e.g., `/help`, error messages).
     Reply(String),
-    /// Start a Claude session with optional work directory and extra args
+    /// Start a new provider session (with optional work_dir, provider, and additional CLI arguments).
     StartSession {
         work_dir: Option<PathBuf>,
         provider: Option<AgentProvider>,
         args: Vec<String>,
     },
-    /// Stop the current Claude session
+    /// Terminate the current provider session (`/quit`).
     StopSession,
-    /// Change working directory to the given path
+    /// `/cd <path>`: Switch the working directory.
     ChangeDir(PathBuf),
-    /// Change working directory to the default directory
+    /// `/cd`: Switch to the configured default directory.
     ChangeDirDefault,
-    /// Print the current working directory
+    /// `/pwd`: Print the current working directory.
     PrintWorkingDir,
-    /// List directory contents (text list for router.execute; cards on Feishu, etc.)
+    /// `/ll [path]`: List directory; Feishu renders a card, Telegram renders an inline keyboard,
+    /// while QQ and WebUI render plain text.
     ListDir { path: Option<PathBuf> },
-    /// Create a new directory
+    /// `/mkdir <name>`: Create a new directory.
     MakeDir(PathBuf),
-    /// Enable showing thinking content
+    /// `/show-thinking`: Enable rendering of the Thinking block.
     ShowThinking,
-    /// Disable showing thinking content
+    /// `/hide-thinking`: Disable rendering of the Thinking block.
     HideThinking,
-    /// Show recent Claude sessions and allow resuming
+    /// `/history [filter]`: Display recent session history, which can be restored using `/resume <id>`.
     ShowAgentHistory { arg: String },
-    /// Set this channel's default agent (`/agents` picker or `/agents claude|cursor`)
+    /// `/agents [provider]`: Select the default agent for this channel.
     SelectChannelAgent { provider: Option<AgentProvider> },
-    /// ESC: force-send queued messages without stopping generation.
-    /// Optional prompt is forwarded immediately after the flush.
+    /// `/esc [prompt]`: Force flush the pending user message queue; the optional prompt is forwarded immediately after.
     FlushQueue { prompt: Option<String> },
-    /// Stop current generation without ending the session.
+    /// `/stop`: Cancel the current generation; the session process remains alive.
     StopGeneration,
-    /// Clear current agent session context (restart fresh in same directory)
+    /// `/clear`: Restart the provider session in the same directory (clearing context).
     ClearSession,
-    /// Compact conversation context (provider-specific; optional focus hint)
+    /// `/compact [hint]`: Compact session history (provider-specific; hint is an optional focus suggestion).
     CompactSession { arg: String },
-    /// Initialize agent memory files (e.g. Claude `/init` → CLAUDE.md)
+    /// `/memory [arg]`: Initialize the provider's memory file (e.g., Claude's `CLAUDE.md`).
     InitSessionMemory { arg: String },
-    /// List or switch the current provider's models (session mode only).
+    /// `/models [arg]`: List or switch the current provider's model.
     Models { arg: String },
-    /// Show current agent status (ready / generating output)
+    /// `/status`: Display the current session status (idle / generating).
     Status,
-    /// Forward regular text to the active Claude session
+    /// Regular text message: Forward to the currently active provider session.
     ForwardToAgent(String),
-    /// Unknown slash command when no session is active
+    /// Unknown slash command (when no session is active).
     UnknownCommand(String),
-    /// Allow a pending permission/confirm/select/question request.
-    /// If request_id is None, uses the controller's pending request.
+    /// `/allow [request_id]`: Allow a pending permission / confirmation / choice / question request.
+    /// Uses the controller's currently pending request if `request_id = None`.
     PermissionAllow { request_id: Option<String> },
-    /// Deny a pending permission/confirm/select/question request.
+    /// `/deny [request_id] [reason]`: Deny a pending permission / confirmation / choice / question request.
     PermissionDeny {
         request_id: Option<String>,
         reason: Option<String>,
     },
-    /// No operation needed
+    /// No operation (parsing completed but no action needs to be executed, e.g., empty message).
     NoOp,
 }
 
+/// Command router.
+///
+/// Holds [`BuiltinCommands`] (e.g., `/help`, `/ll` text rendering) and an optional
+/// [`AgentController`] (currently active agent session). All platforms share the same router instance.
 pub struct CommandRouter {
     builtin: BuiltinCommands,
     controller: Arc<Mutex<AgentController>>,

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cc-gateway is a Rust gateway that exposes local agent sessions to remote users via chat bot platforms (Feishu/Lark, Telegram, QQ) and WebUI. It spawns provider CLIs (e.g. `claude`, `codex-acp`, Cursor `agent acp`, `opencode acp`, `kimi acp`, `gemini --acp`), communicates over stdin/stdout, and bridges messages between the provider and external interfaces.
+cc-gateway is a Rust gateway that exposes local agent sessions to remote users via chat bot platforms (Feishu/Lark, Telegram, QQ) and WebUI. It spawns provider CLIs (e.g. `claude`, `codex-acp`, Cursor `agent acp`, `opencode acp`, `kimi acp`, `gemini --acp`, `qoderclicn --acp`), communicates over stdin/stdout, and bridges messages between the provider and external interfaces.
 
 ## Project Structure
 
@@ -101,7 +101,7 @@ Treat documentation as part of the feature: adding or materially changing an **a
 - **`core/agent/backend.rs`**: Unified gateway-facing session API (`send_user_message`, `set_model`, `compact_context`, …). Claude stream-json, Pi RPC, and ACP sessions each implement `AgentBackend`.
 - **`core/runtime/session.rs`** / **`core/runtime/protocol.rs`**: Claude Code **stream-json** over stdio (`StreamJsonSession` implements `AgentBackend`).
 - **`core/agent/acp_session.rs`**: Shared **ACP** spawn/prompt/permission/update logic (`GenericAcpSession<H: AcpHooks>`). Provider-specific argv, MCP prep, auth, and extension notifications live in thin `AcpHooks` impls.
-- **`core/agent/codex_acp.rs`**, **`core/agent/cursor_acp.rs`**, **`core/agent/opencode_acp.rs`**, **`core/agent/kimi_acp.rs`**, **`core/agent/gemini_acp.rs`**: thin `AcpHooks` impls only — transport via `acp_client.rs`. Codex and Gemini skip the `authenticate` RPC (cached CLI credentials); Codex applies `mode` post-spawn via `session/set_mode`.
+- **`core/agent/codex_acp.rs`**, **`core/agent/cursor_acp.rs`**, **`core/agent/opencode_acp.rs`**, **`core/agent/kimi_acp.rs`**, **`core/agent/gemini_acp.rs`**, **`core/agent/qoder_acp.rs`**: thin `AcpHooks` impls only — transport via `acp_client.rs`. Codex, Gemini, and Qoder skip the `authenticate` RPC (cached CLI credentials); Codex applies `mode` post-spawn via `session/set_mode`.
 - **`core/agent/pi_rpc.rs`**: Pi **line-delimited JSON-RPC** (`pi --mode rpc`).
 - **`core/config/agent_registry.rs`**: `AgentCapabilities` + `AGENT_PROVIDER_DEFS` — single source for `/models`, MCP attach, `/compact`, resume, and `default_args` normalization flags.
 - **`core/runtime/controller.rs`**: Owns the active `AgentRuntime`, exposes start/stop/send. Emits `ControllerEvent` (Text, Thinking, ToolUse, ToolResult, PermissionRequest, Error, Done). Manages `work_dir`, MCP attach context, and pending permission/resume state.
@@ -178,12 +178,12 @@ Official vendor API / console links for building or debugging `src/platform/<nam
 ### Provider Session ID & Resume
 
 - Claude Code: after spawning the `claude` subprocess, cc-gateway reads `~/.claude/sessions/{pid}.json` to extract Claude's internal session id, persists it as `provider_session_id`, and uses it to resume when supported.
-- Codex / Cursor / OpenCode / Kimi / Gemini ACP: `session/load` with persisted `provider_session_id`, fall back to `session/new` when missing.
+- Codex / Cursor / OpenCode / Kimi / Gemini / Qoder ACP: `session/load` with persisted `provider_session_id`, fall back to `session/new` when missing.
 - Pi: persists `sessionFile` from RPC `get_state` for gateway records; **provider session resume is not supported** (no `switch_session` on restart — users get a fresh Pi process and `builtin.session_restarted_pi_hint`). `/clear` uses `new_session` and updates the stored file.
 
 ## Adding a New Agent Provider
 
-Full checklist for wiring a new CLI/agent — integration styles (stream-json / ACP / custom RPC), backend steps **A–U**, agent registry & WebUI, config shape, verification, naming — lives in **[docs/adding-agent-provider.md](docs/adding-agent-provider.md)**. Current providers: **Claude** (stream-json), **Codex** (ACP via `codex-acp`), **Cursor**, **OpenCode**, **Kimi** & **Gemini** (ACP), **Pi** (RPC). When adding one, also complete § [User-facing documentation](#user-facing-documentation-keep-in-sync) (agent provider table).
+Full checklist for wiring a new CLI/agent — integration styles (stream-json / ACP / custom RPC), backend steps **A–U**, agent registry & WebUI, config shape, verification, naming — lives in **[docs/adding-agent-provider.md](docs/adding-agent-provider.md)**. Current providers: **Claude** (stream-json), **Codex** (ACP via `codex-acp`), **Cursor**, **OpenCode**, **Kimi**, **Gemini** & **Qoder** (ACP), **Pi** (RPC). When adding one, also complete § [User-facing documentation](#user-facing-documentation-keep-in-sync) (agent provider table).
 
 ## Adding a New Chat Platform (Bot)
 

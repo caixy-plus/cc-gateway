@@ -367,7 +367,9 @@ impl ChatCommandExecutor {
                     AgentHistoryOutcome::List { sessions } => {
                         Ok(ChatCommandOutcome::History { sessions })
                     }
-                    AgentHistoryOutcome::Started { active, message, .. } => {
+                    AgentHistoryOutcome::Started {
+                        active, message, ..
+                    } => {
                         context.channel_work_dir = active.agent_session.work_dir.clone();
                         context.active_agent = Some(active);
                         Ok(ChatCommandOutcome::Started { message })
@@ -375,7 +377,9 @@ impl ChatCommandExecutor {
                     AgentHistoryOutcome::Deleted { message, .. } => {
                         Ok(ChatCommandOutcome::Reply(message))
                     }
-                    AgentHistoryOutcome::Error { message } => Ok(ChatCommandOutcome::Error(message)),
+                    AgentHistoryOutcome::Error { message } => {
+                        Ok(ChatCommandOutcome::Error(message))
+                    }
                 }
             }
             CommandAction::FlushQueue { prompt } => match context.active_agent.as_ref() {

@@ -15,10 +15,7 @@ enum DaemonCommand {
     Update,
 }
 
-fn build_daemon_command_args(
-    command: DaemonCommand,
-    config_path: Option<&Path>,
-) -> Vec<String> {
+fn build_daemon_command_args(command: DaemonCommand, config_path: Option<&Path>) -> Vec<String> {
     let mut args = match command {
         DaemonCommand::Restart => vec!["restart".to_string()],
         DaemonCommand::Update => vec!["update".to_string(), "--yes".to_string()],

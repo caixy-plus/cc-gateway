@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::daemon::cleaner::media_dir;
-use crate::platform::inbound_media::{save_bytes_to_media_dir_with_upstream_name, SavedInboundMedia};
+use crate::platform::inbound_media::{
+    save_bytes_to_media_dir_with_upstream_name, SavedInboundMedia,
+};
 use crate::runtime::file_delivery::{
     FileDelivery, McpContext, McpDeliveryTarget, MAX_OUTBOUND_FILE_BYTES,
 };
@@ -16,8 +18,10 @@ use crate::web::state::broadcast_event;
 /// Prefix for structured file attachment payloads in SSE / history `content`.
 pub const WEBUI_FILE_EVENT_PREFIX: &str = "__ccg_file__:";
 
-static MEDIA_FILENAME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{1,12}$").expect("media filename regex"));
+static MEDIA_FILENAME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{1,12}$")
+        .expect("media filename regex")
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WebUiFileTarget {
@@ -96,9 +100,28 @@ fn should_inline_text_upload(filename: &str, size: usize) -> bool {
         .to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "md" | "txt" | "json" | "yaml" | "yml" | "toml" | "rs" | "py" | "js" | "ts"
-            | "tsx" | "jsx" | "html" | "css" | "sh" | "bash" | "sql" | "log" | "csv"
-            | "xml" | "ini" | "cfg" | "conf"
+        "md" | "txt"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "rs"
+            | "py"
+            | "js"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "html"
+            | "css"
+            | "sh"
+            | "bash"
+            | "sql"
+            | "log"
+            | "csv"
+            | "xml"
+            | "ini"
+            | "cfg"
+            | "conf"
     )
 }
 
@@ -111,13 +134,8 @@ pub fn broadcast_file_attachment(
     is_image: bool,
     local_path: &str,
 ) {
-    let content = build_file_event_content(
-        media_filename,
-        display_name,
-        size,
-        is_image,
-        local_path,
-    );
+    let content =
+        build_file_event_content(media_filename, display_name, size, is_image, local_path);
     broadcast_event(session_id, "webui", session_id, role, &content);
 }
 
@@ -128,9 +146,9 @@ pub fn resolve_media_path(storage_name: &str) -> Result<PathBuf> {
     }
     let dir = media_dir();
     let path = dir.join(storage_name);
-    let canonical = path.canonicalize().with_context(|| {
-        format!("Media file not found: {}", storage_name)
-    })?;
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Media file not found: {}", storage_name))?;
     let dir_canon = dir.canonicalize().unwrap_or(dir);
     if !canonical.starts_with(&dir_canon) {
         anyhow::bail!("Media path escapes media directory");
@@ -234,9 +252,7 @@ mod tests {
 
     #[test]
     fn media_filename_regex_accepts_uuid_ext() {
-        assert!(MEDIA_FILENAME_RE.is_match(
-            "550e8400-e29b-41d4-a716-446655440000.png"
-        ));
+        assert!(MEDIA_FILENAME_RE.is_match("550e8400-e29b-41d4-a716-446655440000.png"));
         assert!(!MEDIA_FILENAME_RE.is_match("../etc/passwd"));
     }
 

@@ -113,11 +113,18 @@ mod tests {
 
     #[test]
     fn spawn_args_keep_default_and_extra_args_before_acp_flag() {
+        // Verifies ordering: default_args → extra_args → `--acp`.
+        // Note: `--yolo` is stripped by `parse_gateway_default_args` before this function is
+        // called in production, so we use a neutral flag here to avoid implying `--yolo`
+        // reaches the Gemini CLI (it doesn't — gateway auto-approves via `permission: allow`).
         let mut config = AgentConfig::default_for_provider(AgentProvider::Gemini);
-        config.default_args = "--yolo".to_string();
-        let args =
-            GeminiAcpHooks::build_spawn_args(&config, vec!["-m".into(), "auto".into()], &Value::Null);
-        assert_eq!(args, vec!["--yolo", "-m", "auto", "--acp"]);
+        config.default_args = "--sandbox".to_string();
+        let args = GeminiAcpHooks::build_spawn_args(
+            &config,
+            vec!["-m".into(), "auto".into()],
+            &Value::Null,
+        );
+        assert_eq!(args, vec!["--sandbox", "-m", "auto", "--acp"]);
     }
 
     #[test]

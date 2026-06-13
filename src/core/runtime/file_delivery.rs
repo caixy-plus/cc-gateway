@@ -147,8 +147,18 @@ fn image_extension_from_name(name: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tiff" | "tif"
-            | "heic" | "heif"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "svg"
+            | "ico"
+            | "tiff"
+            | "tif"
+            | "heic"
+            | "heif"
     )
 }
 
@@ -342,9 +352,7 @@ impl FileDelivery for TelegramFileTarget {
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| v.to_string())
             })
-            .ok_or_else(|| {
-                anyhow::anyhow!("Telegram {field} response missing message_id")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Telegram {field} response missing message_id"))?;
 
         Ok(SentFile {
             platform: "telegram".to_string(),

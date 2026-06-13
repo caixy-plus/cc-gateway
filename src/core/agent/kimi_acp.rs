@@ -148,9 +148,10 @@ mod tests {
     }
 
     #[test]
-    fn extracts_permission_tool_name_prefers_toolcall_name() {
+    fn extracts_permission_label_when_only_toolcall_name() {
+        // Kimi 扩展历史路径：只给 `name` 没给 `title` 时仍能用 `name` 兜底。
         let params = json!({
-            "toolCall": { "name": "mcp__cc-gateway__send_file", "title": "Send file" }
+            "toolCall": { "name": "mcp__cc-gateway__send_file" }
         });
         assert_eq!(
             extract_permission_label(&params),
@@ -162,5 +163,23 @@ mod tests {
     fn authenticate_method_id_is_login() {
         let hooks = KimiAcpHooks;
         assert_eq!(AcpHooks::authenticate_method_id(&hooks), Some("login"));
+    }
+
+    /// Gateway-level `--yolo` (stripped by `parse_gateway_default_args`, mapped to
+    /// `permission: allow`) must inject `--yolo` into the Kimi CLI argv so the CLI
+    /// runs as `kimi --yolo acp`.
+    #[test]
+    fn kimi_yolo_injects_flag_before_acp_subcommand() {
+        use crate::config::model::AgentProvider;
+        let mut config = AgentConfig::default_for_provider(AgentProvider::Kimi);
+        // Simulate the post-normalization state: `--yolo` stripped from default_args,
+        // `permission` set to "allow".
+        config.default_args = String::new();
+        config.permission = "allow".to_string();
+        let args = KimiAcpHooks::build_spawn_args(&config, vec![], &Value::Null);
+        assert!(
+            args.iter().position(|a| a == "--yolo") < args.iter().position(|a| a == "acp"),
+            "`--yolo` must appear before `acp` subcommand, got: {args:?}"
+        );
     }
 }

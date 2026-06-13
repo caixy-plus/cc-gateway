@@ -115,7 +115,9 @@ async fn pi_start_agent_session_writes_mcp_json_in_work_dir() -> Result<()> {
         .await;
 
     let mut profiles = env.fake_agent_profiles();
-    profiles.profile_mut(&crate::config::model::AgentProvider::Pi).enabled = true;
+    profiles
+        .profile_mut(&crate::config::model::AgentProvider::Pi)
+        .enabled = true;
 
     GLOBAL_CHANNEL_SESSIONS
         .start_agent_session_for_platform(StartAgentSessionForPlatformArgs {

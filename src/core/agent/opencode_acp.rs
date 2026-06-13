@@ -78,16 +78,15 @@ impl AcpHooks for OpenCodeAcpHooks {
         true
     }
 
-    async fn set_session_model(
-        &self,
-        session: &OpenCodeAcpSession,
-        model_id: &str,
-    ) -> Result<()> {
+    async fn set_session_model(&self, session: &OpenCodeAcpSession, model_id: &str) -> Result<()> {
         let params = json!({
             "sessionId": session.acp_session_id(),
             "modelId": model_id
         });
-        match session.acp_request("session/set_model", params.clone()).await {
+        match session
+            .acp_request("session/set_model", params.clone())
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) if e.to_string().contains("Method not found") => {
                 session
@@ -148,9 +147,10 @@ mod tests {
     }
 
     #[test]
-    fn extracts_permission_tool_name_prefers_toolcall_name() {
+    fn extracts_permission_label_when_only_toolcall_name() {
+        // OpenCode 扩展历史路径：只给 `name` 没给 `title` 时仍能用 `name` 兜底。
         let params = json!({
-            "toolCall": { "name": "mcp__cc-gateway__send_file", "title": "Send file" }
+            "toolCall": { "name": "mcp__cc-gateway__send_file" }
         });
         assert_eq!(
             extract_permission_label(&params),

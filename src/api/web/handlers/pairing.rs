@@ -89,7 +89,7 @@ pub async fn handle_list_approved() -> Json<serde_json::Value> {
     Json(json!({ "approved": list }))
 }
 
-/// Suspend (取消放行) or resume (重新放行) a kept approval record. The record is
+/// Suspend (revoke access) or resume (restore access) a kept approval record. The record is
 /// preserved either way, so resuming never requires a new pairing handshake.
 pub async fn handle_set_approval_enabled(
     Json(req): Json<SetApprovalEnabledRequest>,

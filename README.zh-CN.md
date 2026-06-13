@@ -2,13 +2,13 @@
 
 [English](README.md) | **简体中文**
 
-通过 **飞书/Lark**、**Telegram**、**QQ** 与 **WebUI**，在本地运行并远程驱动多种智能体 CLI（Claude Code、Codex、Cursor、Pi、OpenCode、Kimi、Gemini 等）。
+通过 **飞书/Lark**、**Telegram**、**QQ** 与 **WebUI**，在本地运行并远程驱动多种智能体 CLI（Claude Code、Codex、Cursor、Pi、OpenCode、Kimi、Gemini、Qoder 等）。
 
 ## 功能特性
 
 - **远程控制** — 用手机上的聊天机器人操作本机智能体
 - **多平台** — 飞书/Lark、Telegram、QQ 官方机器人，可同时启用
-- **多智能体** — 可插拔后端（`claude`、`codex`、`cursor`、`pi`、`opencode`、`kimi`、`gemini` 等），用 `/agents` 按聊天指定默认智能体
+- **多智能体** — 可插拔后端（`claude`、`codex`、`cursor`、`pi`、`opencode`、`kimi`、`gemini`、`qoder` 等），用 `/agents` 按聊天指定默认智能体
 - **聊天隔离** — 每个聊天/频道独立子进程，消息互不串线
 - **配对放行** — 可在 WebUI 中批准新聊天后再允许使用（建议开启）
 - **WebUI** — 浏览器管理会话、配对、设置与实时事件
@@ -120,7 +120,7 @@ cd cc-gateway
 | `/show-thinking` / `/hide-thinking` | 开关 Thinking 输出 |
 | `/stop` / `/clear` / `/status` / `/esc` | 控制当前生成（视平台支持） |
 
-**智能体：** `claude`、`codex`、`cursor`、`pi`、`opencode`、`kimi`、`gemini` — 运行 `/agents` 查看已启用的配置。
+**智能体：** `claude`、`codex`、`cursor`、`pi`、`opencode`、`kimi`、`gemini`、`qoder` — 运行 `/agents` 查看已启用的配置。
 
 ### 会话模式
 
@@ -147,7 +147,7 @@ cd cc-gateway
 用户 (WebUI)      <-->  cc-gateway 守护进程
 ```
 
-网关以子进程方式拉起各 provider CLI，并桥接聊天消息（例如 Claude 的 **stream-json**、Codex/Cursor/OpenCode/Kimi/Gemini 的 **ACP**、Pi 的 **JSON-RPC**）。协议细节见 [CLAUDE.md](CLAUDE.md)。
+网关以子进程方式拉起各 provider CLI，并桥接聊天消息（例如 Claude 的 **stream-json**、Codex/Cursor/OpenCode/Kimi/Gemini/Qoder 的 **ACP**、Pi 的 **JSON-RPC**）。协议细节见 [CLAUDE.md](CLAUDE.md)。
 
 ## 许可证
 

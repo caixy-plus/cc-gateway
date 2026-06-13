@@ -1,7 +1,13 @@
-//! Unified gateway-facing session API for all agent providers.
+//! Unified "gateway-side session API" exposed by all providers.
 //!
-//! Each concrete session type implements [`AgentBackend`]; [`super::session::AgentRuntime`]
-//! dispatches through this trait so new providers add one enum variant and one `impl` block.
+//! Each provider backend (Claude stream-json, Codex / Cursor / OpenCode / Kimi /
+//! Gemini / **Qoder** ACP, Pi JSON-RPC) implements the [`AgentBackend`] trait.
+//! [`super::session::AgentRuntime`] dispatches to the concrete implementation via the `dispatch_agent_backend!` macro.
+//! Thus, adding a new provider only requires:
+//!
+//! 1. Adding a new enum variant in [`super::session::AgentRuntime`];
+//! 2. Implementing `AgentBackend` (ACP providers automatically obtain a blanket impl via [`GenericAcpSession`], no manual coding needed);
+//! 3. Adding a new branch in the `dispatch_agent_backend!` macro.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -14,19 +20,35 @@ use crate::runtime::session::StreamJsonSession;
 
 use super::session::NewProviderSessionCtx;
 
-/// Gateway operations shared by Claude, ACP, and RPC backends.
+/// Unified capability interface for all provider backends.
+///
+/// The default trait implementation provides graceful degradation (returns "not supported" errors for
+/// `compact_context`, `set_model`, `list_available_models_in_session`, `active_model_id`, `recent_stderr`).
+/// Concrete backends override them as needed.
 #[async_trait]
 pub trait AgentBackend {
+    /// Send a user text message to the provider.
     async fn send_user_message(&mut self, text: &str) -> Result<()>;
 
+    /// Flush queued pending user messages to the provider. Only used by Claude stream-json (handling
+    /// the `interrupt` frame — when the user inputs a new message while the previous round is still generating);
+    /// other providers use a default empty implementation.
     async fn flush_queued_messages(&mut self) -> Result<()> {
         Ok(())
     }
 
+    /// `/stop`: Abort the current generation while keeping the session process alive.
     async fn send_stop_generation(&mut self) -> Result<()>;
 
+    /// Send structured input: user messages, permission responses, confirmations, or choices.
     async fn send_input(&mut self, msg: InputMessage) -> Result<()>;
 
+    /// `/compact`: Clear context / compact history.
+    ///
+    /// The default implementation returns a `compact_not_supported` error; Claude, Pi, and ACP providers
+    /// each override this implementation (Claude sends `/compact` as a user message; ACP starts a new session; Pi uses RPC).
+    ///
+    /// The return value is the new provider session ID (if any), written back to SQLite by the caller.
     async fn compact_context(
         &mut self,
         _instructions: Option<&str>,
@@ -41,6 +63,10 @@ pub trait AgentBackend {
         )
     }
 
+    /// `/clear`: Start a fresh provider session (without recreating the gateway record).
+    ///
+    /// Defaults to returning `None` (indicating the backend does not expose a new session ID); ACP providers override
+    /// this to return the session ID from `session/new` for persistence.
     async fn new_provider_session(
         &mut self,
         _ctx: &NewProviderSessionCtx<'_>,
@@ -48,11 +74,13 @@ pub trait AgentBackend {
         Ok(None)
     }
 
-    async fn set_model(
-        &mut self,
-        provider: &AgentProvider,
-        _model_id: &str,
-    ) -> Result<String> {
+    /// `/models`: Switch model inside the session.
+    ///
+    /// The default implementation returns different errors based on the provider's [`AgentCapabilities::platform_bound`]
+    /// ("platform-bound, model cannot be switched in WebUI" / "this provider does not support model switching");
+    /// providers supporting in-session model switching (Kimi / Gemini / OpenCode / Codex / Qoder)
+    /// override this to invoke ACP `session/set_model`.
+    async fn set_model(&mut self, provider: &AgentProvider, _model_id: &str) -> Result<String> {
         let caps = crate::config::agent_registry::capabilities_for(provider);
         if caps.platform_bound {
             anyhow::bail!(
@@ -72,27 +100,41 @@ pub trait AgentBackend {
         )
     }
 
+    /// Query the currently active model ID. Overridden by Pi's `get_state`, others default to `None`.
     async fn active_model_id(&mut self) -> Result<Option<String>> {
         Ok(None)
     }
 
+    /// List the model IDs currently available for the provider (used by the `/models` command).
     async fn list_available_models_in_session(&mut self) -> Result<Vec<String>> {
         Ok(vec![])
     }
 
+    /// Whether the backend child process is still alive (used for WebUI / bot status badges).
     fn is_alive(&mut self) -> bool;
 
+    /// Recent stderr output (used for the error troubleshooting panel; defaults to an empty string).
     fn recent_stderr(&self) -> String {
         String::new()
     }
 }
 
-/// Permission / user follow-up for backends that are not Claude stream-json.
+/// Capability interface for backends supporting "permission responses" (providers **other than** Claude stream-json).
+///
+/// Claude uses its own control request/response protocol and does not need this trait;
+/// ACP and Pi implement this trait, and [`send_permission_capable_input`] translates the unified
+/// [`InputMessage::ControlResponse`] into the provider's "allow / deny" semantics.
 #[async_trait]
 pub trait PermissionCapableBackend: AgentBackend {
+    /// Send permission response: `allow = true` permits the action, `false` denies it.
     async fn send_permission_response(&self, request_id: &str, allow: bool) -> Result<()>;
 }
 
+/// Dispatches [`InputMessage`] to the backend supporting permission responses:
+///
+/// - [`InputMessage::ControlResponse`]: User's response to permission prompts -> calls
+///   [`PermissionCapableBackend::send_permission_response`];
+/// - [`InputMessage::User`]: Regular user message -> calls [`AgentBackend::send_user_message`].
 async fn send_permission_capable_input<B: PermissionCapableBackend + ?Sized>(
     backend: &mut B,
     msg: InputMessage,
@@ -170,11 +212,7 @@ impl<H: crate::agent::acp_session::AcpHooks> AgentBackend for GenericAcpSession<
         GenericAcpSession::send_user_message(self, text).await
     }
 
-    async fn set_model(
-        &mut self,
-        provider: &AgentProvider,
-        model_id: &str,
-    ) -> Result<String> {
+    async fn set_model(&mut self, provider: &AgentProvider, model_id: &str) -> Result<String> {
         if self.hooks.supports_acp_set_model() {
             self.hooks.set_session_model(self, model_id).await?;
             self.set_session_active_model(model_id);
@@ -267,11 +305,7 @@ impl AgentBackend for PiRpcSession {
         PiRpcSession::new_provider_session(self).await
     }
 
-    async fn set_model(
-        &mut self,
-        _provider: &AgentProvider,
-        model_id: &str,
-    ) -> Result<String> {
+    async fn set_model(&mut self, _provider: &AgentProvider, model_id: &str) -> Result<String> {
         let Some((p, mid)) = crate::command::models::parse_provider_model_id(model_id) else {
             anyhow::bail!("{}", crate::t!("models.pi_requires_provider_model"));
         };
@@ -302,6 +336,18 @@ impl PermissionCapableBackend for PiRpcSession {
     }
 }
 
+/// Unified macro to dispatch [`super::session::AgentRuntime`] to its internal backend.
+///
+/// Usage:
+///
+/// ```ignore
+/// crate::dispatch_agent_backend!(self, |b| b.send_user_message(text).await)
+/// ```
+///
+/// The expanded macro produces a `match` expression: binds each variant of `$self` (Claude / Codex / Cursor / Pi /
+/// OpenCode / Kimi / Gemini / Qoder) to `$b` and executes `$body`.
+/// This allows all [`AgentRuntime`] methods requiring "per-provider dispatching" to reuse the same codebase,
+/// meaning adding a new provider **only requires adding a variant branch here**.
 #[macro_export]
 macro_rules! dispatch_agent_backend {
     ($self:expr, |$b:ident| $body:expr) => {
@@ -313,6 +359,7 @@ macro_rules! dispatch_agent_backend {
             $crate::agent::session::AgentRuntime::OpenCode($b) => $body,
             $crate::agent::session::AgentRuntime::Kimi($b) => $body,
             $crate::agent::session::AgentRuntime::Gemini($b) => $body,
+            $crate::agent::session::AgentRuntime::Qoder($b) => $body,
         }
     };
 }
@@ -355,9 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn permission_capable_input_forwards_user_text() {
-        let mut backend = StubBackend {
-            last_message: None,
-        };
+        let mut backend = StubBackend { last_message: None };
         backend
             .send_input(build_user_message("hello"))
             .await
@@ -367,9 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn permission_capable_input_forwards_allow() {
-        let mut backend = StubBackend {
-            last_message: None,
-        };
+        let mut backend = StubBackend { last_message: None };
         backend
             .send_input(build_permission_allow("req-1", None))
             .await

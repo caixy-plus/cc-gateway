@@ -7,15 +7,13 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::model::{
-    AgentProfiles, FeishuConfig, GatewayConfig, QqConfig, TelegramConfig,
-};
+use super::model::{AgentProfiles, FeishuConfig, GatewayConfig, QqConfig, TelegramConfig};
 use super::secrets::{is_masked_secret, mask_secret};
-use tracing::error;
-use crate::platform::{feishu::FeishuPlatform, qq::QqPlatform, telegram::TelegramPlatform};
 use crate::platform::Platform;
+use crate::platform::{feishu::FeishuPlatform, qq::QqPlatform, telegram::TelegramPlatform};
 use crate::session::channel_model::SessionSource;
 use crate::session::pairing::GLOBAL_PAIRING_MANAGER;
+use tracing::error;
 
 /// How the platform connects to the vendor API (documentation / WebUI label).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,8 +53,7 @@ pub struct PlatformFieldDef {
     pub wizard: bool,
 }
 
-pub type PlatformApplySettingsFn =
-    fn(&mut GatewayConfig, &Value, &dyn Fn(&str, &str) -> bool);
+pub type PlatformApplySettingsFn = fn(&mut GatewayConfig, &Value, &dyn Fn(&str, &str) -> bool);
 
 /// Feature flags exposed to WebUI and integration docs.
 #[derive(Debug, Clone, Copy)]
@@ -226,11 +223,7 @@ pub const PLATFORM_DEFS: &[PlatformDef] = &[
             require_pairing: feishu_require_pairing,
             set_require_pairing: feishu_set_require_pairing,
             diff_config: diff_feishu_config,
-            restart_paths: &[
-                "feishu.enabled",
-                "feishu.app_id",
-                "feishu.app_secret",
-            ],
+            restart_paths: &["feishu.enabled", "feishu.app_id", "feishu.app_secret"],
             live_paths: &["feishu.require_pairing"],
         },
         settings_fields: FEISHU_FIELDS,
@@ -256,11 +249,7 @@ pub const PLATFORM_DEFS: &[PlatformDef] = &[
             require_pairing: telegram_require_pairing,
             set_require_pairing: telegram_set_require_pairing,
             diff_config: diff_telegram_config,
-            restart_paths: &[
-                "telegram.enabled",
-                "telegram.bot_token",
-                "telegram.proxy",
-            ],
+            restart_paths: &["telegram.enabled", "telegram.bot_token", "telegram.proxy"],
             live_paths: &["telegram.require_pairing"],
         },
         settings_fields: TELEGRAM_FIELDS,
@@ -324,9 +313,7 @@ pub fn apply_pairing_flags_from_config(config: &GatewayConfig) {
     }
 }
 
-pub fn spawn_enabled_platforms(
-    config: &GatewayConfig,
-) -> Result<Vec<Box<dyn Platform>>> {
+pub fn spawn_enabled_platforms(config: &GatewayConfig) -> Result<Vec<Box<dyn Platform>>> {
     let mut out = Vec::new();
     for def in PLATFORM_DEFS {
         if !(def.config.is_enabled)(config) {
@@ -338,9 +325,7 @@ pub fn spawn_enabled_platforms(
 }
 
 /// Spawn `run()` tasks for each enabled platform; returns handles for graceful shutdown.
-pub fn start_enabled_platforms(
-    config: &GatewayConfig,
-) -> Result<Vec<PlatformRunHandle>> {
+pub fn start_enabled_platforms(config: &GatewayConfig) -> Result<Vec<PlatformRunHandle>> {
     let mut out = Vec::new();
     for def in PLATFORM_DEFS {
         if !(def.config.is_enabled)(config) {

@@ -31,7 +31,10 @@ const TELEGRAM_DEFAULT_HTTP_TIMEOUT_SECS: u64 = 45;
 
 /// Build an HTTP client for Telegram Bot API. Proxy applies to Telegram only.
 pub(crate) fn build_http_client(proxy: &str) -> reqwest::Client {
-    build_http_client_with_timeout(proxy, Duration::from_secs(TELEGRAM_DEFAULT_HTTP_TIMEOUT_SECS))
+    build_http_client_with_timeout(
+        proxy,
+        Duration::from_secs(TELEGRAM_DEFAULT_HTTP_TIMEOUT_SECS),
+    )
 }
 
 /// Same as [`build_http_client`] but with a custom request timeout (e.g. large file uploads).
@@ -1247,7 +1250,9 @@ impl TelegramPlatform {
             crate::session::agent_history::run(&self.agent_history_env(), &req, history_action)
                 .await;
         match outcome {
-            AgentHistoryOutcome::Started { active, message, .. } => {
+            AgentHistoryOutcome::Started {
+                active, message, ..
+            } => {
                 if let Some(mut rt) = self.channels.get_mut(chat_id_str) {
                     rt.channel_session.work_dir = active.agent_session.work_dir.clone();
                     rt.active_agent = Some(active);

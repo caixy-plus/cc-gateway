@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::platform::proto::{Frame, Header};
 
-use super::{FeishuPlatform, METHOD_CONTROL, METHOD_DATA, WsClientConfig};
+use super::{FeishuPlatform, WsClientConfig, METHOD_CONTROL, METHOD_DATA};
 
 type WsWrite = std::sync::Arc<
     tokio::sync::Mutex<

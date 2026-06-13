@@ -1,7 +1,30 @@
-//! Shared ACP session semantics for Cursor, OpenCode, and future ACP providers.
+//! Shared **ACP** (Agent Communication Protocol) session implementation across providers.
 //!
-//! Provider-specific behavior lives in [`AcpHooks`]; this module owns spawn, prompt,
-//! permission, session/update mapping, and lifecycle.
+//! # Protocol
+//!
+//! ACP is a protocol based on stdio NDJSON JSON-RPC, with standard methods including:
+//!
+//! - `initialize` → Handshake;
+//! - `session/new` → Start a new session, optionally carrying `mcpServers`;
+//! - `session/load` → Restore a session using a persisted `provider_session_id`;
+//! - `session/prompt` → Send user messages;
+//! - `session/cancel` → Abort generation;
+//! - `session/set_model` / `session/set_config_option` → Switch model;
+//! - `authenticate` → Authentication (skipped by some providers that use cached credentials).
+//!
+//! For details, see [`https://agentclientprotocol.com`](https://agentclientprotocol.com).
+//!
+//! # Design
+//!
+//! [`GenericAcpSession`] holds an [`AcpClient`] (stdio JSON-RPC transport) and provider-specific
+//! [`AcpHooks`]. Codex, Cursor, OpenCode, Kimi, Gemini, and **Qoder** are all integrated
+//! via a "thin hook layer" without needing to rewrite transport, spawn, or prompt logic.
+//!
+//! # Key Types
+//!
+//! - [`AcpHooks`]: Defines provider differences (argv, authentication, MCP, model switching, extension notifications).
+//! - [`GenericAcpSession`]: The main session runner implementing [`super::backend::AgentBackend`].
+//! - [`AcpNotifyCtx`]: Context required for non-standard ACP notification callbacks.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -24,59 +47,90 @@ use crate::agent::event::AgentEvent;
 use crate::config::model::AgentConfig;
 use crate::runtime::mcp_server::McpContext;
 
-/// End a turn only when the agent has sent **no ACP traffic at all** for this long.
-/// The `session/prompt` response legitimately takes minutes (it returns at end of turn),
-/// so the watchdog keys off inbound activity, not total turn duration. Tool executions
-/// can stay silent between status updates — keep this generous; it only catches
-/// genuinely hung providers (e.g. Kimi with an inactive membership).
+/// How long to wait before concluding that the session is hung and actively ending the turn,
+/// when the agent exhibits **no** ACP traffic during a `session/prompt` request.
+///
+/// Note: The response to `session/prompt` can take several minutes (as it waits for the turn to complete before returning),
+/// so the watchdog monitors "inbound activity" rather than "total duration". The provider might not emit status updates
+/// for a long time during tool execution — this timeout must be large enough to only catch actual hangs
+/// (e.g., when a Kimi membership has expired).
 const PROMPT_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 const PROMPT_IDLE_TICK: Duration = Duration::from_secs(10);
 
-/// Context passed to provider-specific ACP notification handlers.
+/// Context passed to custom ACP notification callbacks of the provider.
+///
+/// Contains the event sender, pending permission request maps, atomic indicators for turn completion and presence of content,
+/// and the child process stdin (in case callbacks need to send subsequent requests to the provider).
 pub struct AcpNotifyCtx {
     pub event_tx: mpsc::UnboundedSender<AgentEvent>,
     pub pending_permissions: Arc<Mutex<HashMap<String, Value>>>,
+    /// ACP `params.options` arrays keyed by request id; consumed by
+    /// [`GenericAcpSession::send_permission_response`] to pick the real `optionId`.
+    pub pending_permission_options: Arc<Mutex<HashMap<String, Vec<Value>>>>,
     pub turn_done_sent: Arc<AtomicBool>,
     pub turn_had_content: Arc<AtomicBool>,
     pub client_stdin: Arc<Mutex<ChildStdin>>,
 }
 
-/// Provider-specific hooks for an ACP agent CLI.
+/// Provider-specific hooks: Connects the generic ACP flow of [`GenericAcpSession`] with concrete provider details
+/// such as argv, authentication, and model switching.
+///
+/// Implementers only need to describe "how this provider differs from standard ACP"; all other spawn, prompt,
+/// permission, and session update mappings are provided by [`GenericAcpSession`].
 #[async_trait]
 pub trait AcpHooks: Send + Sync + Copy + Default + 'static {
+    /// The provider name used in logs and user-visible errors (e.g., `"Qoder"` / `"Gemini"`).
     fn log_provider_name(&self) -> &'static str;
 
-    /// ACP `authenticate` methodId, or `None` to skip the authenticate RPC
-    /// (providers like Gemini reuse cached CLI credentials and reject unknown methods).
+    /// The method ID for the ACP `authenticate` call. Returns `None` to **skip** the `authenticate` RPC
+    /// (applicable for providers using cached CLI credentials or PAT environment variables, e.g., Gemini, Codex, **Qoder**).
     fn authenticate_method_id(&self) -> Option<&str>;
 
+    /// The default label displayed for permission request messages in the WebUI / bot (e.g., `"qoder_permission"`).
     fn default_permission_label(&self) -> &'static str;
 
+    /// The error message when the prompt channel is closed (the child process exited abnormally).
     fn prompt_channel_closed_error(&self) -> &'static str;
 
+    /// User hint when spawn fails, including `config.cli_path` and the actual cli path resolved,
+    /// making it easier to troubleshoot cases where the user has overridden `cli_path` in `config.json`.
     fn spawn_failure_message(config: &AgentConfig, cli_path: &str) -> String;
 
+    /// The error returned when session restoration fails; should use i18n to support bilingual messages.
     fn session_resume_error(session_id: &str, err: &str) -> anyhow::Error;
 
+    /// Normalizes the user's `work_dir` (typical use case: restricting under `$HOME` to prevent
+    /// the provider from triggering permission errors when writing session files). Defaults to direct passthrough.
     fn normalize_work_dir(work_dir: &str) -> Result<String> {
         Ok(work_dir.to_string())
     }
 
-    async fn prepare_mcp_servers(
-        work_dir: &str,
-        mcp_context: Option<&McpContext>,
-    ) -> Result<Value>;
+    /// Converts the gateway MCP context (capabilities like `send_file`) into the ACP standard `mcpServers`
+    /// JSON field; returns an empty object `{}` if no servers are attached.
+    async fn prepare_mcp_servers(work_dir: &str, mcp_context: Option<&McpContext>)
+        -> Result<Value>;
 
+    /// Assembles the final argv of the provider CLI:
+    ///
+    /// ```text
+    /// <default_args> <extra_args> <provider-specific subcommand / flag>
+    /// ```
+    ///
+    /// It is recommended to use [`build_base_spawn_args`] to perform a unified normalization of
+    /// "registry defaults + profile overrides + stripping cross-provider flags" before appending provider-specific tokens.
     fn build_spawn_args(
         config: &AgentConfig,
         extra_args: Vec<String>,
         mcp_servers: &Value,
     ) -> Vec<String>;
 
-    /// Handle non-standard ACP RPC notifications (e.g. Cursor extensions).
-    /// Return `true` when the method was handled.
+    /// Processes non-standard ACP notifications (e.g., Cursor extension notifications).
+    ///
+    /// Returns `true` to indicate this method handled it, and [`GenericAcpSession`] will skip the default branch;
+    /// returns `false` to hand it over to the default processing branch.
     fn handle_extension_notification(&self, method: &str, msg: &Value, ctx: &AcpNotifyCtx) -> bool;
 
+    /// Hook executed before the ACP session ID is established (a few providers require injecting custom behavior here).
     fn before_session_setup(
         &self,
         _event_tx: &mpsc::UnboundedSender<AgentEvent>,
@@ -85,29 +139,33 @@ pub trait AcpHooks: Send + Sync + Copy + Default + 'static {
     ) {
     }
 
-    /// Runs after the ACP session id is established. Providers that ignore the
-    /// `mode` param in `session/new` (e.g. Codex) can apply it here via
-    /// `session/set_mode`. Failures must not abort the spawn.
-    async fn after_session_setup(
-        &self,
-        _session: &GenericAcpSession<Self>,
-        _config: &AgentConfig,
-    ) {
+    /// Hook executed after the ACP session ID is established.
+    ///
+    /// Typical use case: Codex ignores the `mode` parameter in `session/new` and needs it issued separately
+    /// via `session/set_mode` after spawning is complete. Failures in `after_session_setup` **should not**
+    /// cause the overall spawn operation to fail (simply log it with `tracing::warn!`).
+    async fn after_session_setup(&self, _session: &GenericAcpSession<Self>, _config: &AgentConfig) {
     }
 
-    /// When true, [`GenericAcpSession`] implements in-session model switch via ACP.
+    /// Whether in-session model switching is supported via ACP. When returning `true`, [`set_session_model`]
+    /// will be called when the user runs the `/models` command.
     fn supports_acp_set_model(&self) -> bool {
         false
     }
 
-    /// Message shown when `session/prompt` succeeds but no user-visible output
-    /// was streamed during the turn.
+    /// The message shown to users when `session/prompt` returns successfully but **no user-visible output**
+    /// is generated during the entire turn.
+    ///
+    /// Defaults to using the `agent.acp_no_response` key (replacing the provider name using `log_provider_name()`).
     fn no_output_message(&self) -> String {
         crate::t_fmt!("agent.acp_no_response", NAME = self.log_provider_name())
     }
 
-    /// ACP `session/set_model` (and provider-specific fallbacks). Only used when
-    /// [`Self::supports_acp_set_model`] is true.
+    /// ACP `session/set_model` (along with provider-specific fallback).
+    ///
+    /// Invoked only when [`Self::supports_acp_set_model`] returns `true`.
+    /// The default implementation directly bails; concrete providers should override it (typical pattern: try `session/set_model` first,
+    /// and downgrade to `session/set_config_option` if it fails with `Method not found`).
     async fn set_session_model(
         &self,
         _session: &GenericAcpSession<Self>,
@@ -117,19 +175,72 @@ pub trait AcpHooks: Send + Sync + Copy + Default + 'static {
     }
 }
 
+/// Generic session implementation for ACP providers.
+///
+/// Injects provider-specific details (argv, authentication, MCP, model switching) via [`AcpHooks`],
+/// while handling stdio transport, JSON-RPC lifecycle, permission mapping, turn watchdog,
+/// event translation, and all other common logic.
 pub struct GenericAcpSession<H: AcpHooks> {
+    /// Stdio JSON-RPC client (holding child stdin/stdout).
     client: AcpClient,
+    /// Channel used to push [`AgentEvent`]s to [`crate::core::runtime::controller::AgentController`].
     event_tx: mpsc::UnboundedSender<AgentEvent>,
+    /// ACP-side session ID (returned by `session/new` or `session/load`).
     session_id: String,
+    /// Whether the `Done` event has already been sent for the current turn (to prevent duplicate transmissions).
     turn_done_sent: Arc<AtomicBool>,
+    /// Whether user-visible content was received in the current turn (used to identify "empty turns").
     turn_had_content: Arc<AtomicBool>,
-    /// Updated on every inbound ACP notification; drives the prompt idle watchdog.
+    /// Timestamp of the most recent inbound ACP notification, driving the prompt watchdog.
     last_activity: Arc<StdMutex<Instant>>,
+    /// The MCP servers JSON field passed to the provider during `session/new` / `session/load`,
+    /// cached for subsequent `session/cancel` / restart paths.
     mcp_servers: Value,
-    /// Model ids from ACP `session/new` / `session/load` (`configOptions` or Gemini `models`).
+    /// List of available models returned by `session/new` / `session/load` (from `configOptions`
+    /// or Gemini's `models` field).
     available_models: Vec<String>,
+    /// Currently active model ID (communicated by some providers during the session setup stage).
     active_model: Option<String>,
+    /// Provider-specific hooks.
     pub(crate) hooks: H,
+    /// Cache of ACP `params.options` per `session/request_permission` request id.
+    ///
+    /// The ACP spec defines `options` as an array of `{ optionId, name, kind }` where
+    /// `optionId` is **agent-defined** (not one of the fixed values `"once"` / `"reject"`).
+    /// We store the array here when a request arrives, then look up the matching option by
+    /// its `kind` (e.g. `allow_once` / `reject_once`) when the user responds.
+    pending_permission_options: Arc<Mutex<HashMap<String, Vec<Value>>>>,
+}
+
+/// Pick an ACP `optionId` from an `options` array by the user's intent (`allow` / `deny`).
+///
+/// Per the ACP v1 spec, each option carries a `kind` enum (`allow_once` / `allow_always`
+/// / `reject_once` / `reject_always`) plus an **agent-defined** `optionId` string. The
+/// gateway must match by `kind` and return the provider's own `optionId` verbatim.
+///
+/// Preference order:
+///   - allow → `allow_once` first, then `allow_always` (least-privilege)
+///   - deny  → `reject_once` first, then `reject_always`
+///
+/// Returns `None` when no option matches any of the wanted kinds — caller should
+/// decide on a defensive fallback.
+fn pick_option_id(options: &[Value], allow: bool) -> Option<String> {
+    let wanted: &[&str] = if allow {
+        &["allow_once", "allow_always"]
+    } else {
+        &["reject_once", "reject_always"]
+    };
+    for want in wanted {
+        if let Some(opt) = options
+            .iter()
+            .find(|opt| opt.get("kind").and_then(|v| v.as_str()) == Some(*want))
+        {
+            if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Parse model catalog + current selection from an ACP `session/new` or `session/load` result.
@@ -229,12 +340,18 @@ impl<H: AcpHooks> GenericAcpSession<H> {
         let client = AcpClient::new(child, stdin);
         let pending = client.pending();
         let pending_permissions = client.pending_permissions();
+        // ACP spec: `optionId` is agent-defined, not a fixed literal. Cache the
+        // `params.options` arrays so `send_permission_response` can pick the real
+        // optionId by `kind`.
+        let pending_permission_options: Arc<Mutex<HashMap<String, Vec<Value>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let client_stdin = client.stdin_arc();
 
         client.spawn_stderr_reader(stderr);
 
         let tx = event_tx.clone();
         let pp = pending_permissions.clone();
+        let ppo = pending_permission_options.clone();
         let turn_done = Arc::new(AtomicBool::new(false));
         let turn_had_content = Arc::new(AtomicBool::new(false));
         let last_activity = Arc::new(StdMutex::new(Instant::now()));
@@ -248,6 +365,7 @@ impl<H: AcpHooks> GenericAcpSession<H> {
         let stdin_for_notify = client_stdin.clone();
         let replaying_notify = replaying.clone();
         let hooks_for_notify = hooks;
+        let ppo_for_notify = ppo.clone();
         let on_notification: NotificationHandler = Arc::new(move |msg: &Value| {
             if let Ok(mut at) = last_activity_notify.lock() {
                 *at = Instant::now();
@@ -256,6 +374,7 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             let ctx = AcpNotifyCtx {
                 event_tx: tx.clone(),
                 pending_permissions: pp.clone(),
+                pending_permission_options: ppo_for_notify.clone(),
                 turn_done_sent: turn_done_notify.clone(),
                 turn_had_content: turn_had_content_notify.clone(),
                 client_stdin: stdin_for_notify.clone(),
@@ -310,6 +429,7 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             available_models: vec![],
             active_model: None,
             hooks,
+            pending_permission_options: ppo,
         };
 
         session
@@ -520,6 +640,7 @@ impl<H: AcpHooks> GenericAcpSession<H> {
     }
 
     pub async fn send_permission_response(&self, request_id: &str, allow: bool) -> Result<()> {
+        // 1. Look up the JSON-RPC id (preserved verbatim so string / numeric shapes round-trip).
         let id_value = self
             .client
             .pending_permissions()
@@ -527,7 +648,34 @@ impl<H: AcpHooks> GenericAcpSession<H> {
             .await
             .remove(request_id)
             .unwrap_or_else(|| Value::String(request_id.to_string()));
-        let option_id = if allow { "once" } else { "reject" };
+
+        // 2. Look up the cached `params.options` for this request, then pick the
+        //    optionId whose `kind` matches the user's intent. Per the ACP spec,
+        //    `optionId` is **agent-defined** — real-world values we've observed:
+        //      codex-acp:   "approved" / "abort"
+        //      gemini:      "proceed_always" / "proceed_once" / "cancel"
+        //      qoderclicn:  "proceed_always_and_save" / "proceed_once" / "cancel"
+        //    None of them use the old hard-coded literals `"once"` / `"reject"`.
+        let cached_options = self
+            .pending_permission_options
+            .lock()
+            .await
+            .remove(request_id)
+            .unwrap_or_default();
+        let option_id = pick_option_id(&cached_options, allow).unwrap_or_else(|| {
+            // Fallback for providers that don't send a conformant `options` array
+            // (Cursor historically; defensive default).
+            tracing::warn!(
+                "[{}] no ACP option with kind {:?} in cached options; falling back to literal",
+                self.hooks.log_provider_name(),
+                if allow {
+                    &["allow_once", "allow_always"][..]
+                } else {
+                    &["reject_once", "reject_always"][..]
+                },
+            );
+            (if allow { "once" } else { "reject" }).to_string()
+        });
         self.client
             .write_json(json!({
                 "jsonrpc": "2.0",
@@ -637,7 +785,12 @@ impl AcpHooks for NoAcpHooks {
         build_base_spawn_args(config, extra_args)
     }
 
-    fn handle_extension_notification(&self, _method: &str, _msg: &Value, _ctx: &AcpNotifyCtx) -> bool {
+    fn handle_extension_notification(
+        &self,
+        _method: &str,
+        _msg: &Value,
+        _ctx: &AcpNotifyCtx,
+    ) -> bool {
         false
     }
 }
@@ -669,6 +822,30 @@ pub fn build_base_spawn_args(config: &AgentConfig, extra_args: Vec<String>) -> V
         );
     }
     args.extend(extra_args);
+
+    // Re-apply gateway-level `--yolo` semantics to the spawned CLI.
+    //
+    // The gateway strips `--yolo` from `default_args` and maps it to
+    // `permission: allow` (see `parse_gateway_default_args` in model.rs).
+    // Some providers need an explicit CLI flag to actually auto-approve
+    // tool executions — e.g. qoderclicn requires `--permission-mode
+    // bypass_permissions` in ACP mode, otherwise it still emits
+    // `session/request_permission` notifications even when the gateway
+    // auto-allows them.
+    //
+    // Claude is handled separately: its `--dangerously-skip-permissions`
+    // flag is in the `DefaultArgsPolicy::Claude` passthrough list, so the
+    // user's original flag arrives at the CLI verbatim.
+    let caps = crate::config::agent_registry::capabilities_for(&config.provider);
+    if !caps.yolo_cli_tokens.is_empty() && config.permission == "allow" {
+        let already_present = args
+            .windows(caps.yolo_cli_tokens.len())
+            .any(|w| w.iter().zip(caps.yolo_cli_tokens).all(|(a, b)| a == *b));
+        if !already_present {
+            args.extend(caps.yolo_cli_tokens.iter().map(|s| (*s).to_string()));
+        }
+    }
+
     args
 }
 
@@ -723,58 +900,75 @@ pub fn rpc_id_key(id: &Value) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
+/// Extract a human-readable label for a permission request from ACP `params`.
+///
+/// Per the ACP v1 spec the `toolCall` field is a `ToolCallUpdate` with fields
+/// `toolCallId` / `title` / `kind` / `status` / `content` / `locations` / `rawInput`.
+/// Real-world observations:
+///
+/// | Provider    | Fields present on `toolCall`                                  |
+/// |-------------|---------------------------------------------------------------|
+/// | codex-acp   | `toolCallId`, `kind`, `status`, `title`, `content`, `locations`, `rawInput` |
+/// | gemini      | `toolCallId`, `status`, `title`, `content`, `locations`, `kind` |
+/// | qoderclicn  | `toolCallId`, `status`, `title`, `content`, `kind`, `rawInput`, `_meta` |
+/// | cursor      | historically exposes `name` as an extension field             |
+///
+/// Resolution order (best label first):
+///   1. `toolCall.title`              ← primary human-readable description
+///   2. `toolCall.name`               ← legacy / Cursor extension
+///   3. `toolCall.toolCallId`         ← stable id; ugly but always present
+///   4. `permission.title` / `permission.name` / `permission.toolName` / `permission.id`
+///   5. top-level `title`
 pub fn extract_permission_label(params: &Value) -> Option<String> {
     params
         .get("toolCall")
         .and_then(|v| {
-            v.get("name")
-                .or_else(|| v.get("toolName"))
-                .or_else(|| v.get("tool_name"))
-                .or_else(|| v.get("id"))
+            v.get("title")
+                .or_else(|| v.get("name"))
+                .or_else(|| v.get("toolCallId"))
         })
         .and_then(|v| v.as_str())
         .or_else(|| {
             params
                 .get("permission")
                 .and_then(|v| {
-                    v.get("name")
+                    v.get("title")
+                        .or_else(|| v.get("name"))
                         .or_else(|| v.get("toolName"))
                         .or_else(|| v.get("tool_name"))
                         .or_else(|| v.get("id"))
                 })
                 .and_then(|v| v.as_str())
         })
-        .or_else(|| {
-            params
-                .get("toolCall")
-                .and_then(|v| v.get("title"))
-                .and_then(|v| v.as_str())
-        })
-        .or_else(|| {
-            params
-                .get("permission")
-                .and_then(|v| v.get("title"))
-                .and_then(|v| v.as_str())
-        })
         .or_else(|| params.get("title").and_then(|v| v.as_str()))
         .map(|s| s.to_string())
 }
 
-fn handle_session_request_permission(
-    msg: &Value,
-    ctx: &AcpNotifyCtx,
-    default_label: &str,
-) {
+fn handle_session_request_permission(msg: &Value, ctx: &AcpNotifyCtx, default_label: &str) {
     let Some(id) = msg.get("id").cloned() else {
         return;
     };
     let key = rpc_id_key(&id);
     let pp = ctx.pending_permissions.clone();
+    let ppo = ctx.pending_permission_options.clone();
     let key2 = key.clone();
+    let key3 = key.clone();
+    // Cache the JSON-RPC id so `send_permission_response` can reply using the original id shape.
     tokio::spawn(async move {
         pp.lock().await.insert(key2, id);
     });
     let params = msg.get("params").cloned();
+    // Cache `params.options` (ACP spec: agent-defined `optionId`s) separately so we
+    // can later pick the right optionId by `kind` (allow_once / reject_once / ...).
+    let options_vec = params
+        .as_ref()
+        .and_then(|p| p.get("options"))
+        .and_then(|o| o.as_array())
+        .cloned()
+        .unwrap_or_default();
+    tokio::spawn(async move {
+        ppo.lock().await.insert(key3, options_vec);
+    });
     let tool_name = params
         .as_ref()
         .and_then(extract_permission_label)
@@ -946,14 +1140,150 @@ mod tests {
     }
 
     #[test]
-    fn extracts_permission_tool_name_prefers_toolcall_name() {
+    fn extracts_permission_label_prefers_toolcall_title_over_name() {
+        // 新优先级：`title` 优先于 `name`（实测 codex/gemini/qoder 都只给 `title`，
+        // `name` 是少数老 provider / Cursor 扩展才带）。
         let params = json!({
             "toolCall": { "name": "mcp__cc-gateway__send_file", "title": "Send file" }
         });
         assert_eq!(
             extract_permission_label(&params),
-            Some("mcp__cc-gateway__send_file".to_string())
+            Some("Send file".to_string())
         );
+    }
+
+    #[test]
+    fn extracts_permission_label_codex_real_payload() {
+        // 实测 codex-acp 2026-06 抓到的真实 permission request params。
+        let params = json!({
+            "sessionId": "019ebc5f-...",
+            "toolCall": {
+                "toolCallId": "call_cdP26WY56b6i5Mvnav2jxFx1",
+                "kind": "edit",
+                "status": "pending",
+                "title": "Edit /tmp/acp-probe-codex/acp-probe-test.txt",
+                "content": [{ "type": "diff", "path": "/tmp/acp-probe-codex/acp-probe-test.txt", "newText": "hello from acp probe\n" }],
+                "locations": [{ "path": "/tmp/acp-probe-codex/acp-probe-test.txt" }],
+                "rawInput": { "call_id": "call_cdP26WY56b6i5Mvnav2jxFx1" }
+            },
+            "options": [
+                { "optionId": "approved", "name": "Yes", "kind": "allow_once" },
+                { "optionId": "abort", "name": "No, provide feedback", "kind": "reject_once" }
+            ]
+        });
+        assert_eq!(
+            extract_permission_label(&params),
+            Some("Edit /tmp/acp-probe-codex/acp-probe-test.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_permission_label_gemini_real_payload() {
+        // 实测 gemini --acp 2026-06 抓到的真实 permission request params。
+        let params = json!({
+            "toolCall": {
+                "toolCallId": "call_xyz",
+                "status": "pending",
+                "title": "Writing to acp-probe-test.txt",
+                "content": [],
+                "locations": [],
+                "kind": "edit"
+            },
+            "options": [
+                { "optionId": "proceed_always", "kind": "allow_always", "name": "Allow for this session" },
+                { "optionId": "proceed_once", "kind": "allow_once", "name": "Allow" },
+                { "optionId": "cancel", "kind": "reject_once", "name": "Reject" }
+            ]
+        });
+        assert_eq!(
+            extract_permission_label(&params),
+            Some("Writing to acp-probe-test.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_permission_label_qoder_real_payload() {
+        // 实测 qoderclicn --acp 2026-06 抓到的真实 permission request params。
+        let params = json!({
+            "toolCall": {
+                "toolCallId": "call_abc",
+                "status": "pending",
+                "title": "echo probe-ok > /tmp/acp-probe-shell.txt",
+                "content": [],
+                "kind": "execute",
+                "rawInput": {},
+                "_meta": {}
+            },
+            "options": [
+                { "optionId": "proceed_always_and_save", "kind": "allow_always", "name": "Always allow \"echo\"" },
+                { "optionId": "proceed_once", "kind": "allow_once", "name": "Allow" },
+                { "optionId": "cancel", "kind": "reject_once", "name": "Reject" }
+            ]
+        });
+        assert_eq!(
+            extract_permission_label(&params),
+            Some("echo probe-ok > /tmp/acp-probe-shell.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_permission_label_falls_back_to_tool_call_id() {
+        // title / name 都没有时退到 toolCallId（保证一定有 label）。
+        let params = json!({
+            "toolCall": { "toolCallId": "call_deadbeef", "kind": "edit" }
+        });
+        assert_eq!(
+            extract_permission_label(&params),
+            Some("call_deadbeef".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_permission_option_id_picks_by_kind() {
+        // send_permission_response 的"按 kind 选 optionId"核心逻辑的纯函数版。
+        let options = vec![
+            json!({ "optionId": "proceed_always", "kind": "allow_always", "name": "Allow for this session" }),
+            json!({ "optionId": "proceed_once",   "kind": "allow_once",   "name": "Allow" }),
+            json!({ "optionId": "cancel",         "kind": "reject_once",  "name": "Reject" }),
+        ];
+        assert_eq!(
+            pick_option_id(&options, true).as_deref(),
+            Some("proceed_once")
+        );
+        assert_eq!(pick_option_id(&options, false).as_deref(), Some("cancel"));
+    }
+
+    #[test]
+    fn resolve_permission_option_id_codex_approved_abort() {
+        // codex-acp 实测选项：allow 应该选 "approved"，deny 应该选 "abort"。
+        let options = vec![
+            json!({ "optionId": "approved", "kind": "allow_once", "name": "Yes" }),
+            json!({ "optionId": "abort",    "kind": "reject_once", "name": "No, provide feedback" }),
+        ];
+        assert_eq!(pick_option_id(&options, true).as_deref(), Some("approved"));
+        assert_eq!(pick_option_id(&options, false).as_deref(), Some("abort"));
+    }
+
+    #[test]
+    fn resolve_permission_option_id_qoder_proceed_always_and_save() {
+        // qoderclicn 多一个 `allow_always` 变体，但 allow_once 应当优先（最小权限）。
+        let options = vec![
+            json!({ "optionId": "proceed_always_and_save", "kind": "allow_always", "name": "Always allow" }),
+            json!({ "optionId": "proceed_once",             "kind": "allow_once",   "name": "Allow" }),
+            json!({ "optionId": "cancel",                   "kind": "reject_once",  "name": "Reject" }),
+        ];
+        assert_eq!(
+            pick_option_id(&options, true).as_deref(),
+            Some("proceed_once")
+        );
+    }
+
+    #[test]
+    fn resolve_permission_option_id_falls_back_when_no_kind_match() {
+        // 未知 kind 时返回 None，由调用方决定 fallback 字面量。
+        let options = vec![json!({ "optionId": "weird_yes", "kind": "maybe", "name": "Weird" })];
+        assert_eq!(pick_option_id(&options, true), None);
+        assert_eq!(pick_option_id(&options, false), None);
     }
 
     #[test]
@@ -986,17 +1316,6 @@ mod tests {
         let (models, current) = parse_acp_session_models(&result);
         assert_eq!(models, vec!["auto", "gemini-3-flash-preview"]);
         assert_eq!(current.as_deref(), Some("auto"));
-    }
-
-    #[test]
-    fn extracts_permission_tool_name_falls_back_to_title() {
-        let params = json!({
-            "toolCall": { "title": "cc-gateway send_file" }
-        });
-        assert_eq!(
-            extract_permission_label(&params),
-            Some("cc-gateway send_file".to_string())
-        );
     }
 
     fn activity_at_now() -> Arc<StdMutex<Instant>> {

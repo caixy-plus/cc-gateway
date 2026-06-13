@@ -1,9 +1,26 @@
+//! Gateway configuration data models.
+//!
+//! This module defines all structs deserialized from `~/.cc-gateway/config.json`,
+//! including:
+//!
+//! - [`GatewayConfig`]: Top-level configuration (log, agent, platforms, port, permission, WebUI, etc.).
+//! - [`AgentProvider`] and [`AgentConfig`]: Provider enum + runtime configuration for a single provider
+//!   (cli path, default_args, mode, permission).
+//! - [`AgentProfiles`]: `agent.default` + `agent.providers` mapping, corresponding to the agent list
+//!   in WebUI "Settings".
+//! - [`FeishuConfig`] / [`TelegramConfig`] / [`QqConfig`]: Configurations for the three chat platforms.
+//!
+//! By design, "registration info" ([`super::agent_registry`], hardcoded) is separated from "runtime configuration"
+//! (this module, from the user's `config.json`). They are associated via provider id.
+
 use std::collections::BTreeMap;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Per-platform bot settings (`config.json` → `"platforms": { "feishu": … }`).
+/// Configuration set of each chat platform (`config.json` → `"platforms": { "feishu": ... }`).
+///
+/// Each platform has an independent `enabled` flag, which can be enabled in any combination.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlatformsMap {
@@ -12,31 +29,35 @@ pub struct PlatformsMap {
     pub qq: QqConfig,
 }
 
+/// Top-level configuration of the gateway, corresponding to the complete structure deserialized from `~/.cc-gateway/config.json`.
+///
+/// Uses `#[serde(default)]` to ensure no errors on old or missing fields, automatically filling in default values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GatewayConfig {
+    /// Log settings (level, file path, rotation thresholds).
     pub log: LogConfig,
+    /// Agent profiles: default provider + runtime configuration for each provider.
     pub agent: AgentProfiles,
+    /// Three chat platforms (Feishu / Telegram / QQ).
     pub platforms: PlatformsMap,
-    /// Default working directory for gateway sessions.
+    /// Default working directory (used when creating a session and no work_dir is explicitly passed).
     pub default_dir: String,
-    /// Whether to display agent Thinking blocks in output.
+    /// Whether to display the agent's Thinking block in the output.
     pub show_thinking: bool,
+    /// Number of days to retain chat attachments (images/files), cleaned up by background cleaner when expired.
     pub media_retention_days: u64,
-    /// Max agent sessions kept per channel by the background cleaner.
+    /// Maximum number of agent sessions to retain per channel (used by cleaner).
     pub session_retention_per_channel: u64,
+    /// HTTP / WebUI listening port.
     pub port: u16,
-    /// Address to bind the HTTP server to. "127.0.0.1" for localhost only,
-    /// "0.0.0.0" to allow LAN access.
+    /// Listening address: `127.0.0.1` for local only, `0.0.0.0` to expose to LAN.
     pub bind_address: String,
-    /// CIDR allowlist for IP-based access control. When non-empty, only
-    /// requests from matching IP ranges are accepted.
-    /// Example: ["127.0.0.1", "192.168.1.0/24", "10.0.0.0/8"]
+    /// Access IP whitelist (CIDR format); empty means no IP restriction.
     #[serde(default)]
     pub allowed_ips: Vec<String>,
-    /// Token for WebUI access control. When set, the WebUI requires
-    /// `?token=xxx` query param or `Authorization: Bearer xxx` header.
-    /// `None` means token auth is disabled (backwards compatible).
+    /// WebUI access token; if set, WebUI must carry it in `?token=xxx` or `Authorization: Bearer xxx`.
+    /// `None` means token authentication is disabled (backward compatible with old configs).
     #[serde(default)]
     pub webui_token: Option<String>,
 }
@@ -50,6 +71,18 @@ pub struct LogConfig {
     pub max_size_mb: usize,
 }
 
+/// All registered agent providers in the gateway.
+///
+/// Each variant corresponds to a provider adapter layer **compiled into the gateway** (`src/core/agent/<name>.rs`).
+/// To add a new provider, you must:
+///
+/// 1. Add a variant to this enum;
+/// 2. Add a registration entry in `agent_registry::AGENT_PROVIDER_DEFS`;
+/// 3. Add a corresponding branch in [`crate::core::agent::session::AgentRuntime`] in `src/core/agent/session.rs`;
+/// 4. Add a corresponding branch in the `dispatch_agent_backend!` macro.
+///
+/// Serialized format is lowercase id (`claude` / `codex` / `cursor` / `pi` / `opencode` / `kimi`
+/// / `gemini` / `qoder`), which is exactly consistent with the keys of `agent.providers.<id>` in `config.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentProvider {
@@ -61,40 +94,64 @@ pub enum AgentProvider {
     OpenCode,
     Kimi,
     Gemini,
+    Qoder,
 }
 
+/// The actual runtime configuration of a single provider (the final form of `config.json` → `agent.providers.<id>` merged with registry default values).
+///
+/// This is the struct that the `daemon` actually uses to spawn provider child processes. It is complementary to the registry's
+/// [`super::agent_registry::AgentProviderDef`]: the registry describes "what the provider is",
+/// while this struct describes "how the user wants to run it".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentConfig {
+    /// Current provider.
     pub provider: AgentProvider,
+    /// CLI binary path / name (can be overridden by the user in the profile).
     pub cli_path: String,
+    /// Additional CLI arguments at startup (already gateway-level normalized: stripped of flags that are not common across providers).
     pub default_args: String,
+    /// Provider mode (e.g., Claude's `agent` / `plan`, Codex's `auto` / `full-auto`).
     pub mode: String,
+    /// Permission policy: `prompt` / `allow` / `deny`.
     pub permission: String,
 }
 
-/// Per-provider settings under `config.json` → `"agent"`.
+/// The complete form of the `agent` field in `config.json`: `default` + `providers` mapping.
 ///
-/// Canonical JSON: `{ "default": "claude", "providers": { "claude": {…}, … } }`.
-/// Legacy flat keys (`agent.claude`, …) are migrated on load — see `upgrade_config_json`.
+/// `providers` uses the provider id (lowercase) as the key, each key mapping to an [`AgentProviderConfig`].
+/// Old flat formats (`agent.claude`, `agent.codex` ...) will be automatically migrated to `agent.providers.<id>`
+/// by `upgrade_config_json` during configuration loading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentProfiles {
+    /// Default provider id. When a user inputs only `/agent` without specifying a provider in the chat,
+    /// this provider is used to start the session.
     pub default: AgentProvider,
+    /// Runtime configuration map indexed by provider id.
     #[serde(default)]
     pub providers: BTreeMap<String, AgentProviderConfig>,
 }
 
+/// Single provider profile (`config.json` → `agent.providers.<id>`).
+///
+/// All fields are `Option` because **default values are provided by the registry**: only fields explicitly
+/// overridden by the user appear on disk, avoiding hardcoding defaults into every user configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentProviderConfig {
-    /// Whether this provider appears in /agents pickers and can be started.
+    /// Whether this provider appears in the `/agents` list and init wizard;
+    /// if disabled, the gateway will not allow creating sessions for this provider.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// `default_args` input by the user in WebUI Settings (e.g., `--yolo`, `-m auto`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_args: Option<String>,
+    /// Mode explicitly overridden by the user (omitted uses the registry default).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Permission explicitly overridden by the user (omitted uses the registry default;
+    /// automatically mapped to `allow` if `--yolo` is present in `default_args`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
 }
@@ -195,6 +252,7 @@ impl std::fmt::Display for AgentProvider {
             AgentProvider::OpenCode => write!(f, "opencode"),
             AgentProvider::Kimi => write!(f, "kimi"),
             AgentProvider::Gemini => write!(f, "gemini"),
+            AgentProvider::Qoder => write!(f, "qoder"),
         }
     }
 }
@@ -265,6 +323,13 @@ impl AgentConfig {
                 mode: "agent".to_string(),
                 permission: "prompt".to_string(),
             },
+            AgentProvider::Qoder => Self {
+                provider: AgentProvider::Qoder,
+                cli_path: "qoderclicn".to_string(),
+                default_args: String::new(),
+                mode: "agent".to_string(),
+                permission: "prompt".to_string(),
+            },
         }
     }
 
@@ -283,11 +348,10 @@ impl AgentConfig {
     }
 
     pub fn normalized(mut self) -> Self {
-        self.default_args =
-            crate::config::agent_registry::normalize_default_args_for_provider(
-                &self.provider,
-                &self.default_args,
-            );
+        self.default_args = crate::config::agent_registry::normalize_default_args_for_provider(
+            &self.provider,
+            &self.default_args,
+        );
         self
     }
 }
@@ -333,6 +397,7 @@ pub(crate) fn strip_unsupported_default_args(args: &str) -> String {
 }
 
 impl AgentProfiles {
+    /// Manual assembly of profiles (primarily used for testing and constructors like [`default_agent_profiles`]).
     pub(crate) fn from_parts(
         default: AgentProvider,
         providers: BTreeMap<String, AgentProviderConfig>,
@@ -340,17 +405,19 @@ impl AgentProfiles {
         Self { default, providers }
     }
 
-    /// Lookup a provider profile. Call [`crate::config::agent_registry::normalize_profiles`]
-    /// after loading `config.json` so every registered provider id exists.
+    /// Looks up a profile by enum key. Use only after calling [`crate::config::agent_registry::normalize_profiles`],
+    /// otherwise it will return an error due to missing entries.
     pub fn profile_for(&self, provider: &AgentProvider) -> Result<&AgentProviderConfig> {
         self.profile_by_id(&provider.to_string())
     }
 
+    /// Gets a mutable reference by enum key; inserts default profile if it does not exist.
     pub fn profile_mut(&mut self, provider: &AgentProvider) -> &mut AgentProviderConfig {
         let id = provider.to_string();
         self.providers.entry(id).or_default()
     }
 
+    /// Looks up a profile by string ID; returns an error if not found (hinting that the caller should normalize first).
     pub fn profile_by_id(&self, id: &str) -> Result<&AgentProviderConfig> {
         self.providers.get(id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -359,23 +426,32 @@ impl AgentProfiles {
         })
     }
 
+    /// Gets a mutable reference by string ID; inserts default profile if it does not exist.
     pub fn profile_mut_by_id(&mut self, id: &str) -> &mut AgentProviderConfig {
-        self.providers
-            .entry(id.to_string())
-            .or_default()
+        self.providers.entry(id.to_string()).or_default()
     }
 
-    /// Whether a provider is enabled in the current configuration.
+    /// Queries whether a provider is enabled in the current profiles.
     pub fn is_provider_enabled(&self, provider: &AgentProvider) -> bool {
         self.profile_for(provider)
             .map(|profile| profile.enabled)
             .unwrap_or(false)
     }
 
+    /// Calculates the "effective" configuration using the default provider (called internally by WebUI / daemon).
     pub fn effective_config(&self) -> Result<AgentConfig> {
         self.config_for_provider(None)
     }
 
+    /// Calculates the final effective [`AgentConfig`]: registry defaults + user profile overrides + gateway-level normalization.
+    ///
+    /// Order:
+    /// 1. Get the provider's default [`AgentConfig`] (like `cli_path` / `mode`, etc.) from the registry;
+    /// 2. Override with the user's explicitly specified `permission` / `mode` from the profile;
+    /// 3. Override with the user's explicitly specified `default_args` from the profile, and resolve `--yolo` semantics:
+    ///    if the user has NOT explicitly specified `permission` but `default_args` contains `--yolo`,
+    ///    automatically set `permission` to `allow`;
+    /// 4. Finally, call `normalized()` to strip flags not supported across providers according to the provider's `default_args_policy`.
     pub fn config_for_provider(&self, provider: Option<AgentProvider>) -> Result<AgentConfig> {
         let selected = provider.unwrap_or_else(|| self.default.clone());
         let mut config = AgentConfig::default_for_provider(selected.clone());
@@ -398,11 +474,19 @@ impl AgentProfiles {
     }
 }
 
-/// Gateway-level aliases in `default_args` that must not be forwarded to provider CLIs.
+/// Gateway-level `default_args` semantics: strip "gateway-exclusive aliases" (`--yolo`) from arguments passed
+/// to the provider CLI, and record the semantics (whether "auto-approve tool execution" is enabled).
 struct GatewayDefaultArgsSemantics {
     yolo: bool,
 }
 
+/// Parses gateway-exclusive aliases written by the user in `default_args`, returning the "stripped CLI arguments"
+/// and the "semantic structure".
+///
+/// - `--yolo` is the gateway's unified alias for "auto-approve tool execution". Different providers implement this
+///   differently behind the scenes (Claude uses `permission: allow`, Cursor uses `--yolo`, Codex uses `mode = auto`, etc.),
+///   so it is not directly forwarded here. Instead, it is translated into `permission: allow` for the provider
+///   backend to map on its own.
 fn parse_gateway_default_args(args: &str) -> (String, GatewayDefaultArgsSemantics) {
     let mut yolo = false;
     let kept: Vec<&str> = args
@@ -425,7 +509,9 @@ impl GatewayConfig {
 
     #[cfg(test)]
     pub fn effective_agent_config(&self) -> AgentConfig {
-        self.agent.effective_config().expect("normalized agent profiles")
+        self.agent
+            .effective_config()
+            .expect("normalized agent profiles")
     }
 
     /// In-memory defaults used by daemon / WebUI when `config.json` does not
@@ -500,9 +586,8 @@ mod pi_cli_args_tests {
     #[test]
     fn pi_normalized_strips_no_session_from_profile_default_args() {
         let mut profiles = AgentProfiles::default();
-        profiles
-            .profile_mut(&AgentProvider::Pi)
-            .default_args = Some("--no-session --provider openai".to_string());
+        profiles.profile_mut(&AgentProvider::Pi).default_args =
+            Some("--no-session --provider openai".to_string());
         profiles.profile_mut(&AgentProvider::Pi).enabled = true;
         let cfg = profiles
             .config_for_provider(Some(AgentProvider::Pi))

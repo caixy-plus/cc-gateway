@@ -330,8 +330,10 @@ pub fn resolve_acp_empty_turn_message(result: &Value, stderr: &str, fallback: &s
         return msg;
     }
     if let Some(stop) = result.get("stopReason").and_then(|v| v.as_str()) {
-        if matches!(stop, "refusal" | "cancelled" | "max_tokens" | "max_turn_requests")
-            || stop.contains("error")
+        if matches!(
+            stop,
+            "refusal" | "cancelled" | "max_tokens" | "max_turn_requests"
+        ) || stop.contains("error")
         {
             return stop.to_string();
         }
@@ -368,8 +370,7 @@ fn friendly_provider_api_error(raw: &str) -> String {
     {
         return crate::t!("agent.kimi_subscription_required").to_string();
     }
-    raw
-        .split("provider.api_error:")
+    raw.split("provider.api_error:")
         .nth(1)
         .map(str::trim)
         .filter(|s| !s.is_empty())

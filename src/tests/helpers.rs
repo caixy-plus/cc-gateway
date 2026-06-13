@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use anyhow::Result;
 use crate::config::model::AgentProfiles;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
+use anyhow::Result;
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -26,10 +26,7 @@ pub(crate) async fn wait_for_gateway_history(path: &Path) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    anyhow::bail!(
-        "gateway history file should exist: {}",
-        path.display()
-    )
+    anyhow::bail!("gateway history file should exist: {}", path.display())
 }
 
 /// Wait until the background history recorder has written the JSONL file.

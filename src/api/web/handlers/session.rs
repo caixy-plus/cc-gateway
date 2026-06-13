@@ -20,12 +20,15 @@ use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
 use crate::session::channel_command::{
     ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
 };
+use crate::session::channel_manager::ActiveAgentRuntime;
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::chat_flow;
-use crate::session::channel_manager::ActiveAgentRuntime;
 use crate::web::state::{broadcast_event, EVENT_BUS};
 
-async fn resume_webui_agent(session_id: &str, state: &AppState) -> anyhow::Result<ActiveAgentRuntime> {
+async fn resume_webui_agent(
+    session_id: &str,
+    state: &AppState,
+) -> anyhow::Result<ActiveAgentRuntime> {
     GLOBAL_CHANNEL_SESSIONS
         .resume_agent_session_for_platform(
             session_id,
@@ -395,42 +398,40 @@ pub async fn handle_send_message(
     let mut active = match GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id)
     {
         Some(a) => a,
-        None => {
-            match resume_webui_agent(&session_id, &state).await {
-                Ok(active) => {
-                    let session = active.agent_session.clone();
-                    let controller = active.controller.clone();
-                    GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, active.clone());
-                    if !GLOBAL_CHANNEL_SESSIONS
-                        .has_webui_poll_handle(&channel_id, &session.id)
-                        .await
-                    {
-                        let abort_handle = spawn_webui_poller_task(
-                            channel_id.clone(),
-                            session.id.clone(),
-                            controller.clone(),
-                        );
-                        GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(
-                            &channel_id,
-                            &session.id,
-                            abort_handle,
-                        );
-                    }
-                    active
-                }
-                Err(e) => {
-                    let provider = GLOBAL_CHANNEL_SESSIONS
-                        .get_agent_session(&session_id)
-                        .map(|s| s.stored_provider())
-                        .unwrap_or(state.agent_settings.default.clone());
-                    let body = json_error(
-                        "webui.resume_failed",
-                        crate::command::agents::failed_start_agent_message(&provider, e),
+        None => match resume_webui_agent(&session_id, &state).await {
+            Ok(active) => {
+                let session = active.agent_session.clone();
+                let controller = active.controller.clone();
+                GLOBAL_CHANNEL_SESSIONS.set_webui_active_agent(&channel_id, active.clone());
+                if !GLOBAL_CHANNEL_SESSIONS
+                    .has_webui_poll_handle(&channel_id, &session.id)
+                    .await
+                {
+                    let abort_handle = spawn_webui_poller_task(
+                        channel_id.clone(),
+                        session.id.clone(),
+                        controller.clone(),
                     );
-                    return (StatusCode::NOT_FOUND, body.to_string());
+                    GLOBAL_CHANNEL_SESSIONS.set_webui_poll_handle(
+                        &channel_id,
+                        &session.id,
+                        abort_handle,
+                    );
                 }
+                active
             }
-        }
+            Err(e) => {
+                let provider = GLOBAL_CHANNEL_SESSIONS
+                    .get_agent_session(&session_id)
+                    .map(|s| s.stored_provider())
+                    .unwrap_or(state.agent_settings.default.clone());
+                let body = json_error(
+                    "webui.resume_failed",
+                    crate::command::agents::failed_start_agent_message(&provider, e),
+                );
+                return (StatusCode::NOT_FOUND, body.to_string());
+            }
+        },
     };
 
     // Guard: if the controller's session died since we last checked, try to restart it.
@@ -582,23 +583,23 @@ pub async fn handle_upload_file(
     }
 
     let Some(bytes) = file_bytes else {
-        let body = json_error("webui.upload_missing_file", crate::t!("webui.upload_missing_file"));
+        let body = json_error(
+            "webui.upload_missing_file",
+            crate::t!("webui.upload_missing_file"),
+        );
         return (StatusCode::BAD_REQUEST, body.to_string());
     };
 
-    let saved = match crate::web::files::save_upload_for_webui(
-        &bytes,
-        &file_name,
-        content_type.as_deref(),
-    )
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            let body = json_error("webui.upload_failed", e.to_string());
-            return (StatusCode::BAD_REQUEST, body.to_string());
-        }
-    };
+    let saved =
+        match crate::web::files::save_upload_for_webui(&bytes, &file_name, content_type.as_deref())
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                let body = json_error("webui.upload_failed", e.to_string());
+                return (StatusCode::BAD_REQUEST, body.to_string());
+            }
+        };
 
     let media_key = match crate::web::files::media_storage_basename(&saved.path) {
         Ok(k) => k,
@@ -630,7 +631,8 @@ pub async fn handle_upload_file(
 
     let mut forwarded = false;
     if !agent_text.trim().is_empty() {
-        if let Some(active) = GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id)
+        if let Some(active) =
+            GLOBAL_CHANNEL_SESSIONS.get_webui_active_agent(&channel_id, &session_id)
         {
             if super::webui_outcome::forward_text_to_agent(
                 &channel_id,

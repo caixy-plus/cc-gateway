@@ -248,9 +248,10 @@ mod tests {
     }
 
     #[test]
-    fn extracts_permission_tool_name_prefers_toolcall_name() {
+    fn extracts_permission_label_when_only_toolcall_name() {
+        // Cursor 扩展历史路径：只给 `name` 没给 `title` 时仍能用 `name` 兜底。
         let params = json!({
-            "toolCall": { "name": "mcp__cc-gateway__send_file", "title": "Send file" }
+            "toolCall": { "name": "mcp__cc-gateway__send_file" }
         });
         assert_eq!(
             extract_permission_label(&params),

@@ -225,6 +225,7 @@ pub fn stop_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::OpenCode => t!("builtin.stop_sent_opencode").to_string(),
         AgentProvider::Kimi => t!("builtin.stop_sent_kimi").to_string(),
         AgentProvider::Gemini => t!("builtin.stop_sent_gemini").to_string(),
+        AgentProvider::Qoder => t!("builtin.stop_sent_qoder").to_string(),
     }
 }
 
@@ -238,6 +239,7 @@ pub fn esc_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::OpenCode => t!("builtin.esc_sent_opencode").to_string(),
         AgentProvider::Kimi => t!("builtin.esc_sent_kimi").to_string(),
         AgentProvider::Gemini => t!("builtin.esc_sent_gemini").to_string(),
+        AgentProvider::Qoder => t!("builtin.esc_sent_qoder").to_string(),
     }
 }
 
@@ -251,6 +253,7 @@ pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> Stri
         AgentProvider::OpenCode => t_fmt!("builtin.esc_with_prompt_sent_opencode", MSG = msg),
         AgentProvider::Kimi => t_fmt!("builtin.esc_with_prompt_sent_kimi", MSG = msg),
         AgentProvider::Gemini => t_fmt!("builtin.esc_with_prompt_sent_gemini", MSG = msg),
+        AgentProvider::Qoder => t_fmt!("builtin.esc_with_prompt_sent_qoder", MSG = msg),
     }
 }
 

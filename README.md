@@ -2,13 +2,13 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Gateway for controlling local agent CLIs (Claude Code, Codex, Cursor, Pi, OpenCode, Kimi, Gemini, …) via **Feishu/Lark**, **Telegram**, **QQ**, and **WebUI**.
+Gateway for controlling local agent CLIs (Claude Code, Codex, Cursor, Pi, OpenCode, Kimi, Gemini, Qoder, …) via **Feishu/Lark**, **Telegram**, **QQ**, and **WebUI**.
 
 ## Features
 
 - **Remote control** — Use chat bots on your phone to drive agents running on your machine
 - **Multi-platform** — Feishu/Lark, Telegram, and QQ official bots; enable any combination
-- **Multi-provider** — Pluggable agent backends (`claude`, `codex`, `cursor`, `pi`, `opencode`, `kimi`, `gemini`, …); pick per chat with `/agents`
+- **Multi-provider** — Pluggable agent backends (`claude`, `codex`, `cursor`, `pi`, `opencode`, `kimi`, `gemini`, `qoder`, …); pick per chat with `/agents`
 - **Per-chat isolation** — Each chat/channel gets its own agent subprocess; messages never mix across chats
 - **Pairing** — Optional WebUI approval for new chats before they can use the bot (recommended)
 - **WebUI** — Browser dashboard for sessions, pairing, settings, and live events
@@ -120,7 +120,7 @@ Available in WebUI and connected bots (after pairing if enabled):
 | `/show-thinking` / `/hide-thinking` | Toggle Thinking output |
 | `/stop` / `/clear` / `/status` / `/esc` | Control active generation (where supported) |
 
-**Providers:** `claude`, `codex`, `cursor`, `pi`, `opencode`, `kimi`, `gemini` — run `/agents` to see enabled profiles.
+**Providers:** `claude`, `codex`, `cursor`, `pi`, `opencode`, `kimi`, `gemini`, `qoder` — run `/agents` to see enabled profiles.
 
 ### Session mode
 
@@ -147,7 +147,7 @@ User (QQ)           <--->  cc-gateway daemon
 User (WebUI)        <--->  cc-gateway daemon
 ```
 
-The gateway spawns provider CLIs as child processes and bridges chat traffic to them (e.g. Claude **stream-json** on stdio, Codex/Cursor/OpenCode/Kimi/Gemini **ACP**, Pi **JSON-RPC**). See [CLAUDE.md](CLAUDE.md) for protocol details.
+The gateway spawns provider CLIs as child processes and bridges chat traffic to them (e.g. Claude **stream-json** on stdio, Codex/Cursor/OpenCode/Kimi/Gemini/Qoder **ACP**, Pi **JSON-RPC**). See [CLAUDE.md](CLAUDE.md) for protocol details.
 
 ## License
 

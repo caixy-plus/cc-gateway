@@ -102,10 +102,8 @@ pub(crate) async fn deliver_chat_outcome(
             );
             broadcast_slash_user(session_id, user_message);
             broadcast_assistant_reply(session_id, &content);
-            let hint = crate::web::interactive::model_picker_title_line(
-                &provider,
-                current.as_deref(),
-            );
+            let hint =
+                crate::web::interactive::model_picker_title_line(&provider, current.as_deref());
             reply_response(&hint)
         }
         ChatCommandOutcome::History { sessions } => {

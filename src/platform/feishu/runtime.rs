@@ -119,7 +119,11 @@ impl FeishuPlatform {
 
         let (content, _image_keys) = extract_post_content(&content_raw);
 
-        let receive_id_type = if chat_type == "p2p" { "open_id" } else { "chat_id" };
+        let receive_id_type = if chat_type == "p2p" {
+            "open_id"
+        } else {
+            "chat_id"
+        };
         let receive_id = if chat_type == "p2p" {
             sender_open_id.clone()
         } else {
@@ -944,9 +948,7 @@ impl FeishuPlatform {
         open_message_id: Option<&str>,
         action: AgentHistoryAction,
     ) {
-        let runtime = self
-            .get_channel(chat_id, receive_id_type, receive_id)
-            .await;
+        let runtime = self.get_channel(chat_id, receive_id_type, receive_id).await;
         let req = AgentHistoryRequest {
             channel_id: runtime.channel_session.id.clone(),
             title: format!("Feishu {}", chat_id),
@@ -987,9 +989,11 @@ impl FeishuPlatform {
                 };
                 (title, message, true)
             }
-            AgentHistoryOutcome::Deleted { message, success } => {
-                (crate::t!("feishu.card_session_deleted_title"), message, success)
-            }
+            AgentHistoryOutcome::Deleted { message, success } => (
+                crate::t!("feishu.card_session_deleted_title"),
+                message,
+                success,
+            ),
             AgentHistoryOutcome::Error { message } => {
                 let title = match action {
                     AgentHistoryAction::StartNew { .. } => {

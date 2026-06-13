@@ -1,4 +1,4 @@
-//! QQ 开放平台 Bot API v2 — access token, gateway, send message.
+//! QQ Open Platform Bot API v2 — access token, gateway, send message.
 
 use anyhow::{Context, Result};
 use base64::Engine;

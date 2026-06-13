@@ -72,6 +72,7 @@ pub async fn list_models_via_cli(
         AgentProvider::Codex => Ok(vec![]),
         AgentProvider::Kimi => Ok(vec![]),
         AgentProvider::Gemini => Ok(vec![]),
+        AgentProvider::Qoder => Ok(vec![]),
     }
 }
 
@@ -221,10 +222,7 @@ pub fn resolve_model_arg(arg: &str, options: &[String]) -> Result<String> {
             return Ok(arg.to_string());
         }
     }
-    anyhow::bail!(
-        "{}",
-        crate::t_fmt!("models.switch_failed", ERR = arg)
-    )
+    anyhow::bail!("{}", crate::t_fmt!("models.switch_failed", ERR = arg))
 }
 
 #[cfg(test)]

@@ -79,9 +79,7 @@ fn make_work_dir(env: &TestEnv) -> String {
     dir.display().to_string()
 }
 
-async fn recv_with_timeout(
-    rx: &mut mpsc::UnboundedReceiver<AgentEvent>,
-) -> Option<AgentEvent> {
+async fn recv_with_timeout(rx: &mut mpsc::UnboundedReceiver<AgentEvent>) -> Option<AgentEvent> {
     tokio::time::timeout(Duration::from_secs(10), rx.recv())
         .await
         .ok()

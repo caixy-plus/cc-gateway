@@ -155,7 +155,10 @@ fn resolve_agent_menu_choice(choice: &str) -> Option<AgentProvider> {
 fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) -> Result<()> {
     println!("\n{}", t!("wizard.bot_section_title"));
     println!("{}", t!("wizard.bot_section_hint"));
-    for (i, def) in crate::config::platform_registry::PLATFORM_DEFS.iter().enumerate() {
+    for (i, def) in crate::config::platform_registry::PLATFORM_DEFS
+        .iter()
+        .enumerate()
+    {
         println!("  {}. {}", i + 1, def.id);
     }
     println!("  {}", t!("wizard.opt_skip"));
@@ -275,13 +278,55 @@ mod tests {
         let config = GatewayConfig::runtime_defaults();
 
         use crate::config::model::AgentProvider;
-        assert!(!config.agent.profile_for(&AgentProvider::Claude).unwrap().enabled);
-        assert!(!config.agent.profile_for(&AgentProvider::Codex).unwrap().enabled);
-        assert!(!config.agent.profile_for(&AgentProvider::Cursor).unwrap().enabled);
-        assert!(!config.agent.profile_for(&AgentProvider::Pi).unwrap().enabled);
-        assert!(!config.agent.profile_for(&AgentProvider::OpenCode).unwrap().enabled);
-        assert!(!config.agent.profile_for(&AgentProvider::Kimi).unwrap().enabled);
-        assert!(!config.agent.profile_for(&AgentProvider::Gemini).unwrap().enabled);
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::Claude)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::Codex)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::Cursor)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::Pi)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::OpenCode)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::Kimi)
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !config
+                .agent
+                .profile_for(&AgentProvider::Gemini)
+                .unwrap()
+                .enabled
+        );
         assert!(!config.platforms.feishu.enabled);
         assert!(!config.platforms.telegram.enabled);
         assert!(!config.platforms.qq.enabled);

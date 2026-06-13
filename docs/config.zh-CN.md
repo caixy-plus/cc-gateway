@@ -13,16 +13,18 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 | 区块 | 作用 |
 |------|------|
 | `log` | 守护进程日志级别、路径、轮转 |
-| `agent` | `default` 默认 provider id + `providers` 映射（每个**已注册** id 一条：`claude`、`codex`、`cursor`、`opencode`、`kimi`、`gemini`、`pi` …） |
+| `agent` | `default` 默认 provider id + `providers` 映射（每个**已注册** id 一条：`claude`、`codex`、`cursor`、`opencode`、`kimi`、`gemini`、`qoder`、`pi` …） |
 | `platforms` | 聊天平台（`feishu`、`telegram`、`qq`）——**不要**再写在顶层 |
 | `default_dir`、`show_thinking`、`media_retention_days`、`session_retention_per_channel` | 会话 / UI 默认项 |
 | `port`、`bind_address`、`allowed_ips`、`webui_token` | HTTP / WebUI |
 
 `agent` 含 `default` 与 `providers`（按 provider id 索引的对象）。旧版平铺的 `agent.<id>` 会在加载时迁入 `agent.providers`。旧文件首次加载后，目录里列出的每个 provider id 都会出现在磁盘上，即使你未启用该 provider。
 
-各 profile **不保存** CLI 可执行文件名（由网关 [agent 注册表](adding-agent-provider.md) 解析为 `claude`、`codex-acp`、`agent`、`pi`、`opencode`、`kimi`、`gemini`）；profile 仅含 `enabled`、`default_args`、`mode`、`permission`。
+各 profile **不保存** CLI 可执行文件名（由网关 [agent 注册表](adding-agent-provider.md) 解析为 `claude`、`codex-acp`、`agent`、`pi`、`opencode`、`kimi`、`gemini`、`qoderclicn`）；profile 仅含 `enabled`、`default_args`、`mode`、`permission`。
 
 **Codex** 使用 Zed 的 ACP 适配器，而非裸 `codex` CLI：`npm i -g @zed-industries/codex-acp`。登录与 Codex CLI 共用（`codex login` 或 `OPENAI_API_KEY`）。
+
+**Qoder** 会以 `qoderclicn --acp` 启动。认证在 `qoderclicn login` 后缓存，或通过守护进程环境变量 `QODER_PERSONAL_ACCESS_TOKEN` 设置。
 
 ## 示例
 
@@ -60,6 +62,9 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
         "enabled": false
       },
       "gemini": {
+        "enabled": false
+      },
+      "qoder": {
         "enabled": false
       }
     }
@@ -144,7 +149,7 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 | `mode` | string? | 模式（省略则用注册表默认） |
 | `permission` | string? | `prompt` / `allow` / `deny`（省略则用注册表默认） |
 
-CLI 可执行文件名**不在**此配置；由 agent 注册表解析（`claude`、`codex-acp`、`agent`、`pi`、`opencode`、`kimi`、`gemini`）。
+CLI 可执行文件名**不在**此配置；由 agent 注册表解析（`claude`、`codex-acp`、`agent`、`pi`、`opencode`、`kimi`、`gemini`、`qoderclicn`）。
 
 会话级覆盖：`/agent [provider] <额外参数>`。
 

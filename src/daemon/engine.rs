@@ -1,3 +1,13 @@
+//! Main daemon engine ([`DaemonEngine`]).
+//!
+//! Spawned by the `cc-gateway _daemon` subcommand ([`crate::daemon::run`]), it is responsible for:
+//!
+//! 1. Starting background tasks such as the log cleaner and history recorder;
+//! 2. Initializing the SQLite database and restoring channels, sessions, and pairing states from disk;
+//! 3. Starting the chat platforms enabled by the user (Feishu, Telegram, QQ);
+//! 4. Starting the HTTP and WebUI server (binding to a singleton port to ensure only one daemon instance runs);
+//! 5. Waiting for `SIGTERM`, `SIGINT`, or a "critical component crash" signal to gracefully shut down all platforms.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -9,12 +19,19 @@ use tracing::{error, info};
 use crate::config::model::GatewayConfig;
 use crate::config::platform_registry;
 
+/// Main daemon engine struct.
+///
+/// The engine itself only holds the configuration and configuration file path. All runtime states
+/// (channels, sessions, and pairings) are stored in global singletons ([`crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS`]
+/// and [`crate::session::pairing::GLOBAL_PAIRING_MANAGER`]) to facilitate cross-platform and HTTP access.
 pub struct DaemonEngine {
     config: GatewayConfig,
+    /// Configuration file path (passed to the WebUI to allow the user to edit it directly in Settings).
     config_path: Option<PathBuf>,
 }
 
 impl DaemonEngine {
+    /// Constructor without a `config_path` (preserved for tests and legacy callers).
     #[allow(dead_code)]
     pub fn new(config: GatewayConfig) -> Self {
         Self {
@@ -23,6 +40,7 @@ impl DaemonEngine {
         }
     }
 
+    /// Constructor for production: includes `config_path` to facilitate WebUI read/write operations on the same file.
     pub fn new_with_config_path(config: GatewayConfig, config_path: Option<PathBuf>) -> Self {
         Self {
             config,
@@ -30,7 +48,13 @@ impl DaemonEngine {
         }
     }
 
+    /// Starts the daemon engine.
+    ///
+    /// The `listener` is the singleton TCP port pre-bound by [`super::daemon::run`] to guarantee
+    /// that only one daemon runs on the machine (binding will fail if the port is already in use).
     pub async fn run(self, listener: tokio::net::TcpListener) -> Result<()> {
+        // 1. Start the background log cleaner: rotates logs based on `log.max_lines` and `log.max_size_mb`,
+        //    and clears old sessions and attachments according to `media_retention_days` and `session_retention_per_channel`.
         let log_path = shellexpand::tilde(&self.config.log.file).to_string();
         crate::daemon::cleaner::start_background_task(
             log_path,
@@ -42,30 +66,36 @@ impl DaemonEngine {
             ),
         );
 
-        // Start history recorder for WebUI sessions
+        // 2. Start the WebUI session history recorder (subscribes to `EVENT_BUS` and writes events to
+        //    `~/.cc-gateway/history/{session_id}.jsonl`).
         crate::history::recorder::start_recorder();
 
-        // Initialize SQLite database and restore persisted sessions
+        // 3. Initialize the SQLite database and restore previously persisted channel, session,
+        //    and pairing states from disk. This ensures the session list remains visible in the WebUI after a daemon restart.
         if let Err(e) = crate::db::init_schema() {
             error!("Failed to initialize session database: {}", e);
         }
         crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS.load_from_db();
         crate::session::pairing::GLOBAL_PAIRING_MANAGER.load_from_db();
+        // Synchronize the `require_pairing` flag from the config to the global pairing manager.
         platform_registry::apply_pairing_flags_from_config(&self.config);
 
+        // 4. Start the WebUI file delivery listener (used to deliver "cards/keyboards" for directory listings like `/api/cmd/ll`).
         crate::web::files::spawn_webui_deliver_listener();
 
-        let platforms = platform_registry::start_enabled_platforms(&self.config)
-            .unwrap_or_else(|e| {
+        // 5. Start all enabled chat platforms (concurrently).
+        let platforms =
+            platform_registry::start_enabled_platforms(&self.config).unwrap_or_else(|e| {
                 error!("Failed to start platforms: {e}");
                 Vec::new()
             });
 
-        // Shutdown signal: used when a critical component (HTTP server) fails,
-        // so the daemon exits cleanly instead of becoming a zombie.
+        // 6. Shutdown notification signal in case a critical component crashes (e.g., if the HTTP server port is
+        //    preempted, the daemon should not become a zombie process).
         let shutdown_notify = Arc::new(Notify::new());
 
-        // Start HTTP server on the singleton port
+        // 7. Start the HTTP and WebUI server (bound to the singleton port).
+
         let app =
             crate::web::server::create_app_with_config_path(&self.config, self.config_path.clone());
         let shutdown_for_server = shutdown_notify.clone();

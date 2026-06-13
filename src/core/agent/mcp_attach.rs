@@ -222,6 +222,10 @@ mod tests {
             ProviderMcpSupport::AcpSession
         );
         assert_eq!(
+            provider_mcp_support(AgentProvider::Qoder),
+            ProviderMcpSupport::AcpSession
+        );
+        assert_eq!(
             provider_mcp_support(AgentProvider::Pi),
             ProviderMcpSupport::ProjectMcpJson
         );

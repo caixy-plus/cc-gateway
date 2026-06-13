@@ -1,8 +1,21 @@
+//! `cc-gateway` binary entry point.
+//!
+//! This file is only responsible for two things:
+//!
+//! 1. Parsing command line subcommands using `clap`;
+//! 2. Routing each subcommand to the corresponding implementation in the [`cc_gateway`] library (see [`lib.rs`](../lib.rs)).
+//!
+//! **All business logic is located in the `cc_gateway` library**, keeping `main.rs` as a thin shell. This allows
+//! integration tests to import the library directly, and simplifies future Rust API reuse (e.g., embedding into other tools).
+
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
-#[derive(Parser)]
+/// Top-level command line arguments.
+///
+/// If no subcommand is provided, it shows help (`--help`) and exits with 0.
+#[derive(Parser, Debug)]
 #[command(name = "cc-gateway")]
 #[command(
     about = "Gateway for controlling local agent CLIs via Feishu/Lark, Telegram, QQ, and WebUI"
@@ -13,83 +26,89 @@ struct Args {
     command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
+/// All subcommands.
+///
+/// `Start` / `Stop` / `Restart` / `Log` / `Status` / `Enable` / `Disable` are user-facing
+/// daemon operations; `Init` is the initial configuration wizard; `Webui` / `WebuiToken` are WebUI related;
+/// `Update` / `Uninstall` are maintenance commands; `Daemon` / `McpServer` are **internal** subcommands
+/// (annotated with `hide = true`, automatically invoked when `start()` spawns the daemon process).
+#[derive(Subcommand, Debug)]
 enum Commands {
-    /// Start the gateway daemon
+    /// Start the gateway daemon process (forks a detached child process, current process exits).
     Start {
-        /// Config file path
+        /// Configuration file path (defaults to `~/.cc-gateway/config.json` if omitted).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Stop the gateway daemon
+    /// Gracefully stop the daemon process (sends SIGTERM, waits for child process exit).
     Stop,
-    /// Restart the gateway daemon
+    /// Restart the daemon process (stops then starts).
     Restart {
-        /// Config file path
+        /// Configuration file path.
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// View daemon logs
+    /// View the daemon process logs.
     Log {
-        /// Follow log output
+        /// Follow log output (equivalent to `tail -f`).
         #[arg(short, long)]
         follow: bool,
-        /// Number of lines to show
+        /// Number of lines to display initially.
         #[arg(short = 'n', long, default_value = "100")]
         lines: usize,
     },
-    /// Show daemon status
+    /// Display the daemon process status (PID, port, active status).
     Status,
-    /// Enable auto-start on boot
+    /// Enable autostart on system boot (launchd / systemd / Task Scheduler).
     Enable,
-    /// Disable auto-start on boot
+    /// Disable autostart on system boot.
     Disable,
-    /// Initialize configuration interactively
+    /// Interactively initialize configuration (`~/.cc-gateway/config.json`).
     Init,
-    /// Open WebUI in the default browser (starts daemon if not running)
+    /// Open the WebUI in the default browser; automatically starts the daemon if it's not running.
     Webui {
-        /// Config file path
+        /// Configuration file path.
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Show or refresh the WebUI access token
+    /// Display the WebUI access token; `--refresh` generates a new token (invalidates the old one).
     WebuiToken {
-        /// Generate a new token (invalidates the old one)
+        /// Generate a new token (invalidates the old one).
         #[arg(short, long)]
         refresh: bool,
     },
-    /// Check for updates and optionally install the latest release
+    /// Check for updates and optionally install the latest version (pulls from GitHub Releases).
     Update {
-        /// Only check, do not download or install
+        /// Check only; do not download or install.
         #[arg(long)]
         check: bool,
-        /// Force update even if already on the latest version
+        /// Force update (even if already on the latest version).
         #[arg(short, long)]
         force: bool,
-        /// Install without prompting for confirmation
+        /// Do not prompt for confirmation during installation.
         #[arg(short = 'y', long)]
         yes: bool,
-        /// Config file path used when restarting after update
+        /// Configuration file path used to restart the daemon after updating.
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Uninstall cc-gateway (binary, auto-start, PATH entry, and data)
+    /// Uninstall cc-gateway (binary, autostart, PATH, and data directory).
     Uninstall {
-        /// Skip the confirmation prompt
+        /// Do not prompt for confirmation.
         #[arg(short = 'y', long)]
         yes: bool,
-        /// Keep the data directory (~/.cc-gateway) instead of deleting it
+        /// Keep the data directory (`~/.cc-gateway`) and do not delete it.
         #[arg(long)]
         keep_data: bool,
     },
-    /// Internal: run the daemon engine (do not use directly)
+    /// Internal: Run the daemon engine (do not invoke directly; spawned by `start()`).
     #[command(hide = true, name = "_daemon")]
     Daemon {
-        /// Config file path
+        /// Configuration file path.
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Internal: run MCP server for Claude Code (do not use directly)
+    /// Run the MCP server for Claude Code (do not invoke directly).
     #[command(hide = true, name = "_mcp-server")]
     McpServer,
 }
@@ -98,10 +117,12 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let Some(command) = args.command else {
+        // Show help if no subcommand is provided (equivalent to `--help`), exit 0.
         Args::command().print_help()?;
         return Ok(());
     };
 
+    // Initialize i18n (sets current language based on user locale).
     cc_gateway::i18n::init();
 
     match command {
@@ -115,6 +136,7 @@ async fn main() -> Result<()> {
             cc_gateway::daemon::restart(config).await?;
         }
         Commands::Daemon { config } => {
+            // Spawned by `start()` inside the daemon fork/exec wrapper to run the main daemon loop.
             cc_gateway::daemon::run(config).await?;
         }
         Commands::Log { follow, lines } => {
@@ -130,6 +152,7 @@ async fn main() -> Result<()> {
             cc_gateway::daemon::disable().await?;
         }
         Commands::Init => {
+            // Interactive configuration wizard (synchronous call).
             cc_gateway::config::wizard::run_init_config()?;
         }
         Commands::Webui { config } => {
@@ -150,6 +173,7 @@ async fn main() -> Result<()> {
             cc_gateway::uninstall::run(yes, keep_data)?;
         }
         Commands::McpServer => {
+            // Internal command: Runs as a stdio MCP server for Claude Code mounting.
             cc_gateway::runtime::mcp_server::run_mcp_server().await?;
         }
     }

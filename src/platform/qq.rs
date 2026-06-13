@@ -1,4 +1,4 @@
-//! QQ 开放平台官方机器人（WebSocket Gateway + OpenAPI v2）。
+//! QQ Open Platform official bot integration (WebSocket Gateway + OpenAPI v2).
 
 mod api;
 mod ws;

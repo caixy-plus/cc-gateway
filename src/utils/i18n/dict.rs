@@ -619,6 +619,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "ESC sent — current generation cancelled via ACP.",
             Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
         },
+        "builtin.esc_sent_qoder" => match lang {
+            Language::En => "ESC sent — current generation cancelled via ACP.",
+            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
+        },
         "builtin.esc_already_idle" => match lang {
             Language::En => "Agent is idle with no queued messages.",
             Language::ZhCN => "智能体已就绪，无排队消息。",
@@ -659,6 +663,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Message forwarded: {MSG}",
             Language::ZhCN => "消息已转发：{MSG}",
         },
+        "builtin.esc_with_prompt_sent_qoder" => match lang {
+            Language::En => "Message forwarded: {MSG}",
+            Language::ZhCN => "消息已转发：{MSG}",
+        },
         "builtin.failed_esc" => match lang {
             Language::En => "Failed to send ESC: {ERR}",
             Language::ZhCN => "发送 ESC 失败: {ERR}",
@@ -692,6 +700,10 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
         },
         "builtin.stop_sent_gemini" => match lang {
+            Language::En => "Stop sent — current generation cancelled via ACP.",
+            Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
+        },
+        "builtin.stop_sent_qoder" => match lang {
             Language::En => "Stop sent — current generation cancelled via ACP.",
             Language::ZhCN => "Stop 已发送 — 已通过 ACP 取消当前输出。",
         },
@@ -1293,6 +1305,10 @@ pub fn t(key: &str) -> &str {
         "gemini.session_resume_failed" => match lang {
             Language::En => "Failed to restore Gemini session ({ID}): {ERR}. Use /agent to start a new session if needed.",
             Language::ZhCN => "无法恢复 Gemini 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
+        },
+        "qoder.session_resume_failed" => match lang {
+            Language::En => "Failed to restore Qoder session ({ID}): {ERR}. Use /agent to start a new session if needed.",
+            Language::ZhCN => "无法恢复 Qoder 会话（{ID}）：{ERR}。如需新会话请使用 /agent。",
         },
         "pi.session_resume_failed" => match lang {
             Language::En => "Failed to restore Pi session ({PATH}): {ERR}. Use /agent to start a new session if needed.",
