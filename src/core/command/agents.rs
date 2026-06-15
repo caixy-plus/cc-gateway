@@ -81,6 +81,11 @@ pub fn provider_supports_context_compact(provider: &AgentProvider) -> bool {
     crate::config::agent_registry::capabilities_for(provider).context_compact
 }
 
+/// Whether `/models` switch forwards `/model <id>` as a user message (Claude stream-json).
+pub fn provider_model_switch_via_user_message(provider: &AgentProvider) -> bool {
+    crate::config::agent_registry::capabilities_for(provider).model_switch_via_user_message
+}
+
 /// Whether `/compact` is sent as a user-visible `/compact` message (Claude stream-json).
 pub fn provider_compact_via_user_message(provider: &AgentProvider) -> bool {
     crate::config::agent_registry::capabilities_for(provider).compact_via_user_message

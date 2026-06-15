@@ -78,8 +78,8 @@ pub trait AgentBackend {
     ///
     /// The default implementation returns different errors based on the provider's [`AgentCapabilities::platform_bound`]
     /// ("platform-bound, model cannot be switched in WebUI" / "this provider does not support model switching");
-    /// providers supporting in-session model switching (Kimi / Gemini / OpenCode / Codex / Qoder)
-    /// override this to invoke ACP `session/set_model`.
+    /// providers supporting in-session model switching (Claude `/model`, Kimi / Gemini / OpenCode / Codex / Qoder ACP
+    /// `session/set_model`, Pi RPC `set_model`) override this.
     async fn set_model(&mut self, provider: &AgentProvider, _model_id: &str) -> Result<String> {
         let caps = crate::config::agent_registry::capabilities_for(provider);
         if caps.platform_bound {
@@ -195,6 +195,10 @@ impl AgentBackend for StreamJsonSession {
     ) -> Result<Option<String>> {
         self.restart_fresh(ctx.extra_args.clone(), ctx.config, ctx.mcp_context.clone())
             .await
+    }
+
+    async fn set_model(&mut self, _provider: &AgentProvider, model_id: &str) -> Result<String> {
+        StreamJsonSession::set_model(self, model_id).await
     }
 
     fn is_alive(&mut self) -> bool {

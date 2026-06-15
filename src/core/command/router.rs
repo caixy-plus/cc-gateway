@@ -406,7 +406,7 @@ impl CommandRouter {
                     match ctrl.list_available_models().await {
                         Ok(models) if models.is_empty() => {
                             lines.push(t!("models.no_known_models").to_string());
-                            lines.push(t!("models.switch_hint_raw").to_string());
+                            lines.push(models::switch_hint_for_provider(&provider));
                         }
                         Ok(models) => {
                             for (i, m) in models.iter().take(20).enumerate() {
@@ -416,7 +416,7 @@ impl CommandRouter {
                                     current.as_deref() == Some(m.as_str()),
                                 ));
                             }
-                            lines.push(t!("models.switch_hint_raw").to_string());
+                            lines.push(models::switch_hint_for_provider(&provider));
                         }
                         Err(e) => lines.push(e.to_string()),
                     }

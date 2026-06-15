@@ -726,9 +726,10 @@ impl AgentController {
     /// List models available for the current active provider, using provider-specific mechanisms.
     ///
     /// - OpenCode: official CLI (`opencode models`)
+    /// - Claude: CLI/settings discovery + alias fallback; `/models <alias>` passthrough to `/model`
     /// - Codex / Kimi / Gemini ACP: model catalog from `session/new` (`configOptions` or `models`)
     /// - Pi: RPC `get_available_models`
-    /// - Claude/Cursor: not supported (platform-bound agents)
+    /// - Cursor: not supported (platform-bound agent)
     pub async fn list_available_models(&self) -> Result<Vec<String>> {
         let provider_name = self.provider_name().await;
         let provider = AgentProvider::parse_str(&provider_name);
@@ -743,9 +744,13 @@ impl AgentController {
             );
         }
         let config = self.config.config_for_provider(Some(provider.clone()))?;
+        let work_dir = self.get_work_dir().await;
 
         match caps.list_models {
             crate::config::agent_registry::ListModelsSource::NotSupported => Ok(vec![]),
+            crate::config::agent_registry::ListModelsSource::Curated => {
+                Ok(models::list_discovered_models(&provider, &config, &work_dir).await)
+            }
             crate::config::agent_registry::ListModelsSource::InSessionRpc => {
                 let mut s = self.session.write().await;
                 if let Some(session) = s.as_mut() {
@@ -761,6 +766,7 @@ impl AgentController {
 
     /// Switch model for the current provider.
     ///
+    /// - Claude: forwards `/model <id>` in the stream-json session (no restart)
     /// - Pi: RPC `set_model` (no restart)
     /// - OpenCode / Kimi: ACP `session/set_model` (no restart)
     pub async fn switch_model(&self, model_arg: &str) -> Result<String> {
@@ -785,8 +791,11 @@ impl AgentController {
                 )
             );
         }
+        if caps.model_switch_via_user_message {
+            let _ = self.send_stop_generation().await;
+        }
         let options = self.list_available_models().await?;
-        let resolved = models::resolve_model_arg(model_arg, &options)?;
+        let resolved = models::resolve_model_switch_arg(&provider, model_arg, &options)?;
         let mut s = self.session.write().await;
         if let Some(ref mut session) = *s {
             let canonical = session.set_model(&provider, &resolved).await?;

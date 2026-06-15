@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -28,6 +28,10 @@ pub struct StreamJsonSession {
     stderr_lines: Arc<Mutex<Vec<String>>>,
     /// Retained so `/clear` can respawn Claude while keeping the same event bridge alive.
     output_tx: mpsc::UnboundedSender<OutputEvent>,
+    /// Cached config for session restart (`/clear`, `restart_fresh`).
+    config: AgentConfig,
+    /// Cached MCP context for session restart (`/clear`, `restart_fresh`).
+    mcp_context: Option<McpContext>,
 }
 
 pub(crate) fn remove_mcp_config_file(path: Option<&PathBuf>) {
@@ -225,7 +229,7 @@ impl StreamJsonSession {
             cli_path, args, work_dir
         );
 
-        let mut cmd = Command::new(&cli_path);
+        let mut cmd = crate::core::agent::agent_command(&cli_path);
         cmd.args(&args)
             .current_dir(&work_dir)
             .stdin(Stdio::piped())
@@ -277,6 +281,8 @@ impl StreamJsonSession {
                 mcp_config_path,
                 stderr_lines,
                 output_tx: event_tx,
+                config: config.clone(),
+                mcp_context: mcp_context.clone(),
             },
             provider_session_id,
         ))
@@ -336,7 +342,7 @@ impl StreamJsonSession {
             cli_path, args, self.work_dir
         );
 
-        let mut cmd = Command::new(&cli_path);
+        let mut cmd = crate::core::agent::agent_command(&cli_path);
         cmd.args(&args)
             .current_dir(&self.work_dir)
             .stdin(Stdio::piped())
@@ -371,6 +377,8 @@ impl StreamJsonSession {
         self.child = child;
         self.stdin = stdin;
         self.mcp_config_path = mcp_config_path;
+        self.config = config.clone();
+        self.mcp_context = mcp_context.clone();
 
         let provider_session_id = if let Some(pid) = pid {
             Self::extract_session_id_with_retry(pid).await
@@ -378,6 +386,17 @@ impl StreamJsonSession {
             None
         };
         Ok(provider_session_id)
+    }
+
+    /// Restart the session with a different model by forwarding Claude Code's `/model` slash
+    /// command in the active stream-json session (preserves conversation context).
+    pub async fn set_model(&mut self, model_id: &str) -> Result<String> {
+        let model_id = model_id.trim();
+        anyhow::ensure!(!model_id.is_empty(), "empty model id");
+        let text = format!("/model {model_id}");
+        self.send(crate::runtime::protocol::build_user_message(&text))
+            .await?;
+        Ok(model_id.to_string())
     }
 
     async fn extract_session_id_with_retry(pid: u32) -> Option<String> {

@@ -63,10 +63,12 @@ pub enum DefaultArgsPolicy {
 /// How `/models` discovers available model IDs for the provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListModelsSource {
-    /// Bound to a specific vendor, does not support the `/models` command (Claude / Cursor).
+    /// Bound to a specific vendor, does not support the `/models` command (Cursor).
     NotSupported,
     /// Calls the official CLI subcommand (e.g., `opencode models`).
     CliSubcommand,
+    /// Gateway discovers models (CLI probe, provider settings); stable alias fallback when empty.
+    Curated,
     /// In-session RPC (Pi's `get_available_models`).
     InSessionRpc,
 }
@@ -83,9 +85,11 @@ pub struct AgentCapabilities {
     pub context_compact: bool,
     /// Whether `/compact` is implemented by sending "/compact" as a user message (Claude-exclusive).
     pub compact_via_user_message: bool,
+    /// Whether `/models` switch forwards `/model <id>` as a user message (Claude stream-json).
+    pub model_switch_via_user_message: bool,
     /// Whether `/memory` initialization is supported (Claude-exclusive).
     pub memory_init: bool,
-    /// Whether the provider is tied to a specific chat platform (currently only Claude / Cursor are restricted to
+    /// Whether the provider is tied to a specific chat platform (currently only Cursor is restricted to
     /// "only usable on one of Feishu / Telegram / QQ"; other providers are platform-independent).
     pub platform_bound: bool,
     /// Discovery mechanism used by `/models`.
@@ -126,10 +130,11 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: true,
         compact_via_user_message: true,
+        model_switch_via_user_message: true,
         memory_init: true,
-        platform_bound: true,
-        list_models: ListModelsSource::NotSupported,
-        in_session_model_switch: false,
+        platform_bound: false,
+        list_models: ListModelsSource::Curated,
+        in_session_model_switch: true,
         active_model_from_session: false,
         default_args_policy: DefaultArgsPolicy::Claude,
         mcp: ProviderMcpSupport::ClaudeMcpConfig,
@@ -142,6 +147,7 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: false,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: true,
         list_models: ListModelsSource::NotSupported,
@@ -158,6 +164,7 @@ impl AgentCapabilities {
         session_resume: false,
         context_compact: true,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: false,
         list_models: ListModelsSource::InSessionRpc,
@@ -174,6 +181,7 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: false,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: false,
         list_models: ListModelsSource::CliSubcommand,
@@ -190,6 +198,7 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: false,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: false,
         list_models: ListModelsSource::InSessionRpc,
@@ -211,6 +220,7 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: false,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: false,
         list_models: ListModelsSource::InSessionRpc,
@@ -227,6 +237,7 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: false,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: false,
         list_models: ListModelsSource::InSessionRpc,
@@ -243,6 +254,7 @@ impl AgentCapabilities {
         session_resume: true,
         context_compact: false,
         compact_via_user_message: false,
+        model_switch_via_user_message: false,
         memory_init: false,
         platform_bound: false,
         list_models: ListModelsSource::InSessionRpc,
@@ -901,7 +913,10 @@ mod tests {
         assert!(claude.context_compact);
         assert!(claude.compact_via_user_message);
         assert!(claude.memory_init);
-        assert!(claude.platform_bound);
+        assert!(!claude.platform_bound);
+        assert!(claude.model_switch_via_user_message);
+        assert!(claude.in_session_model_switch);
+        assert_eq!(claude.list_models, ListModelsSource::Curated);
         assert!(!claude.active_model_from_session);
         assert_eq!(claude.mcp, ProviderMcpSupport::ClaudeMcpConfig);
 

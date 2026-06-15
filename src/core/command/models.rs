@@ -1,22 +1,50 @@
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::process::Command;
+use serde_json::Value;
 
 use crate::config::model::{AgentConfig, AgentProvider};
 
-/// Platform-bound agents (Claude Code, Cursor) use vendor-tied models; cc-gateway does not expose `/models`.
+/// Platform-bound agents (Cursor) use vendor-tied models; cc-gateway does not expose `/models`.
 pub fn is_platform_bound_agent(provider: &AgentProvider) -> bool {
     crate::config::agent_registry::capabilities_for(provider).platform_bound
 }
 
-/// A conservative built-in list for Claude (works without shelling out).
-pub fn curated_claude_models() -> &'static [&'static str] {
+/// User-visible hint for how `/models <arg>` applies to the active provider.
+pub fn switch_hint_for_provider(provider: &AgentProvider) -> String {
+    let caps = crate::config::agent_registry::capabilities_for(provider);
+    if caps.model_switch_via_user_message {
+        return crate::t!("models.switch_hint_claude").to_string();
+    }
+    if caps.in_session_model_switch {
+        return crate::t!("models.switch_hint_raw").to_string();
+    }
+    crate::t!("models.switch_hint_index").to_string()
+}
+
+/// Stable Claude Code aliases used only when CLI/settings discovery returns nothing.
+/// Version-pinned ids (`claude-opus-4-8`, …) are intentionally omitted — users can
+/// `/models <id>` directly; Claude Code validates the `/model` command.
+pub fn claude_model_alias_fallback() -> &'static [&'static str] {
     &[
-        "claude-3-5-sonnet-latest",
-        "claude-3-5-haiku-latest",
-        "claude-3-opus-latest",
+        "default",
+        "best",
+        "opus",
+        "sonnet",
+        "haiku",
+        "fable",
+        "opusplan",
+        "sonnet[1m]",
+        "opus[1m]",
     ]
+}
+
+/// @deprecated alias for tests — prefer [`claude_model_alias_fallback`].
+pub fn curated_claude_models() -> &'static [&'static str] {
+    claude_model_alias_fallback()
 }
 
 /// Human-readable line for the active model in `/models` output.
@@ -56,7 +84,7 @@ pub fn extract_model_from_args(args: &[String]) -> Option<String> {
     None
 }
 
-/// List models using provider's official CLI.
+/// List models using provider's official CLI or registry-curated catalog.
 pub async fn list_models_via_cli(
     provider: &AgentProvider,
     config: &AgentConfig,
@@ -64,15 +92,203 @@ pub async fn list_models_via_cli(
     match provider {
         AgentProvider::Cursor => list_cursor_models(config).await,
         AgentProvider::OpenCode => list_opencode_models(config).await,
-        AgentProvider::Claude => Ok(curated_claude_models()
+        AgentProvider::Claude | AgentProvider::Pi | AgentProvider::Codex | AgentProvider::Kimi
+        | AgentProvider::Gemini | AgentProvider::Qoder => Ok(vec![]),
+    }
+}
+
+/// Gateway-maintained / discovered model catalog for providers without a stable list CLI.
+pub async fn list_discovered_models(
+    provider: &AgentProvider,
+    config: &AgentConfig,
+    work_dir: &str,
+) -> Vec<String> {
+    match provider {
+        AgentProvider::Claude => list_claude_models(config, work_dir).await,
+        _ => vec![],
+    }
+}
+
+/// Discover Claude models: CLI probe → `availableModels` in settings → stable alias fallback.
+pub async fn list_claude_models(config: &AgentConfig, work_dir: &str) -> Vec<String> {
+    let mut set = BTreeSet::new();
+
+    #[cfg(not(test))]
+    if let Ok(cli_models) = try_list_claude_models_via_cli(config).await {
+        set.extend(cli_models);
+    }
+    set.extend(models_from_claude_settings(work_dir));
+
+    if set.is_empty() {
+        set.extend(
+            claude_model_alias_fallback()
+                .iter()
+                .map(|s| s.to_string()),
+        );
+    }
+
+    set.into_iter().collect()
+}
+
+fn claude_settings_candidates(work_dir: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if !work_dir.trim().is_empty() {
+        let project = PathBuf::from(work_dir);
+        paths.push(project.join(".claude").join("settings.json"));
+        paths.push(project.join(".claude").join("settings.local.json"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".claude").join("settings.json"));
+        paths.push(home.join(".claude").join("settings.local.json"));
+    }
+    paths
+}
+
+fn models_from_claude_settings(work_dir: &str) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for path in claude_settings_candidates(work_dir) {
+        merge_available_models_from_settings_file(&path, &mut set);
+    }
+    set.into_iter().collect()
+}
+
+fn merge_available_models_from_settings_file(path: &Path, out: &mut BTreeSet<String>) {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&content) else {
+        return;
+    };
+    let Some(arr) = value.get("availableModels").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for item in arr {
+        if let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            out.insert(s.to_string());
+        }
+    }
+}
+
+async fn try_list_claude_models_via_cli(config: &AgentConfig) -> Result<Vec<String>> {
+    let cli_path = crate::runtime::session::resolve_cli_path(&config.cli_path);
+    const PROBES: &[&[&str]] = &[
+        &["models"],
+        &["model", "list"],
+        &["--list-models"],
+    ];
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+    for args in PROBES {
+        let Some(stdout) = run_cli_probe_collect(&cli_path, args, PROBE_TIMEOUT).await else {
+            continue;
+        };
+        let models = extract_claude_models_from_stdout(&stdout);
+        if !models.is_empty() {
+            return Ok(models);
+        }
+    }
+    Ok(vec![])
+}
+
+/// Short-lived CLI probe: kills the child if it does not finish within `timeout`.
+async fn run_cli_probe_collect(
+    cli_path: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<String> {
+    let mut cmd = crate::core::agent::agent_command(cli_path);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let pid = child.id();
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(out)) if out.status.success() => {
+            Some(String::from_utf8_lossy(&out.stdout).to_string())
+        }
+        _ => {
+            kill_probe_by_pid(pid);
+            None
+        }
+    }
+}
+
+fn kill_probe_by_pid(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+}
+
+fn looks_like_claude_model_alias(token: &str) -> bool {
+    let t = token.trim();
+    matches!(
+        t,
+        "default" | "best" | "opus" | "sonnet" | "haiku" | "fable" | "opusplan"
+    ) || ((t.starts_with("sonnet") || t.starts_with("opus")) && t.ends_with("[1m]"))
+}
+
+fn extract_claude_models_from_stdout(stdout: &str) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for line in stdout.lines() {
+        for raw in line.split_whitespace() {
+            let m = normalize_model_token(raw);
+            if looks_like_model_token(&m) || looks_like_claude_model_alias(&m) {
+                set.insert(m);
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Resolve `/models <arg>` for providers that forward `/model` to Claude Code.
+///
+/// The picker list is advisory; any non-empty alias/id is accepted and validated by Claude CLI.
+pub fn resolve_claude_model_arg(arg: &str, options: &[String]) -> Result<String> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        anyhow::bail!("{}", crate::t!("models.invalid_index"));
+    }
+    if arg.chars().all(|c| c.is_ascii_digit()) {
+        return resolve_model_arg(arg, options);
+    }
+    if options.iter().any(|o| o == arg) {
+        return Ok(arg.to_string());
+    }
+    Ok(arg.to_string())
+}
+
+/// Provider-aware `/models <arg>` resolution.
+pub fn resolve_model_switch_arg(
+    provider: &AgentProvider,
+    arg: &str,
+    options: &[String],
+) -> Result<String> {
+    if crate::config::agent_registry::capabilities_for(provider).model_switch_via_user_message {
+        resolve_claude_model_arg(arg, options)
+    } else {
+        resolve_model_arg(arg, options)
+    }
+}
+
+/// @deprecated — use [`list_discovered_models`].
+pub fn list_curated_models(provider: &AgentProvider) -> Vec<String> {
+    match provider {
+        AgentProvider::Claude => claude_model_alias_fallback()
             .iter()
             .map(|s| s.to_string())
-            .collect()),
-        AgentProvider::Pi => Ok(vec![]),
-        AgentProvider::Codex => Ok(vec![]),
-        AgentProvider::Kimi => Ok(vec![]),
-        AgentProvider::Gemini => Ok(vec![]),
-        AgentProvider::Qoder => Ok(vec![]),
+            .collect(),
+        _ => vec![],
     }
 }
 
@@ -126,7 +342,7 @@ fn extract_models_from_stdout(stdout: &str) -> Vec<String> {
 }
 
 async fn run_cli_and_collect(cli_path: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(cli_path)
+    let out = crate::core::agent::agent_command(cli_path)
         .args(args)
         .output()
         .await
@@ -252,8 +468,65 @@ gemini-3-flash
     }
 
     #[test]
-    fn platform_bound_agents_are_claude_and_cursor() {
-        assert!(is_platform_bound_agent(&AgentProvider::Claude));
+    fn claude_alias_fallback_includes_core_aliases() {
+        let models = claude_model_alias_fallback();
+        assert!(models.contains(&"opus"));
+        assert!(models.contains(&"sonnet"));
+        assert!(!models.iter().any(|m| m.starts_with("claude-opus-4")));
+    }
+
+    #[test]
+    fn reads_available_models_from_claude_settings_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&settings_dir).unwrap();
+        std::fs::write(
+            settings_dir.join("settings.json"),
+            r#"{"availableModels":["sonnet","claude-sonnet-4-6","haiku"]}"#,
+        )
+        .unwrap();
+        let models = models_from_claude_settings(dir.path().to_str().unwrap());
+        assert!(models.contains(&"sonnet".to_string()));
+        assert!(models.contains(&"claude-sonnet-4-6".to_string()));
+    }
+
+    #[test]
+    fn resolve_claude_model_arg_accepts_unknown_alias() {
+        let options = vec!["opus".to_string(), "sonnet".to_string()];
+        assert_eq!(
+            resolve_claude_model_arg("brand-new-alias", &options).unwrap(),
+            "brand-new-alias"
+        );
+        assert_eq!(
+            resolve_claude_model_arg("claude-opus-4-9", &options).unwrap(),
+            "claude-opus-4-9"
+        );
+    }
+
+    #[test]
+    fn resolve_claude_model_arg_still_resolves_index() {
+        let options = vec!["opus".to_string(), "sonnet".to_string()];
+        assert_eq!(resolve_claude_model_arg("2", &options).unwrap(), "sonnet");
+    }
+
+    #[test]
+    fn list_curated_models_for_claude() {
+        let models = list_curated_models(&AgentProvider::Claude);
+        assert!(models.contains(&"opus".to_string()));
+        assert!(list_curated_models(&AgentProvider::Pi).is_empty());
+    }
+
+    #[test]
+    fn switch_hint_for_claude_uses_in_session_copy() {
+        let hint = switch_hint_for_provider(&AgentProvider::Claude);
+        assert!(hint.contains("/model"));
+        let pi_hint = switch_hint_for_provider(&AgentProvider::Pi);
+        assert!(pi_hint.contains("model_id") || pi_hint.contains("模型"));
+    }
+
+    #[test]
+    fn platform_bound_agents_are_cursor_only() {
+        assert!(!is_platform_bound_agent(&AgentProvider::Claude));
         assert!(is_platform_bound_agent(&AgentProvider::Cursor));
         assert!(!is_platform_bound_agent(&AgentProvider::OpenCode));
         assert!(!is_platform_bound_agent(&AgentProvider::Pi));

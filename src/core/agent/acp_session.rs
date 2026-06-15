@@ -800,13 +800,13 @@ pub fn acp_spawn_command(cli_path: &str, args: &[String]) -> Command {
     {
         let lower = cli_path.to_lowercase();
         if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-            let mut command = Command::new("cmd");
-            command.arg("/C").arg(cli_path).args(args);
+            let mut command = crate::core::agent::agent_command(cli_path);
+            command.args(args);
             return command;
         }
     }
 
-    let mut command = Command::new(cli_path);
+    let mut command = crate::core::agent::agent_command(cli_path);
     command.args(args);
     command
 }

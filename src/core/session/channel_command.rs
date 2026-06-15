@@ -582,7 +582,7 @@ impl ChatCommandExecutor {
                             ));
                             lines.push(models::current_model_line(current.as_deref()));
                             lines.push(t!("models.no_known_models").to_string());
-                            lines.push(t!("models.switch_hint_raw").to_string());
+                            lines.push(models::switch_hint_for_provider(&provider));
                             return Ok(ChatCommandOutcome::Reply(lines.join("\n")));
                         }
                         return Ok(ChatCommandOutcome::SelectModel {

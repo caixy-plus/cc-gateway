@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, info, warn};
 
@@ -63,7 +63,7 @@ impl PiRpcSession {
             cli_path, args, work_dir
         );
 
-        let mut cmd = Command::new(&cli_path);
+        let mut cmd = crate::core::agent::agent_command(&cli_path);
         cmd.args(&args)
             .current_dir(&work_dir)
             .stdin(Stdio::piped())

@@ -59,6 +59,6 @@ pub fn format_select_model(
     for (i, id) in options.iter().enumerate() {
         lines.push(format!("  {}. {}", i + 1, id));
     }
-    lines.push(t!("models.switch_hint_index").to_string());
+    lines.push(models::switch_hint_for_provider(provider));
     lines.join("\n")
 }

@@ -487,6 +487,10 @@ pub fn t(key: &str) -> &str {
             Language::En => "Switch: /models or /model <number> (restarts the session with --model).",
             Language::ZhCN => "切换：/models 或 /model <序号>（会重启会话并追加 --model 参数）",
         },
+        "models.switch_hint_claude" => match lang {
+            Language::En => "Switch: /models or /model <number or alias> (forwards Claude Code `/model`; unknown aliases are accepted — the CLI validates).",
+            Language::ZhCN => "切换：/models 或 /model <序号或别名>（转发 Claude Code `/model`；未列出的别名也可直接输入，由 CLI 校验）",
+        },
         "models.switch_hint_raw" => match lang {
             Language::En => "Switch: /models or /model <model_id> (applied in the current session).",
             Language::ZhCN => "切换：/models 或 /model <model_id>（在当前会话内生效）",
@@ -496,8 +500,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "cc-gateway 暂不支持为 {NAME} 切换模型。",
         },
         "models.not_supported_platform_agent" => match lang {
-            Language::En => "{NAME} is a platform-bound agent — model selection is managed by the vendor CLI, not cc-gateway. Use /agent with provider-specific flags if you need a different setup, or switch to OpenCode/Pi for in-session /models.",
-            Language::ZhCN => "{NAME} 是平台定制型智能体，模型由官方 CLI 管理，cc-gateway 不提供 /models 切换。如需更换配置请用 /agent 并带上对应参数，或改用 OpenCode/Pi 以使用会话内 /models。",
+            Language::En => "{NAME} is a platform-bound agent — model selection is managed by the vendor CLI, not cc-gateway. Use /agent with provider-specific flags if you need a different setup.",
+            Language::ZhCN => "{NAME} 是平台定制型智能体，模型由官方 CLI 管理，cc-gateway 不提供 /models 切换。如需更换配置请用 /agent 并带上对应参数。",
         },
         "models.invalid_index" => match lang {
             Language::En => "Invalid model index.",

@@ -44,3 +44,29 @@ pub fn passthrough_env() -> Vec<(String, String)> {
         .filter(|(k, _)| k != "CLAUDECODE")
         .collect()
 }
+
+/// Create a [`tokio::process::Command`] for spawning an agent CLI subprocess.
+///
+/// On Windows, sets `CREATE_NO_WINDOW` so no console window is shown on the
+/// desktop for each spawned agent session. `.cmd` / `.bat` entrypoints are
+/// launched via `cmd /C` so npm-style wrappers spawn correctly.
+pub fn agent_command(cli_path: &str) -> tokio::process::Command {
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let lower = cli_path.to_lowercase();
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut cmd = tokio::process::Command::new("cmd");
+            cmd.arg("/C").arg(cli_path);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            return cmd;
+        }
+        let mut cmd = tokio::process::Command::new(cli_path);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
+    }
+    #[cfg(not(windows))]
+    {
+        tokio::process::Command::new(cli_path)
+    }
+}

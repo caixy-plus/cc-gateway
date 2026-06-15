@@ -410,7 +410,7 @@ impl QqPlatform {
                         current.as_deref() == Some(m.as_str()),
                     ));
                 }
-                lines.push(crate::t!("models.switch_hint_raw").to_string());
+                lines.push(crate::command::models::switch_hint_for_provider(&provider));
                 self.send_text(chat, &lines.join("\n")).await?;
             }
             ChatCommandOutcome::ListDir { dir, dirs } => {

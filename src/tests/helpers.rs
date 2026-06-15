@@ -218,6 +218,15 @@ while IFS= read -r line; do
   else
     text="fake reply"
   fi
+  case "$line" in
+    *'/model '*|*'/model\t'*)
+      model=$(printf '%s' "$line" | sed -n 's/.*\/model[[:space:]]\+\([^"[:space:]]*\).*/\1/p' | head -1)
+      if [ -n "$model" ]; then
+        printf '%s' "$model" > "$HOME/.cc-gateway/.test_claude_model"
+        text="model switched: $model"
+      fi
+      ;;
+  esac
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$text"
   printf '{"type":"result","result":"%s","usage":{"input_tokens":1,"output_tokens":2}}\n' "$text"
 done
@@ -340,35 +349,44 @@ pub(crate) fn create_fake_pi_cli(home: &Path) -> PathBuf {
 
 #[cfg(windows)]
 pub(crate) fn create_fake_agent_cli(home: &Path) -> PathBuf {
-    let ps1 = home.join("claude.ps1");
+    let claude_cmd = home.join("claude.cmd");
     std::fs::write(
-        &ps1,
-        r#"$sessionId = "fake-session"
-for ($i = 0; $i -lt $args.Count; $i++) {
-  if ($args[$i] -eq "--resume" -and ($i + 1) -lt $args.Count) {
-    $sessionId = $args[$i + 1]
-    $i++
-  }
-}
-$sessionDir = Join-Path $env:USERPROFILE ".claude\sessions"
-New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
-Set-Content -LiteralPath (Join-Path $sessionDir "$PID.json") -Value "{`"sessionId`":`"$sessionId`"}" -NoNewline -Encoding UTF8
-while (($line = [Console]::In.ReadLine()) -ne $null) {
-  Write-Output '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fake reply"}]}}'
-  Write-Output '{"type":"result","result":"fake reply","usage":{"input_tokens":1,"output_tokens":2}}'
-}
+        &claude_cmd,
+        r#"@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+set "session_id=fake-session"
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="--resume" (
+  set "session_id=%~2"
+  shift
+  shift
+  goto parse_args
+)
+shift
+goto parse_args
+:args_done
+if not exist "%USERPROFILE%\.claude\sessions" mkdir "%USERPROFILE%\.claude\sessions"
+> "%USERPROFILE%\.claude\sessions\%RANDOM%.json" echo {"sessionId":"!session_id!"}
+:read_loop
+set "line="
+set /p "line="
+if errorlevel 1 exit /b 0
+if not defined line goto read_loop
+set "text=fake reply"
+echo !line! | findstr /I /C:"/model " >nul && (
+  for /f "tokens=2 delims= " %%m in ("!line!") do set "text=model switched: %%m"
+  if not exist "%USERPROFILE%\.cc-gateway" mkdir "%USERPROFILE%\.cc-gateway"
+  for /f "tokens=2 delims= " %%m in ("!line!") do > "%USERPROFILE%\.cc-gateway\.test_claude_model" echo %%m
+)
+echo {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"!text!"}]}}
+echo {"type":"result","result":"!text!","usage":{"input_tokens":1,"output_tokens":2}}
+goto read_loop
 "#,
     )
     .unwrap();
 
-    let cmd = home.join("fake-claude.cmd");
-    std::fs::write(
-        &cmd,
-        format!(
-            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
-            ps1.display()
-        ),
-    )
-    .unwrap();
-    cmd
+    let legacy_cmd = home.join("fake-claude.cmd");
+    std::fs::copy(&claude_cmd, &legacy_cmd).unwrap();
+    claude_cmd
 }
