@@ -1,0 +1,12 @@
+---
+description: Canonical project guidance — read CLAUDE.md as the single source of truth
+alwaysApply: true
+---
+
+# Project guidance lives in CLAUDE.md
+
+The authoritative guidance for working in **cc-gateway** (project overview, architecture, build & test, release process, i18n, and conventions) is in [CLAUDE.md](mdc:CLAUDE.md) at the repo root.
+
+- Read and follow **[CLAUDE.md](mdc:CLAUDE.md)** before making changes.
+- It is agent-agnostic and is the single source of truth; `AGENTS.md` and `GEMINI.md` are thin pointers to it.
+- Do not duplicate project guidance into other files — update CLAUDE.md so all agents (Cursor, Codex, Gemini CLI, Claude Code) stay consistent.
