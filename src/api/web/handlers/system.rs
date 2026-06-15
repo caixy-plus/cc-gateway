@@ -148,13 +148,13 @@ pub async fn handle_restart(State(state): State<AppState>) -> (StatusCode, Strin
     // The parent daemon will exit before the child runs, so the restart works.
     let args =
         build_daemon_command_args(DaemonCommand::Restart, state.daemon_config_path.as_deref());
-    if let Err(e) = Command::new(&exe)
-        .args(&args)
+    let mut cmd = Command::new(&exe);
+    cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    crate::core::agent::no_console_window(&mut cmd);
+    if let Err(e) = cmd.spawn() {
         let body = json!({ "error": format!("Failed to spawn restart command: {}", e) });
         return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
     }
@@ -177,13 +177,13 @@ pub async fn handle_update(State(state): State<AppState>) -> (StatusCode, String
 
     let args =
         build_daemon_command_args(DaemonCommand::Update, state.daemon_config_path.as_deref());
-    if let Err(e) = Command::new(&exe)
-        .args(&args)
+    let mut cmd = Command::new(&exe);
+    cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    crate::core::agent::no_console_window(&mut cmd);
+    if let Err(e) = cmd.spawn() {
         let body = json!({ "error": format!("Failed to spawn update command: {}", e) });
         return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
     }

@@ -211,12 +211,6 @@ impl AgentRuntime {
         crate::dispatch_agent_backend!(self, |b| AgentBackend::send_user_message(b, text).await)
     }
 
-    /// Flushes queued pending user messages to the backend (used only by Claude to handle stream-json's
-    /// `interrupt` frame; other providers use a default empty implementation).
-    pub async fn flush_queued_messages(&mut self) -> Result<()> {
-        crate::dispatch_agent_backend!(self, |b| AgentBackend::flush_queued_messages(b).await)
-    }
-
     /// Sends `/stop`: Aborts the current generation while keeping the session process alive.
     pub async fn send_stop_generation(&mut self) -> Result<()> {
         crate::dispatch_agent_backend!(self, |b| AgentBackend::send_stop_generation(b).await)

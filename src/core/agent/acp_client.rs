@@ -233,12 +233,12 @@ pub(crate) async fn kill_child_process_tree(child: &mut Child) {
 
     #[cfg(windows)]
     {
-        let _ = tokio::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
+        let mut kill = tokio::process::Command::new("taskkill");
+        kill.args(["/F", "/T", "/PID", &pid.to_string()])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+            .stderr(std::process::Stdio::null());
+        crate::core::agent::no_console_window(&mut kill);
+        let _ = kill.status().await;
     }
 
     // Still call kill() so the Child future is properly consumed / reaped

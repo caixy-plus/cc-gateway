@@ -28,10 +28,16 @@ pub struct StreamJsonSession {
     stderr_lines: Arc<Mutex<Vec<String>>>,
     /// Retained so `/clear` can respawn Claude while keeping the same event bridge alive.
     output_tx: mpsc::UnboundedSender<OutputEvent>,
-    /// Cached config for session restart (`/clear`, `restart_fresh`).
+    /// Cached config for session restart (`/clear`, `restart_fresh`, model switch).
     config: AgentConfig,
-    /// Cached MCP context for session restart (`/clear`, `restart_fresh`).
+    /// Cached MCP context for session restart (`/clear`, `restart_fresh`, model switch).
     mcp_context: Option<McpContext>,
+    /// Claude's internal session id, kept so a model switch can `--resume` it
+    /// (and thus preserve conversation context) while respawning with `--model`.
+    provider_session_id: Option<String>,
+    /// The `--model` currently pinned for this session (`None` = provider default). Used to roll
+    /// back when a model switch respawns into a process that immediately exits (unavailable model).
+    current_model: Option<String>,
 }
 
 pub(crate) fn remove_mcp_config_file(path: Option<&PathBuf>) {
@@ -107,10 +113,10 @@ pub(crate) fn resolve_cli_path(config_path: &str) -> String {
             ]
         };
         for search_name in &search_names {
-            if let Ok(output) = std::process::Command::new("cmd")
-                .args(["/C", "where", search_name.as_str()])
-                .output()
-            {
+            let mut where_cmd = std::process::Command::new("cmd");
+            where_cmd.args(["/C", "where", search_name.as_str()]);
+            crate::core::agent::no_console_window_std(&mut where_cmd);
+            if let Ok(output) = where_cmd.output() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 // `where` may return multiple lines (e.g. npm installs both
                 // a shell script and a .cmd). Pick a line with a known
@@ -283,6 +289,8 @@ impl StreamJsonSession {
                 output_tx: event_tx,
                 config: config.clone(),
                 mcp_context: mcp_context.clone(),
+                provider_session_id: provider_session_id.clone(),
+                current_model: crate::command::models::extract_model_from_args(&args),
             },
             provider_session_id,
         ))
@@ -291,6 +299,23 @@ impl StreamJsonSession {
     /// Start a fresh Claude subprocess (no `--resume`) and return the new provider session id.
     pub async fn restart_fresh(
         &mut self,
+        extra_args: Vec<String>,
+        config: &AgentConfig,
+        mcp_context: Option<McpContext>,
+    ) -> Result<Option<String>> {
+        self.respawn(None, None, extra_args, config, mcp_context).await
+    }
+
+    /// Respawn the Claude subprocess, optionally resuming `resume_id` and/or pinning `model`.
+    ///
+    /// Claude Code rejects the `/model` slash command in headless stream-json mode
+    /// ("/model isn't available in this environment"), so an in-session model switch is done
+    /// by respawning with `--resume <session_id> --model <id>`; resuming the same session id
+    /// preserves the conversation context (verified against claude 2.1.x).
+    async fn respawn(
+        &mut self,
+        resume_id: Option<String>,
+        model: Option<String>,
         extra_args: Vec<String>,
         config: &AgentConfig,
         mcp_context: Option<McpContext>,
@@ -333,13 +358,22 @@ impl StreamJsonSession {
             None
         };
 
+        if let Some(ref sid) = resume_id {
+            args.push("--resume".to_string());
+            args.push(sid.clone());
+        }
+        if let Some(ref model) = model {
+            args.push("--model".to_string());
+            args.push(model.clone());
+        }
+
         for arg in extra_args {
             args.push(arg);
         }
 
         info!(
-            "Restarting Claude session (fresh): {} {:?} in {}",
-            cli_path, args, self.work_dir
+            "Restarting Claude session (resume={:?}, model={:?}): {} {:?} in {}",
+            resume_id, model, cli_path, args, self.work_dir
         );
 
         let mut cmd = crate::core::agent::agent_command(&cli_path);
@@ -385,17 +419,56 @@ impl StreamJsonSession {
         } else {
             None
         };
+        // A resumed respawn keeps the same session id; remember whichever id we end up with so a
+        // subsequent model switch can resume it again.
+        self.provider_session_id = provider_session_id.clone().or(resume_id);
         Ok(provider_session_id)
     }
 
-    /// Restart the session with a different model by forwarding Claude Code's `/model` slash
-    /// command in the active stream-json session (preserves conversation context).
+    /// Switch the active model by respawning Claude with `--resume <session_id> --model <id>`.
+    ///
+    /// Claude Code does not honor the `/model` slash command in headless stream-json mode, so the
+    /// switch is applied at the process level. Resuming the current session id preserves context;
+    /// if no session id is known yet, this falls back to a fresh session on the new model.
     pub async fn set_model(&mut self, model_id: &str) -> Result<String> {
         let model_id = model_id.trim();
         anyhow::ensure!(!model_id.is_empty(), "empty model id");
-        let text = format!("/model {model_id}");
-        self.send(crate::runtime::protocol::build_user_message(&text))
+        let resume_id = self.provider_session_id.clone();
+        let config = self.config.clone();
+        let mcp_context = self.mcp_context.clone();
+        let previous_model = self.current_model.clone();
+
+        self.respawn(
+            resume_id.clone(),
+            Some(model_id.to_string()),
+            Vec::new(),
+            &config,
+            mcp_context.clone(),
+        )
+        .await?;
+
+        // A model the account cannot use (e.g. a 1M-context tier without entitlement) makes Claude
+        // exit at startup. Without this check the switch would report success and the next message
+        // would hit a dead stdin ("Broken pipe"). Detect the exit and roll back to the previous
+        // working model so the session stays usable, then surface a clear error.
+        if !self.is_alive() {
+            warn!(
+                "Model '{}' switch produced a dead Claude session; rolling back to {:?}",
+                model_id, previous_model
+            );
+            self.respawn(
+                resume_id,
+                previous_model.clone(),
+                Vec::new(),
+                &config,
+                mcp_context,
+            )
             .await?;
+            self.current_model = previous_model;
+            anyhow::bail!("{}", crate::t_fmt!("models.switch_model_unavailable", MODEL = model_id));
+        }
+
+        self.current_model = Some(model_id.to_string());
         Ok(model_id.to_string())
     }
 

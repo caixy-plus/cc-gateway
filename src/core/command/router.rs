@@ -59,8 +59,6 @@ pub enum CommandAction {
     ShowAgentHistory { arg: String },
     /// `/agents [provider]`: Select the default agent for this channel.
     SelectChannelAgent { provider: Option<AgentProvider> },
-    /// `/esc [prompt]`: Force flush the pending user message queue; the optional prompt is forwarded immediately after.
-    FlushQueue { prompt: Option<String> },
     /// `/stop`: Cancel the current generation; the session process remains alive.
     StopGeneration,
     /// `/clear`: Restart the provider session in the same directory (clearing context).
@@ -165,13 +163,6 @@ impl CommandRouter {
             match cmd {
                 "/help" => session_help(),
                 "/quit" => CommandAction::StopSession,
-                "/esc" => CommandAction::FlushQueue {
-                    prompt: if arg.is_empty() {
-                        None
-                    } else {
-                        Some(arg.to_string())
-                    },
-                },
                 "/stop" => CommandAction::StopGeneration,
                 "/clear" => CommandAction::ClearSession,
                 "/compact" => CommandAction::CompactSession {
@@ -280,31 +271,6 @@ impl CommandRouter {
                 match ctrl.force_stop_session().await {
                     Ok(()) => Some(crate::command::agents::session_stopped_message(&provider)),
                     Err(e) => Some(t_fmt!("builtin.failed_stop_session", ERR = e)),
-                }
-            }
-            CommandAction::FlushQueue { prompt } => {
-                let ctrl = self.controller.lock().await;
-                let provider =
-                    crate::config::model::AgentProvider::parse_str(&ctrl.provider_name().await);
-                let has_buffered = ctrl.has_buffered_messages().await;
-                let busy = ctrl.is_busy();
-                if !busy && prompt.is_none() && !has_buffered {
-                    return Some(crate::command::agents::esc_already_idle_message(&provider));
-                }
-                if busy || has_buffered {
-                    if let Err(e) = ctrl.flush_queued_messages().await {
-                        return Some(t_fmt!("builtin.failed_esc", ERR = e));
-                    }
-                }
-                if let Some(ref text) = prompt {
-                    match ctrl.send_message(text).await {
-                        Ok(()) => Some(crate::command::agents::esc_with_prompt_sent_message(
-                            &provider, text,
-                        )),
-                        Err(e) => Some(t_fmt!("builtin.failed_esc", ERR = e)),
-                    }
-                } else {
-                    Some(crate::command::agents::esc_sent_message(&provider))
                 }
             }
             CommandAction::StopGeneration => {

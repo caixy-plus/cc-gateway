@@ -30,13 +30,6 @@ pub trait AgentBackend {
     /// Send a user text message to the provider.
     async fn send_user_message(&mut self, text: &str) -> Result<()>;
 
-    /// Flush queued pending user messages to the provider. Only used by Claude stream-json (handling
-    /// the `interrupt` frame — when the user inputs a new message while the previous round is still generating);
-    /// other providers use a default empty implementation.
-    async fn flush_queued_messages(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     /// `/stop`: Abort the current generation while keeping the session process alive.
     async fn send_stop_generation(&mut self) -> Result<()>;
 
@@ -78,8 +71,8 @@ pub trait AgentBackend {
     ///
     /// The default implementation returns different errors based on the provider's [`AgentCapabilities::platform_bound`]
     /// ("platform-bound, model cannot be switched in WebUI" / "this provider does not support model switching");
-    /// providers supporting in-session model switching (Claude `/model`, Kimi / Gemini / OpenCode / Codex / Qoder ACP
-    /// `session/set_model`, Pi RPC `set_model`) override this.
+    /// providers supporting in-session model switching (Claude respawn with `--resume … --model`,
+    /// Kimi / Gemini / OpenCode / Codex / Qoder ACP `session/set_model`, Pi RPC `set_model`) override this.
     async fn set_model(&mut self, provider: &AgentProvider, _model_id: &str) -> Result<String> {
         let caps = crate::config::agent_registry::capabilities_for(provider);
         if caps.platform_bound {
@@ -154,7 +147,8 @@ async fn send_permission_capable_input<B: PermissionCapableBackend + ?Sized>(
                 .unwrap_or_else(|| message.content.to_string());
             backend.send_user_message(&text).await
         }
-        InputMessage::Interrupt => Ok(()),
+        // ACP / Pi cancel via their own `send_cancel`; the stream-json control frame is a no-op here.
+        InputMessage::ControlRequest { .. } => Ok(()),
     }
 }
 
@@ -164,12 +158,13 @@ impl AgentBackend for StreamJsonSession {
         self.send(build_user_message(text)).await
     }
 
-    async fn flush_queued_messages(&mut self) -> Result<()> {
-        self.send(InputMessage::Interrupt).await
-    }
-
     async fn send_stop_generation(&mut self) -> Result<()> {
-        self.send(InputMessage::Interrupt).await
+        // `/stop` must cancel the running turn via a `control_request` so the session can keep
+        // responding afterwards. A bare `{"type":"interrupt"}` is a no-op in headless stream-json
+        // mode (Claude never acks it), which left the session unable to answer the next message.
+        let request_id = format!("stop-{}", uuid::Uuid::new_v4());
+        self.send(crate::runtime::protocol::build_interrupt_request(&request_id))
+            .await
     }
 
     async fn send_input(&mut self, msg: InputMessage) -> Result<()> {

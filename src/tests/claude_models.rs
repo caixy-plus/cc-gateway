@@ -1,4 +1,4 @@
-//! Claude `/models` list + in-session switch via forwarded `/model`.
+//! Claude `/models` list + model switch via respawned `--model`.
 
 use std::time::Duration;
 
@@ -150,7 +150,7 @@ async fn claude_models_switch_unknown_alias_passthrough() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn claude_models_switch_forwards_model_command() -> Result<()> {
+async fn claude_models_switch_respawns_with_model_arg() -> Result<()> {
     let env = TestEnv::new_with_repo_work_dir();
     let _fake = super::helpers::create_fake_agent_cli(env.home());
     db::init_schema()?;
@@ -212,7 +212,87 @@ async fn claude_models_switch_forwards_model_command() -> Result<()> {
         "controller should cache switched model"
     );
 
+    // The real mechanism: Claude is respawned with `--model sonnet` (not a forwarded `/model`
+    // user message, which real Claude rejects in headless stream-json mode). The fake CLI records
+    // the `--model` arg it was launched with.
+    let model_marker = env.home().join(".cc-gateway").join(".test_claude_model");
+    let recorded = std::fs::read_to_string(&model_marker)
+        .with_context(|| format!("fake CLI should record --model at {model_marker:?}"))?;
+    assert_eq!(
+        recorded.trim(),
+        "sonnet",
+        "set_model should respawn Claude with `--model sonnet`"
+    );
+
     let caps = crate::config::agent_registry::capabilities_for(&AgentProvider::Claude);
-    assert!(caps.model_switch_via_user_message);
+    assert!(caps.model_arg_passthrough);
+    Ok(())
+}
+
+/// Switching to a model the account cannot use (the fake CLI exits at startup for `*[1m]`) must not
+/// silently report success and leave a dead session ("Broken pipe" on the next message): the switch
+/// fails cleanly, rolls back, and the session keeps responding.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_models_switch_unavailable_rolls_back_and_stays_alive() -> Result<()> {
+    let env = TestEnv::new_with_repo_work_dir();
+    let _fake = super::helpers::create_fake_agent_cli(env.home());
+    db::init_schema()?;
+
+    let root = env.repo_work_dir();
+    let channel = GLOBAL_CHANNEL_SESSIONS
+        .get_or_create_platform_channel("webui", "claude-rollback", root.to_str().unwrap())
+        .await;
+
+    let profiles = env.fake_agent_profiles();
+    let executor = ChatCommandExecutor::new(root.to_str().unwrap(), profiles.clone(), false);
+    let mut context = ChatCommandContext::new(
+        channel.id.clone(),
+        "claude rollback".to_string(),
+        channel.work_dir.clone(),
+        None,
+    );
+
+    let started = with_timeout(
+        "start claude",
+        chat_flow::route_and_execute(
+            &idle_router(&root, &profiles),
+            &executor,
+            &mut context,
+            "/agent claude",
+        ),
+    )
+    .await?;
+    let ChatCommandOutcome::Started { .. } = started else {
+        anyhow::bail!("expected Started after /agent claude");
+    };
+    let active = context.active_agent.clone().context("active agent")?;
+    let router = active.router.clone();
+
+    // Switch to an entitlement-gated model the fake rejects by exiting at startup.
+    let outcome = with_timeout(
+        "switch unavailable model",
+        chat_flow::route_and_execute(&router, &executor, &mut context, "/models sonnet[1m]"),
+    )
+    .await?;
+    let reply = match outcome {
+        ChatCommandOutcome::Reply(r) | ChatCommandOutcome::Error(r) => r,
+        _ => anyhow::bail!("expected a Reply/Error after a failed model switch"),
+    };
+    assert!(
+        reply.contains("unavailable") || reply.contains("无法使用"),
+        "switch to an unavailable model should report failure, not success: {reply}"
+    );
+
+    let ctrl = active.controller.lock().await;
+    assert!(
+        ctrl.current_model_id().await.as_deref() != Some("sonnet[1m]"),
+        "controller must not cache the unavailable model"
+    );
+    // The session must still be alive after rollback — a direct send succeeds (no Broken pipe).
+    with_timeout("send after rollback", async {
+        ctrl.send_message("hello there").await
+    })
+    .await
+    .context("session should stay alive after a failed model switch")?;
     Ok(())
 }

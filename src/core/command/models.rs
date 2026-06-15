@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -16,7 +14,7 @@ pub fn is_platform_bound_agent(provider: &AgentProvider) -> bool {
 /// User-visible hint for how `/models <arg>` applies to the active provider.
 pub fn switch_hint_for_provider(provider: &AgentProvider) -> String {
     let caps = crate::config::agent_registry::capabilities_for(provider);
-    if caps.model_switch_via_user_message {
+    if caps.model_arg_passthrough {
         return crate::t!("models.switch_hint_claude").to_string();
     }
     if caps.in_session_model_switch {
@@ -27,7 +25,7 @@ pub fn switch_hint_for_provider(provider: &AgentProvider) -> String {
 
 /// Stable Claude Code aliases used only when CLI/settings discovery returns nothing.
 /// Version-pinned ids (`claude-opus-4-8`, …) are intentionally omitted — users can
-/// `/models <id>` directly; Claude Code validates the `/model` command.
+/// `/models <id>` directly; Claude Code validates the `--model` argument on respawn.
 pub fn claude_model_alias_fallback() -> &'static [&'static str] {
     &[
         "default",
@@ -98,33 +96,24 @@ pub async fn list_models_via_cli(
 }
 
 /// Gateway-maintained / discovered model catalog for providers without a stable list CLI.
-pub async fn list_discovered_models(
-    provider: &AgentProvider,
-    config: &AgentConfig,
-    work_dir: &str,
-) -> Vec<String> {
+pub fn list_discovered_models(provider: &AgentProvider, work_dir: &str) -> Vec<String> {
     match provider {
-        AgentProvider::Claude => list_claude_models(config, work_dir).await,
+        AgentProvider::Claude => list_claude_models(work_dir),
         _ => vec![],
     }
 }
 
-/// Discover Claude models: CLI probe → `availableModels` in settings → stable alias fallback.
-pub async fn list_claude_models(config: &AgentConfig, work_dir: &str) -> Vec<String> {
+/// Discover Claude models from `availableModels` in `.claude/settings*.json`, falling back to a
+/// stable alias list when none are configured.
+///
+/// Claude Code has no model-list CLI subcommand (`claude models` is parsed as a *prompt* and runs a
+/// billable inference turn), so discovery is settings-only — never shelling out to the CLI.
+pub fn list_claude_models(work_dir: &str) -> Vec<String> {
     let mut set = BTreeSet::new();
-
-    #[cfg(not(test))]
-    if let Ok(cli_models) = try_list_claude_models_via_cli(config).await {
-        set.extend(cli_models);
-    }
     set.extend(models_from_claude_settings(work_dir));
 
     if set.is_empty() {
-        set.extend(
-            claude_model_alias_fallback()
-                .iter()
-                .map(|s| s.to_string()),
-        );
+        set.extend(claude_model_alias_fallback().iter().map(|s| s.to_string()));
     }
 
     set.into_iter().collect()
@@ -169,91 +158,11 @@ fn merge_available_models_from_settings_file(path: &Path, out: &mut BTreeSet<Str
     }
 }
 
-async fn try_list_claude_models_via_cli(config: &AgentConfig) -> Result<Vec<String>> {
-    let cli_path = crate::runtime::session::resolve_cli_path(&config.cli_path);
-    const PROBES: &[&[&str]] = &[
-        &["models"],
-        &["model", "list"],
-        &["--list-models"],
-    ];
-    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-    for args in PROBES {
-        let Some(stdout) = run_cli_probe_collect(&cli_path, args, PROBE_TIMEOUT).await else {
-            continue;
-        };
-        let models = extract_claude_models_from_stdout(&stdout);
-        if !models.is_empty() {
-            return Ok(models);
-        }
-    }
-    Ok(vec![])
-}
 
-/// Short-lived CLI probe: kills the child if it does not finish within `timeout`.
-async fn run_cli_probe_collect(
-    cli_path: &str,
-    args: &[&str],
-    timeout: Duration,
-) -> Option<String> {
-    let mut cmd = crate::core::agent::agent_command(cli_path);
-    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().ok()?;
-    let pid = child.id();
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) if out.status.success() => {
-            Some(String::from_utf8_lossy(&out.stdout).to_string())
-        }
-        _ => {
-            kill_probe_by_pid(pid);
-            None
-        }
-    }
-}
-
-fn kill_probe_by_pid(pid: Option<u32>) {
-    let Some(pid) = pid else {
-        return;
-    };
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(unix)]
-    {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status();
-    }
-}
-
-fn looks_like_claude_model_alias(token: &str) -> bool {
-    let t = token.trim();
-    matches!(
-        t,
-        "default" | "best" | "opus" | "sonnet" | "haiku" | "fable" | "opusplan"
-    ) || ((t.starts_with("sonnet") || t.starts_with("opus")) && t.ends_with("[1m]"))
-}
-
-fn extract_claude_models_from_stdout(stdout: &str) -> Vec<String> {
-    let mut set = BTreeSet::new();
-    for line in stdout.lines() {
-        for raw in line.split_whitespace() {
-            let m = normalize_model_token(raw);
-            if looks_like_model_token(&m) || looks_like_claude_model_alias(&m) {
-                set.insert(m);
-            }
-        }
-    }
-    set.into_iter().collect()
-}
-
-/// Resolve `/models <arg>` for providers that forward `/model` to Claude Code.
+/// Resolve `/models <arg>` for providers that pass the model straight through (Claude `--model`).
 ///
-/// The picker list is advisory; any non-empty alias/id is accepted and validated by Claude CLI.
+/// The picker list is advisory; a numeric arg selects from it, otherwise any non-empty alias/id is
+/// accepted as-is and validated by the provider CLI on respawn.
 pub fn resolve_claude_model_arg(arg: &str, options: &[String]) -> Result<String> {
     let arg = arg.trim();
     if arg.is_empty() {
@@ -274,7 +183,7 @@ pub fn resolve_model_switch_arg(
     arg: &str,
     options: &[String],
 ) -> Result<String> {
-    if crate::config::agent_registry::capabilities_for(provider).model_switch_via_user_message {
+    if crate::config::agent_registry::capabilities_for(provider).model_arg_passthrough {
         resolve_claude_model_arg(arg, options)
     } else {
         resolve_model_arg(arg, options)

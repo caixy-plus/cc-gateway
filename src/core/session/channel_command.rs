@@ -382,47 +382,6 @@ impl ChatCommandExecutor {
                     }
                 }
             }
-            CommandAction::FlushQueue { prompt } => match context.active_agent.as_ref() {
-                Some(active) => {
-                    let ctrl = active.controller.lock().await;
-                    let has_buffered = ctrl.has_buffered_messages().await;
-                    let busy = ctrl.is_busy();
-                    let provider = active.agent_session.stored_provider();
-                    if !busy && prompt.is_none() && !has_buffered {
-                        return Ok(ChatCommandOutcome::Reply(
-                            crate::command::agents::esc_already_idle_message(&provider),
-                        ));
-                    }
-                    if busy || has_buffered {
-                        if let Err(e) = ctrl.flush_queued_messages().await {
-                            return Ok(ChatCommandOutcome::Error(t_fmt!(
-                                "builtin.failed_esc",
-                                ERR = e
-                            )));
-                        }
-                    }
-                    if let Some(ref text) = prompt {
-                        match ctrl.send_message(text).await {
-                            Ok(()) => Ok(ChatCommandOutcome::Reply(
-                                crate::command::agents::esc_with_prompt_sent_message(
-                                    &provider, text,
-                                ),
-                            )),
-                            Err(e) => Ok(ChatCommandOutcome::Error(t_fmt!(
-                                "builtin.failed_esc",
-                                ERR = e
-                            ))),
-                        }
-                    } else {
-                        Ok(ChatCommandOutcome::Reply(
-                            crate::command::agents::esc_sent_message(&provider),
-                        ))
-                    }
-                }
-                None => Ok(ChatCommandOutcome::Error(
-                    t!("controller.no_active_session").to_string(),
-                )),
-            },
             CommandAction::StopGeneration => match context.active_agent.as_ref() {
                 Some(active) => {
                     let ctrl = active.controller.lock().await;

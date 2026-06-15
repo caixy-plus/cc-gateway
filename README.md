@@ -118,7 +118,7 @@ Available in WebUI and connected bots (after pairing if enabled):
 | `/ll` | Pick directory (Feishu card / Telegram inline keyboard / text on QQ & WebUI) |
 | `/mkdir <name>` | Create a directory |
 | `/show-thinking` / `/hide-thinking` | Toggle Thinking output |
-| `/stop` / `/clear` / `/status` / `/esc` | Control active generation (where supported) |
+| `/stop` / `/clear` / `/status` | Control active generation and session state (where supported) |
 
 **Providers:** `claude`, `codex`, `cursor`, `pi`, `opencode`, `kimi`, `gemini`, `qoder` — run `/agents` to see enabled profiles.
 

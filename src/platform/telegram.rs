@@ -270,7 +270,6 @@ impl TelegramPlatform {
             ("agent_history", crate::t!("telegram.command_agent_history")),
             ("show_thinking", crate::t!("telegram.command_show_thinking")),
             ("hide_thinking", crate::t!("telegram.command_hide_thinking")),
-            ("esc", crate::t!("telegram.command_esc")),
             ("stop", crate::t!("telegram.command_stop")),
             ("clear", crate::t!("telegram.command_clear")),
             ("models", crate::t!("telegram.command_models")),

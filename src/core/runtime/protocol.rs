@@ -10,9 +10,22 @@ pub enum InputMessage {
     #[serde(rename = "control_response")]
     #[allow(dead_code)]
     ControlResponse { response: ControlResponseBody },
-    /// ESC: flush queued user messages without stopping generation.
-    #[serde(rename = "interrupt")]
-    Interrupt,
+    /// `/stop`: cancel the in-progress turn so the conversation can continue.
+    ///
+    /// Must be a `control_request` with `subtype: "interrupt"`. A bare `{"type":"interrupt"}`
+    /// is a no-op in headless stream-json mode (Claude never acks it and keeps generating),
+    /// which is why `/stop` must use this control frame (verified against claude 2.1.x).
+    #[serde(rename = "control_request")]
+    ControlRequest {
+        #[serde(rename = "request_id")]
+        request_id: String,
+        request: ControlRequestInput,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ControlRequestInput {
+    pub subtype: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -221,6 +234,16 @@ pub fn build_user_message(text: &str) -> InputMessage {
     }
 }
 
+/// Build a `control_request` that cancels the in-progress turn (`/stop`).
+pub fn build_interrupt_request(request_id: &str) -> InputMessage {
+    InputMessage::ControlRequest {
+        request_id: request_id.to_string(),
+        request: ControlRequestInput {
+            subtype: "interrupt".to_string(),
+        },
+    }
+}
+
 pub fn build_permission_allow(request_id: &str, updated_input: Option<Value>) -> InputMessage {
     InputMessage::ControlResponse {
         response: ControlResponseBody {
@@ -246,5 +269,22 @@ pub fn build_permission_deny(request_id: &str, message: &str) -> InputMessage {
                 updated_input: None,
             },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `/stop` must serialize to the `control_request` interrupt that real Claude accepts and
+    /// acknowledges (so the turn is cancelled and the session keeps responding). A bare
+    /// `{"type":"interrupt"}` does not cancel the turn — see [`InputMessage::ControlRequest`].
+    #[test]
+    fn interrupt_request_serializes_as_control_request() {
+        let msg = build_interrupt_request("stop-123");
+        let v: Value = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v["type"], "control_request");
+        assert_eq!(v["request_id"], "stop-123");
+        assert_eq!(v["request"]["subtype"], "interrupt");
     }
 }

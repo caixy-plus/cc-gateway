@@ -612,37 +612,6 @@ impl AgentController {
         }
     }
 
-    pub async fn has_buffered_messages(&self) -> bool {
-        !self.message_buffer.lock().await.is_empty()
-    }
-
-    /// Flush queued user messages to the active provider.
-    pub async fn flush_queued_messages(&self) -> Result<()> {
-        let state = self.session_state.read().await.clone();
-        match state {
-            SessionState::Inactive | SessionState::Starting => {
-                anyhow::bail!("{}", t!("controller.no_active_session"))
-            }
-            SessionState::Active => {
-                let mut s = self.session.write().await;
-                if let Some(ref mut session) = *s {
-                    session.flush_queued_messages().await?;
-                } else {
-                    anyhow::bail!("{}", t!("controller.no_active_session"))
-                }
-            }
-        }
-
-        let messages = {
-            let mut buf = self.message_buffer.lock().await;
-            std::mem::take(&mut *buf)
-        };
-        for msg in messages {
-            self.send_message(&msg).await?;
-        }
-        Ok(())
-    }
-
     /// Stop the current generation without killing the session.
     pub async fn send_stop_generation(&self) -> Result<()> {
         let state = self.session_state.read().await.clone();
@@ -726,7 +695,7 @@ impl AgentController {
     /// List models available for the current active provider, using provider-specific mechanisms.
     ///
     /// - OpenCode: official CLI (`opencode models`)
-    /// - Claude: CLI/settings discovery + alias fallback; `/models <alias>` passthrough to `/model`
+    /// - Claude: settings discovery + alias fallback; `/models <alias>` respawns with `--model`
     /// - Codex / Kimi / Gemini ACP: model catalog from `session/new` (`configOptions` or `models`)
     /// - Pi: RPC `get_available_models`
     /// - Cursor: not supported (platform-bound agent)
@@ -749,7 +718,7 @@ impl AgentController {
         match caps.list_models {
             crate::config::agent_registry::ListModelsSource::NotSupported => Ok(vec![]),
             crate::config::agent_registry::ListModelsSource::Curated => {
-                Ok(models::list_discovered_models(&provider, &config, &work_dir).await)
+                Ok(models::list_discovered_models(&provider, &work_dir))
             }
             crate::config::agent_registry::ListModelsSource::InSessionRpc => {
                 let mut s = self.session.write().await;
@@ -766,7 +735,7 @@ impl AgentController {
 
     /// Switch model for the current provider.
     ///
-    /// - Claude: forwards `/model <id>` in the stream-json session (no restart)
+    /// - Claude: respawns the session with `--resume <id> --model <id>` (preserves context)
     /// - Pi: RPC `set_model` (no restart)
     /// - OpenCode / Kimi: ACP `session/set_model` (no restart)
     pub async fn switch_model(&self, model_arg: &str) -> Result<String> {
@@ -790,9 +759,6 @@ impl AgentController {
                     NAME = crate::command::agents::provider_display_name(&provider)
                 )
             );
-        }
-        if caps.model_switch_via_user_message {
-            let _ = self.send_stop_generation().await;
         }
         let options = self.list_available_models().await?;
         let resolved = models::resolve_model_switch_arg(&provider, model_arg, &options)?;

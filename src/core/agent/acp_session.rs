@@ -796,16 +796,7 @@ impl AcpHooks for NoAcpHooks {
 }
 
 pub fn acp_spawn_command(cli_path: &str, args: &[String]) -> Command {
-    #[cfg(windows)]
-    {
-        let lower = cli_path.to_lowercase();
-        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-            let mut command = crate::core::agent::agent_command(cli_path);
-            command.args(args);
-            return command;
-        }
-    }
-
+    // `agent_command` handles Windows `.cmd`/`.bat` wrapping (`cmd /C`) internally.
     let mut command = crate::core::agent::agent_command(cli_path);
     command.args(args);
     command

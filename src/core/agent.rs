@@ -45,6 +45,40 @@ pub fn passthrough_env() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Windows `CREATE_NO_WINDOW` process-creation flag.
+///
+/// The daemon runs without a console, so any short-lived helper process it spawns
+/// (`taskkill`, `where`, the restart/update relauncher, …) would otherwise pop a
+/// console window on the desktop. Apply this flag to every Windows subprocess the
+/// daemon launches so nothing flashes a black box.
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Apply [`CREATE_NO_WINDOW`] to a [`tokio::process::Command`]. No-op off Windows.
+pub fn no_console_window(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+/// Apply [`CREATE_NO_WINDOW`] to a [`std::process::Command`]. No-op off Windows.
+pub fn no_console_window_std(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 /// Create a [`tokio::process::Command`] for spawning an agent CLI subprocess.
 ///
 /// On Windows, sets `CREATE_NO_WINDOW` so no console window is shown on the
@@ -53,16 +87,15 @@ pub fn passthrough_env() -> Vec<(String, String)> {
 pub fn agent_command(cli_path: &str) -> tokio::process::Command {
     #[cfg(windows)]
     {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let lower = cli_path.to_lowercase();
-        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+        let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
             let mut cmd = tokio::process::Command::new("cmd");
             cmd.arg("/C").arg(cli_path);
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            return cmd;
-        }
-        let mut cmd = tokio::process::Command::new(cli_path);
-        cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd
+        } else {
+            tokio::process::Command::new(cli_path)
+        };
+        no_console_window(&mut cmd);
         return cmd;
     }
     #[cfg(not(windows))]

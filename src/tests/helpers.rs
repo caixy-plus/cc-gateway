@@ -168,6 +168,15 @@ while [ "$#" -gt 0 ]; do
   elif [ "$1" = "--mcp-config" ]; then
     shift
     printf '%s' "$1" > "$HOME/.cc-gateway/.test_last_mcp_config"
+  elif [ "$1" = "--model" ]; then
+    shift
+    mkdir -p "$HOME/.cc-gateway"
+    printf '%s' "$1" > "$HOME/.cc-gateway/.test_claude_model"
+    # Simulate Claude exiting at startup when asked for an entitlement-gated model
+    # (e.g. the 1M-context tier the account lacks): such a launch dies immediately.
+    case "$1" in
+      *'[1m]') exit 1 ;;
+    esac
   fi
   shift || true
 done
@@ -201,6 +210,10 @@ while IFS= read -r line; do
   case "$line" in
     *'"type":"interrupt"'*|*'"type": "interrupt"'*)
       ;;
+    *'"type":"control_request"'*|*'"type": "control_request"'*)
+      # `/stop` interrupt control frame — record it, not a user turn.
+      printf '%s' "$line" > "$HOME/.cc-gateway/.test_claude_stop"
+      ;;
     *)
       if [ -n "$line" ]; then
         printf '%s' "$line" > "$memory_file"
@@ -218,15 +231,6 @@ while IFS= read -r line; do
   else
     text="fake reply"
   fi
-  case "$line" in
-    *'/model '*|*'/model\t'*)
-      model=$(printf '%s' "$line" | sed -n 's/.*\/model[[:space:]]\+\([^"[:space:]]*\).*/\1/p' | head -1)
-      if [ -n "$model" ]; then
-        printf '%s' "$model" > "$HOME/.cc-gateway/.test_claude_model"
-        text="model switched: $model"
-      fi
-      ;;
-  esac
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$text"
   printf '{"type":"result","result":"%s","usage":{"input_tokens":1,"output_tokens":2}}\n' "$text"
 done
@@ -363,6 +367,13 @@ if /I "%~1"=="--resume" (
   shift
   goto parse_args
 )
+if /I "%~1"=="--model" (
+  if not exist "%USERPROFILE%\.cc-gateway" mkdir "%USERPROFILE%\.cc-gateway"
+  > "%USERPROFILE%\.cc-gateway\.test_claude_model" echo %~2
+  shift
+  shift
+  goto parse_args
+)
 shift
 goto parse_args
 :args_done
@@ -374,11 +385,6 @@ set /p "line="
 if errorlevel 1 exit /b 0
 if not defined line goto read_loop
 set "text=fake reply"
-echo !line! | findstr /I /C:"/model " >nul && (
-  for /f "tokens=2 delims= " %%m in ("!line!") do set "text=model switched: %%m"
-  if not exist "%USERPROFILE%\.cc-gateway" mkdir "%USERPROFILE%\.cc-gateway"
-  for /f "tokens=2 delims= " %%m in ("!line!") do > "%USERPROFILE%\.cc-gateway\.test_claude_model" echo %%m
-)
 echo {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"!text!"}]}}
 echo {"type":"result","result":"!text!","usage":{"input_tokens":1,"output_tokens":2}}
 goto read_loop

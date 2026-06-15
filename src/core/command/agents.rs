@@ -81,11 +81,6 @@ pub fn provider_supports_context_compact(provider: &AgentProvider) -> bool {
     crate::config::agent_registry::capabilities_for(provider).context_compact
 }
 
-/// Whether `/models` switch forwards `/model <id>` as a user message (Claude stream-json).
-pub fn provider_model_switch_via_user_message(provider: &AgentProvider) -> bool {
-    crate::config::agent_registry::capabilities_for(provider).model_switch_via_user_message
-}
-
 /// Whether `/compact` is sent as a user-visible `/compact` message (Claude stream-json).
 pub fn provider_compact_via_user_message(provider: &AgentProvider) -> bool {
     crate::config::agent_registry::capabilities_for(provider).compact_via_user_message
@@ -202,15 +197,6 @@ pub fn failed_start_agent_message(provider: &AgentProvider, err: impl std::fmt::
     )
 }
 
-/// User-visible reply when `/esc` is used but there is nothing to flush.
-pub fn esc_already_idle_message(provider: &AgentProvider) -> String {
-    if crate::config::agent_registry::capabilities_for(provider).uses_claude_idle_copy {
-        t!("builtin.esc_already_idle_claude").to_string()
-    } else {
-        t!("builtin.esc_already_idle").to_string()
-    }
-}
-
 /// User-visible reply when `/stop` is used but the agent is already idle.
 pub fn stop_already_idle_message(provider: &AgentProvider) -> String {
     if crate::config::agent_registry::capabilities_for(provider).uses_claude_idle_copy {
@@ -231,34 +217,6 @@ pub fn stop_sent_message(provider: &AgentProvider) -> String {
         AgentProvider::Kimi => t!("builtin.stop_sent_kimi").to_string(),
         AgentProvider::Gemini => t!("builtin.stop_sent_gemini").to_string(),
         AgentProvider::Qoder => t!("builtin.stop_sent_qoder").to_string(),
-    }
-}
-
-/// User-visible reply after `/esc` without a prompt succeeds.
-pub fn esc_sent_message(provider: &AgentProvider) -> String {
-    match provider {
-        AgentProvider::Claude => t!("builtin.esc_sent_claude").to_string(),
-        AgentProvider::Codex => t!("builtin.esc_sent_codex").to_string(),
-        AgentProvider::Cursor => t!("builtin.esc_sent_cursor").to_string(),
-        AgentProvider::Pi => t!("builtin.esc_sent_pi").to_string(),
-        AgentProvider::OpenCode => t!("builtin.esc_sent_opencode").to_string(),
-        AgentProvider::Kimi => t!("builtin.esc_sent_kimi").to_string(),
-        AgentProvider::Gemini => t!("builtin.esc_sent_gemini").to_string(),
-        AgentProvider::Qoder => t!("builtin.esc_sent_qoder").to_string(),
-    }
-}
-
-/// User-visible reply after `/esc <prompt>` succeeds.
-pub fn esc_with_prompt_sent_message(provider: &AgentProvider, msg: &str) -> String {
-    match provider {
-        AgentProvider::Claude => t_fmt!("builtin.esc_with_prompt_sent_claude", MSG = msg),
-        AgentProvider::Codex => t_fmt!("builtin.esc_with_prompt_sent_codex", MSG = msg),
-        AgentProvider::Cursor => t_fmt!("builtin.esc_with_prompt_sent_cursor", MSG = msg),
-        AgentProvider::Pi => t_fmt!("builtin.esc_with_prompt_sent_pi", MSG = msg),
-        AgentProvider::OpenCode => t_fmt!("builtin.esc_with_prompt_sent_opencode", MSG = msg),
-        AgentProvider::Kimi => t_fmt!("builtin.esc_with_prompt_sent_kimi", MSG = msg),
-        AgentProvider::Gemini => t_fmt!("builtin.esc_with_prompt_sent_gemini", MSG = msg),
-        AgentProvider::Qoder => t_fmt!("builtin.esc_with_prompt_sent_qoder", MSG = msg),
     }
 }
 

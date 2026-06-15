@@ -436,7 +436,6 @@ pub fn t(key: &str) -> &str {
                 "cc-gateway commands (active session)\n",
                 "  /help                     Show this help\n",
                 "  /quit                     Stop the active session\n",
-                "  /esc [msg]                Flush queued messages (best-effort)\n",
                 "  /stop                     Stop current generation (best-effort)\n",
                 "  /clear                    Clear session context\n",
                 "  /compact [hint]           Compact conversation context (Claude, Pi)\n",
@@ -453,7 +452,6 @@ pub fn t(key: &str) -> &str {
                 "cc-gateway 命令（会话进行中）\n",
                 "  /help                     显示此帮助\n",
                 "  /quit                     停止当前会话\n",
-                "  /esc [消息]               强推排队消息（best-effort）\n",
                 "  /stop                     停止当前输出（best-effort）\n",
                 "  /clear                    清理会话上下文\n",
                 "  /compact [提示]           压缩会话上下文（Claude、Pi）\n",
@@ -488,8 +486,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "切换：/models 或 /model <序号>（会重启会话并追加 --model 参数）",
         },
         "models.switch_hint_claude" => match lang {
-            Language::En => "Switch: /models or /model <number or alias> (forwards Claude Code `/model`; unknown aliases are accepted — the CLI validates).",
-            Language::ZhCN => "切换：/models 或 /model <序号或别名>（转发 Claude Code `/model`；未列出的别名也可直接输入，由 CLI 校验）",
+            Language::En => "Switch: /models or /model <number or alias> (applied via Claude `--model`, keeps context; unlisted aliases are accepted — the CLI validates).",
+            Language::ZhCN => "切换：/models 或 /model <序号或别名>（通过 Claude `--model` 生效并保留上下文；未列出的别名也可直接输入，由 CLI 校验）",
         },
         "models.switch_hint_raw" => match lang {
             Language::En => "Switch: /models or /model <model_id> (applied in the current session).",
@@ -498,6 +496,10 @@ pub fn t(key: &str) -> &str {
         "models.not_supported" => match lang {
             Language::En => "Model switching is not supported for {NAME} in cc-gateway yet.",
             Language::ZhCN => "cc-gateway 暂不支持为 {NAME} 切换模型。",
+        },
+        "models.switch_model_unavailable" => match lang {
+            Language::En => "Model '{MODEL}' is unavailable for your account (e.g. missing entitlement such as 1M context) — kept the previous model. Pick another with /models.",
+            Language::ZhCN => "模型 '{MODEL}' 你的账号无法使用（如未开通 1M 上下文等权限），已保留原模型。请用 /models 另选。",
         },
         "models.not_supported_platform_agent" => match lang {
             Language::En => "{NAME} is a platform-bound agent — model selection is managed by the vendor CLI, not cc-gateway. Use /agent with provider-specific flags if you need a different setup.",
@@ -590,90 +592,6 @@ pub fn t(key: &str) -> &str {
         "builtin.failed_stop_session" => match lang {
             Language::En => "Failed to stop session: {ERR}",
             Language::ZhCN => "停止会话失败: {ERR}",
-        },
-        "builtin.esc_sent" => match lang {
-            Language::En => "ESC sent — queued messages flushed.",
-            Language::ZhCN => "ESC 已发送 — 排队消息已强推。",
-        },
-        "builtin.esc_sent_claude" => match lang {
-            Language::En => "Flush signal sent to Claude (best-effort). cc-gateway cannot guarantee queued messages are processed immediately — especially while a tool is running.",
-            Language::ZhCN => "已向 Claude 发送 flush 信号（best-effort）。gateway 无法保证排队消息立刻生效，工具运行期间尤其如此。",
-        },
-        "builtin.esc_sent_cursor" => match lang {
-            Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
-            Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
-        },
-        "builtin.esc_sent_pi" => match lang {
-            Language::En => "ESC sent — pending gateway messages flushed (if any). Use /esc <msg> to forward a message while busy.",
-            Language::ZhCN => "ESC 已发送 — 已刷新 gateway 侧待发消息（如有）。busy 时可用 /esc <消息> 立即转发。",
-        },
-        "builtin.esc_sent_codex" => match lang {
-            Language::En => "ESC sent — current generation cancelled via ACP.",
-            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
-        },
-        "builtin.esc_sent_opencode" => match lang {
-            Language::En => "ESC sent — current generation cancelled via ACP.",
-            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
-        },
-        "builtin.esc_sent_kimi" => match lang {
-            Language::En => "ESC sent — current generation cancelled via ACP.",
-            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
-        },
-        "builtin.esc_sent_gemini" => match lang {
-            Language::En => "ESC sent — current generation cancelled via ACP.",
-            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
-        },
-        "builtin.esc_sent_qoder" => match lang {
-            Language::En => "ESC sent — current generation cancelled via ACP.",
-            Language::ZhCN => "ESC 已发送 — 已通过 ACP 取消当前输出。",
-        },
-        "builtin.esc_already_idle" => match lang {
-            Language::En => "Agent is idle with no queued messages.",
-            Language::ZhCN => "智能体已就绪，无排队消息。",
-        },
-        "builtin.esc_already_idle_claude" => match lang {
-            Language::En => "Claude is idle on the gateway side — nothing to flush here. Messages sent while busy are queued inside Claude and usually processed when the current turn ends; stream-json mode does not support a reliable force-flush.",
-            Language::ZhCN => "Claude 当前空闲（gateway 侧无待发消息）。busy 时发送的内容在 Claude 内部排队，通常需等当前 turn 结束；stream-json 模式暂无可靠的强推机制。",
-        },
-        "builtin.esc_with_prompt_sent" => match lang {
-            Language::En => "ESC sent — flushed queue and forwarded: {MSG}",
-            Language::ZhCN => "ESC 已发送 — 已强推排队消息并转发: {MSG}",
-        },
-        "builtin.esc_with_prompt_sent_claude" => match lang {
-            Language::En => "Sent to Claude: {MSG}. If the agent is busy, stream-json may defer processing until the current turn ends.",
-            Language::ZhCN => "已发送给 Claude：{MSG}。若智能体正 busy，stream-json 下可能需等当前 turn 结束才处理。",
-        },
-        "builtin.esc_with_prompt_sent_cursor" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.esc_with_prompt_sent_pi" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.esc_with_prompt_sent_codex" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.esc_with_prompt_sent_opencode" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.esc_with_prompt_sent_kimi" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.esc_with_prompt_sent_gemini" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.esc_with_prompt_sent_qoder" => match lang {
-            Language::En => "Message forwarded: {MSG}",
-            Language::ZhCN => "消息已转发：{MSG}",
-        },
-        "builtin.failed_esc" => match lang {
-            Language::En => "Failed to send ESC: {ERR}",
-            Language::ZhCN => "发送 ESC 失败: {ERR}",
         },
         "builtin.stop_sent" => match lang {
             Language::En => "Stop sent — generation interrupted.",
@@ -1335,8 +1253,8 @@ pub fn t(key: &str) -> &str {
             Language::ZhCN => "其他文本将直接发送给活动智能体。",
         },
         "telegram.help_text" => match lang {
-            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/esc   Flush queued messages\n/stop  Stop current generation\n/clear Clear context\n/models List/switch models\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode, kimi, gemini).\nAny other text will be forwarded to the active agent.",
-            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/esc   强推排队消息\n/stop  停止当前输出\n/clear 清理上下文\n/models 列出/切换模型\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode、kimi、gemini）。\n其他文本将直接发送给活动智能体。",
+            Language::En => "cc-gateway commands (Telegram):\n/help  Show help\n/pwd   Show current directory\n/ll    List directories\n/cd    Pick directory\n/mkdir Create directory\n/agent Start agent session\n/agents Set default agent\n/agent_history Show recent sessions\n/stop  Stop current generation\n/clear Clear context\n/models List/switch models\n/status Show status\n/show_thinking Show thinking\n/hide_thinking Hide thinking\n/quit  Stop active session\n\nTip: type /agent <provider> or /agents <provider> to pick a specific agent (e.g. claude, cursor, pi, opencode, kimi, gemini).\nAny other text will be forwarded to the active agent.",
+            Language::ZhCN => "cc-gateway 命令（Telegram）：\n/help  显示帮助\n/pwd   显示当前目录\n/ll    列出目录\n/cd    选择目录\n/mkdir 创建目录\n/agent 启动智能体会话\n/agents 设置本聊天默认智能体\n/agent_history 显示最近会话\n/stop  停止当前输出\n/clear 清理上下文\n/models 列出/切换模型\n/status 显示状态\n/show_thinking 显示 Thinking\n/hide_thinking 隐藏 Thinking\n/quit  停止当前会话\n\n提示：可直接输入 /agent <智能体> 或 /agents <智能体> 指定智能体（如 claude、cursor、pi、opencode、kimi、gemini）。\n其他文本将直接发送给活动智能体。",
         },
         "telegram.command_pwd" => match lang {
             Language::En => "Show current directory",
@@ -1385,10 +1303,6 @@ pub fn t(key: &str) -> &str {
         "telegram.command_quit" => match lang {
             Language::En => "Stop active session",
             Language::ZhCN => "停止当前会话",
-        },
-        "telegram.command_esc" => match lang {
-            Language::En => "Flush queued messages",
-            Language::ZhCN => "强推排队消息",
         },
         "telegram.command_stop" => match lang {
             Language::En => "Stop current generation",
