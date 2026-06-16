@@ -1,6 +1,6 @@
 [package]
 name = "cc-gateway"
-version = "1.12.1"
+version = "1.12.2"
 edition = "2021"
 authors = ["caixinyun"]
 description = "Gateway for local agent CLIs (Claude, Cursor, OpenCode, …) via Feishu/Lark, Telegram, QQ, and WebUI"
