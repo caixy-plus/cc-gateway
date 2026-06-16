@@ -969,6 +969,7 @@ impl FeishuPlatform {
             open_message_id,
             receive_id_type,
             receive_id,
+            chat_id,
         )
         .await;
     }
@@ -980,6 +981,7 @@ impl FeishuPlatform {
         open_message_id: Option<&str>,
         receive_id_type: &str,
         receive_id: &str,
+        chat_id: &str,
     ) {
         let (title, text, success) = match outcome {
             AgentHistoryOutcome::Started { message, kind, .. } => {
@@ -1000,7 +1002,7 @@ impl FeishuPlatform {
                     let _ = self.update_interactive_card(mid, &result_card).await;
                 }
                 // 2. Send a NEW card with the updated session list.
-                self.render_history_card_from_current_data(None, receive_id_type, receive_id)
+                self.render_history_card_from_current_data(None, receive_id_type, receive_id, chat_id)
                     .await;
                 return;
             }
@@ -1035,8 +1037,9 @@ impl FeishuPlatform {
         open_message_id: Option<&str>,
         receive_id_type: &str,
         receive_id: &str,
+        chat_id: &str,
     ) {
-        let runtime = match self.channels.get(receive_id) {
+        let runtime = match self.channels.get(chat_id) {
             Some(rt) => rt,
             None => return,
         };
@@ -1059,7 +1062,7 @@ impl FeishuPlatform {
         }
         let card = crate::platform::feishu::cards::build_session_history_card(
             &sessions,
-            runtime.channel_session.id.as_str(),
+            chat_id,
             receive_id_type,
             receive_id,
         );
