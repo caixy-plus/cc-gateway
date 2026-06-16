@@ -98,4 +98,4 @@ Each QQ C2C channel (`u:{openid}`) has its own isolated agent session. Restart t
 
 - Use `/agent-history` to list recent sessions, then `/agent-history <n>` to resume by index
 - Keep sensitive credentials in environment variables, not in config.json
-- If the default port is occupied by another program, change `port` in `config.json` or let the install script auto-detect a free port
+- If the configured port is occupied by another program, change `port` in `config.json` or let the install script auto-detect a free port

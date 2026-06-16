@@ -5,7 +5,6 @@ REPO="caixy-plus/cc-gateway"
 BINARY="cc-gateway"
 DEFAULT_INSTALL_DIR="$HOME/.local/bin"
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-DEFAULT_PORT=17534
 
 # Language detection
 detect_lang() {

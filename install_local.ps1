@@ -96,12 +96,60 @@ if ($UserPath -notlike "*$InstallDir*") {
 }
 
 # Check default port conflict
-function Test-PortInUse($port) {
+function Test-PortInUse($bindAddress, $port) {
     try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $client.Connect("127.0.0.1", $port)
-        $client.Close()
-        return $true
+        $ip = [System.Net.IPAddress]::Parse($bindAddress)
+        $listener = [System.Net.Sockets.TcpListener]::new($ip, [int]$port)
+        $listener.Start()
+        $listener.Stop()
+        return $false
+    } catch {
+        $socketError = $null
+        if ($_.Exception -is [System.Net.Sockets.SocketException]) {
+            $socketError = $_.Exception.SocketErrorCode
+        } elseif ($_.Exception.InnerException -is [System.Net.Sockets.SocketException]) {
+            $socketError = $_.Exception.InnerException.SocketErrorCode
+        }
+        return $socketError -eq [System.Net.Sockets.SocketError]::AddressAlreadyInUse
+    }
+}
+
+function Get-ConfiguredPort($configFile, $defaultPort) {
+    if (-not (Test-Path $configFile)) {
+        return $defaultPort
+    }
+    try {
+        $config = Get-Content $configFile -Raw | ConvertFrom-Json
+        if ($config.PSObject.Properties.Name -contains "port" -and $config.port) {
+            $port = [int]$config.port
+            if ($port -ge 1 -and $port -le 65535) {
+                return $port
+            }
+        }
+    } catch {}
+    return $defaultPort
+}
+
+function Get-ConfiguredBindAddress($configFile) {
+    if (-not (Test-Path $configFile)) {
+        return "127.0.0.1"
+    }
+    try {
+        $config = Get-Content $configFile -Raw | ConvertFrom-Json
+        if ($config.PSObject.Properties.Name -contains "bind_address" -and $config.bind_address) {
+            return [string]$config.bind_address
+        }
+    } catch {}
+    return "127.0.0.1"
+}
+
+function Test-CcGatewayProcess($processId) {
+    if (-not $processId) {
+        return $false
+    }
+    try {
+        $proc = Get-Process -Id $processId -ErrorAction Stop
+        return $proc.ProcessName -eq $Binary
     } catch {
         return $false
     }
@@ -110,25 +158,23 @@ function Test-PortInUse($port) {
 $defaultPort = 17534
 $configFile = "$env:USERPROFILE\.cc-gateway\config.json"
 $pidFile = "$env:USERPROFILE\.cc-gateway\daemon.pid"
+$configuredPort = Get-ConfiguredPort $configFile $defaultPort
+$configuredBindAddress = Get-ConfiguredBindAddress $configFile
 
-if (Test-PortInUse $defaultPort) {
+# Check the effective configured bind address + port, not always the default port.
+# Existing users may already run cc-gateway on a custom port, and default-port
+# checks must not rewrite it.
+if (Test-PortInUse $configuredBindAddress $configuredPort) {
     $cgPid = $null
     if (Test-Path $pidFile) {
         $cgPid = (Get-Content $pidFile).Trim()
     }
-    $isCgRunning = $false
-    if ($cgPid) {
-        try {
-            Get-Process -Id $cgPid -ErrorAction Stop | Out-Null
-            $isCgRunning = $true
-        } catch {}
-    }
-    if ($isCgRunning) {
-        Write-Msg "Default port $defaultPort is used by cc-gateway (PID: $cgPid), continuing..." "默认端口 $defaultPort 可以使用，继续..."
+    if (Test-CcGatewayProcess $cgPid) {
+        Write-Msg "Configured port ${configuredBindAddress}:$configuredPort is used by cc-gateway (PID: $cgPid), continuing..." "配置端口 ${configuredBindAddress}:$configuredPort 正由 cc-gateway 使用，继续..."
     } else {
-        Write-Msg "Default port $defaultPort is occupied by another process" "默认端口 $defaultPort 被其他进程占用"
-        $newPort = $defaultPort
-        while (Test-PortInUse $newPort) {
+        Write-Msg "Configured port ${configuredBindAddress}:$configuredPort is occupied by another process" "配置端口 ${configuredBindAddress}:$configuredPort 被其他进程占用"
+        $newPort = $configuredPort
+        while (Test-PortInUse $configuredBindAddress $newPort) {
             $newPort++
         }
         Write-Msg "Auto-assigned new port: $newPort" "自动分配新端口: $newPort"

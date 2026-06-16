@@ -24,40 +24,111 @@ CONFIG_FILE="$HOME/.cc-gateway/config.json"
 PID_FILE="$HOME/.cc-gateway/daemon.pid"
 
 is_port_in_use() {
-    python3 -c "import socket; s=socket.socket(); s.settimeout(0.5); s.connect(('127.0.0.1', $1)); s.close()" 2>/dev/null
+    python3 - "$1" "$2" <<'PY' 2>/dev/null
+import errno
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+family = socket.AF_INET6 if ":" in host else socket.AF_INET
+s = socket.socket(family, socket.SOCK_STREAM)
+try:
+    s.bind((host, port))
+except OSError as e:
+    sys.exit(0 if e.errno == errno.EADDRINUSE else 1)
+finally:
+    s.close()
+sys.exit(1)
+PY
 }
 
 is_process_alive() {
     kill -0 "$1" 2>/dev/null
 }
 
-# Check if default port is occupied by another program
-if is_port_in_use "$DEFAULT_PORT"; then
+is_cc_gateway_process() {
+    [ -n "$1" ] || return 1
+    is_process_alive "$1" || return 1
+    COMM=$(ps -p "$1" -o comm= 2>/dev/null | awk '{print $1}')
+    [ "$(basename "$COMM")" = "cc-gateway" ]
+}
+
+configured_port() {
+    if [ -f "$CONFIG_FILE" ]; then
+        python3 - "$CONFIG_FILE" "$DEFAULT_PORT" <<'PY' 2>/dev/null || echo "$DEFAULT_PORT"
+import json
+import sys
+
+path = sys.argv[1]
+default = int(sys.argv[2])
+with open(path, "r", encoding="utf-8") as f:
+    config = json.load(f)
+port = int(config.get("port") or default)
+if not 1 <= port <= 65535:
+    raise ValueError("invalid port")
+print(port)
+PY
+    else
+        echo "$DEFAULT_PORT"
+    fi
+}
+
+configured_bind_address() {
+    if [ -f "$CONFIG_FILE" ]; then
+        python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo "127.0.0.1"
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    config = json.load(f)
+print(config.get("bind_address") or "127.0.0.1")
+PY
+    else
+        echo "127.0.0.1"
+    fi
+}
+
+write_config_port() {
+    python3 - "$CONFIG_FILE" "$1" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+port = int(sys.argv[2])
+with open(path, "r", encoding="utf-8") as f:
+    config = json.load(f)
+config["port"] = port
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
+}
+
+CONFIG_PORT=$(configured_port)
+CONFIG_BIND_ADDRESS=$(configured_bind_address)
+
+# Check the effective configured bind address + port, not always the default port.
+# Existing users may already run cc-gateway on a custom port, and default-port
+# checks must not rewrite it.
+if is_port_in_use "$CONFIG_BIND_ADDRESS" "$CONFIG_PORT"; then
     CG_PID=""
     if [ -f "$PID_FILE" ]; then
         CG_PID=$(cat "$PID_FILE" | tr -d ' \n')
     fi
 
-    if [ -n "$CG_PID" ] && is_process_alive "$CG_PID"; then
-        echo "默认端口 $DEFAULT_PORT 可以使用，继续..."
+    if is_cc_gateway_process "$CG_PID"; then
+        echo "配置端口 $CONFIG_BIND_ADDRESS:$CONFIG_PORT 正由 cc-gateway 使用，继续..."
     else
-        echo "默认端口 $DEFAULT_PORT 被其他进程占用"
-        NEW_PORT=$DEFAULT_PORT
-        while is_port_in_use "$NEW_PORT"; do
+        echo "配置端口 $CONFIG_BIND_ADDRESS:$CONFIG_PORT 被其他进程占用"
+        NEW_PORT=$CONFIG_PORT
+        while is_port_in_use "$CONFIG_BIND_ADDRESS" "$NEW_PORT"; do
             NEW_PORT=$((NEW_PORT + 1))
         done
         echo "自动分配新端口: $NEW_PORT"
 
         if [ -f "$CONFIG_FILE" ]; then
-            python3 -c "
-import json
-with open('$CONFIG_FILE', 'r') as f:
-    config = json.load(f)
-config['port'] = $NEW_PORT
-with open('$CONFIG_FILE', 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
-    f.write('\n')
-"
+            write_config_port "$NEW_PORT"
             echo "已更新配置文件: $CONFIG_FILE (port = $NEW_PORT)"
         fi
     fi

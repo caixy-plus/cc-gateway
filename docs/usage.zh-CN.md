@@ -98,4 +98,4 @@ cc-gateway log -n 500       # 显示最后 500 行
 
 - 使用 `/agent-history` 查看最近会话，再用 `/agent-history <n>` 按索引恢复
 - 将敏感凭证保存在环境变量中，而非 config.json
-- 如果默认端口被其他程序占用，可修改 `config.json` 中的 `port`，或让安装脚本自动检测空闲端口
+- 如果配置端口被其他程序占用，可修改 `config.json` 中的 `port`，或让安装脚本自动检测空闲端口
