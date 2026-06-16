@@ -22,8 +22,15 @@ Also refresh [Adding a New Chat Platform](adding-chat-platform.md) (“Current p
 | Open Platform (home) | https://open.feishu.cn/document/home/index |
 | Create app (CN console) | https://open.feishu.cn/app |
 | Lark (intl console) | https://open.larksuite.com/app |
-| Bot long connection / WebSocket | https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/server-side-sdk/golang-sdk-guide/preparations |
-| Event `im.message.receive_v1` | Search in Feishu docs for “接收消息” / message events |
+| Receive events through WebSocket | https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case |
+| Event `im.message.receive_v1` | https://open.feishu.cn/document/server-docs/im-v1/message/events/receive |
+| Card callback event `card.action.trigger` | https://open.feishu.cn/document/feishu-cards/card-callback-communication |
+| Configure card interactions | https://open.feishu.cn/document/feishu-cards/configuring-card-interactions |
+| Handle card callbacks | https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks |
+| Receive callbacks through WebSocket | https://open.feishu.cn/document/event-subscription-guide/callback-subscription/step-1-choose-a-subscription-mode/configure-callback-request-address |
+| Send message | https://open.feishu.cn/document/server-docs/im-v1/message/create |
+| Upload image | https://open.feishu.cn/document/server-docs/im-v1/image/create |
+| Upload file | https://open.feishu.cn/document/server-docs/im-v1/file/create |
 | Card JSON v2 overview | https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes |
 | Button component (V2) | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button |
 
@@ -65,7 +72,7 @@ Agents can call the gateway MCP tool **`send_file`** (see `core/runtime/mcp_serv
 
 | Platform | MCP `send_file` | Notes |
 |----------|-----------------|-------|
-| **Feishu** | Yes | Images: `im/v1/images` (`image_type=message`) + `msg_type=image` with `image_key` (inline preview). Other files: `im/v1/files` + `msg_type=file`. Image upload max **10 MB** (Feishu API). |
+| **Feishu** | Yes | Images: `im/v1/images` (`image_type=message`) + `msg_type=image` with `image_key` (inline preview). Other files: `im/v1/files` + `msg_type=file`. Upload limits: images **10 MB**, files **30 MB** (Feishu API). |
 | **Telegram** | Yes | Images: [`sendPhoto`](https://core.telegram.org/bots/api#sendphoto) multipart `photo`. Other files: `sendDocument`. |
 | **QQ** | **Yes** (C2C only) | Rich media upload + `msg_type` 7. **Inline images:** `file_type=1`, **PNG/JPG only**. C2C: images, video, voice, generic files. **Group chat not supported** for messaging. |
 | **WebUI** | Yes | `McpDeliveryTarget::WebUi` — files land in chat via `GET /api/media/{id}`; user upload via `POST /api/sessions/{id}/upload` |
