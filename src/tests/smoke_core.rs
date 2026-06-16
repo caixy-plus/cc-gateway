@@ -239,7 +239,7 @@ async fn core_claude_session_flow_in_test_work_dir() -> Result<()> {
         "/agent-history",
     )
     .await?;
-    let ChatCommandOutcome::History { sessions } = list_outcome else {
+    let ChatCommandOutcome::History { sessions, .. } = list_outcome else {
         anyhow::bail!("expected History list after /agent-history");
     };
     assert!(

@@ -103,6 +103,11 @@ pub fn upgrade_config_json(mut value: Value) -> Value {
         return value;
     };
 
+    // Unknown platform sections in `platforms` are silently dropped by serde when
+    // `from_value::<GatewayConfig>` runs — `PlatformsMap` only knows about current
+    // entries. After that the `structure_migrated` guard on `load_from` persists the
+    // now-clean config back to disk in the latest schema.
+
     if let Some(claude) = obj.remove("claude") {
         if !obj.contains_key("agent") {
             let default_args = claude
@@ -220,9 +225,9 @@ fn migrate_agent_profiles_to_nested(agent: &mut serde_json::Map<String, Value>) 
     }
 }
 
-/// Move legacy top-level `feishu` / `telegram` / `qq` into `"platforms": { … }`.
+/// Move legacy top-level `feishu` / `telegram` into `"platforms": { … }`.
 fn migrate_platform_sections_to_platforms(obj: &mut serde_json::Map<String, Value>) {
-    const KEYS: [&str; 3] = ["feishu", "telegram", "qq"];
+    const KEYS: [&str; 2] = ["feishu", "telegram"];
     let mut legacy: serde_json::Map<String, Value> = serde_json::Map::new();
     for key in KEYS {
         if let Some(v) = obj.remove(key) {

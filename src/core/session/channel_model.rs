@@ -8,7 +8,6 @@ pub enum SessionSource {
     WebUI,
     Feishu,
     Telegram,
-    Qq,
 }
 
 impl fmt::Display for SessionSource {
@@ -17,7 +16,6 @@ impl fmt::Display for SessionSource {
             SessionSource::WebUI => write!(f, "WebUI"),
             SessionSource::Feishu => write!(f, "Feishu"),
             SessionSource::Telegram => write!(f, "Telegram"),
-            SessionSource::Qq => write!(f, "QQ"),
         }
     }
 }

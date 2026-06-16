@@ -7,7 +7,7 @@ use crate::command::router::CommandAction;
 use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::mcp_server::McpContext;
 use crate::session::agent_history::{
-    AgentHistoryAction, AgentHistoryEnv, AgentHistoryOutcome, AgentHistoryRequest,
+    AgentHistoryAction, AgentHistoryEnv, AgentHistoryOutcome, AgentHistoryRequest, LIST_LIMIT,
 };
 use crate::session::channel_manager::{ActiveAgentRuntime, GLOBAL_CHANNEL_SESSIONS};
 use crate::session::channel_model::AgentSession;
@@ -16,7 +16,7 @@ use crate::{t, t_fmt};
 /// How `/quit` tears down runtime state (platform channel vs WebUI per-session).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SessionStopKind {
-    /// One active agent per channel (Feishu, Telegram, QQ).
+    /// One active agent per channel (Feishu, Telegram).
     PlatformChannel,
     /// Stop a specific WebUI session and its SSE poller.
     Webui { agent_session_id: String },
@@ -374,8 +374,12 @@ impl ChatCommandExecutor {
                         context.active_agent = Some(active);
                         Ok(ChatCommandOutcome::Started { message })
                     }
-                    AgentHistoryOutcome::Deleted { message, .. } => {
-                        Ok(ChatCommandOutcome::Reply(message))
+                    AgentHistoryOutcome::Deleted { .. } => {
+                        // Refresh the list after deletion so the UI keeps showing sessions.
+                        // On WebUI the visual list update (entry gone) is its own feedback.
+                        let sessions = GLOBAL_CHANNEL_SESSIONS
+                            .list_agent_sessions_by_channel(&req.channel_id, Some(LIST_LIMIT));
+                        Ok(ChatCommandOutcome::History { sessions })
                     }
                     AgentHistoryOutcome::Error { message } => {
                         Ok(ChatCommandOutcome::Error(message))

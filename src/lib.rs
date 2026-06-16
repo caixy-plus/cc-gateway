@@ -1,11 +1,11 @@
 //! `cc-gateway`: A gateway that enables remote control of local agent CLIs
-//! (Claude Code, Codex, Cursor, Pi, OpenCode, Kimi, Gemini, **Qoder**, etc.) via Feishu / Lark, Telegram, QQ, and WebUI.
+//! (Claude Code, Codex, Cursor, Pi, OpenCode, Kimi, Gemini, **Qoder**, etc.) via Feishu / Lark, Telegram, and WebUI.
 //!
 //! # Architecture Layers
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │ Chat platform entry (Feishu / Telegram / QQ / WebUI)        │
+//! │ Chat platform entry (Feishu / Telegram / WebUI)        │
 //! ├─────────────────────────────────────────────────────────────┤
 //! │ Command routing (`core::command`) + Session orchestration (`core::session`) │
 //! ├─────────────────────────────────────────────────────────────┤
@@ -28,7 +28,7 @@
 //! - [`api`]: HTTP / WebUI interface (Axum).
 //! - [`daemon`]: Daemon lifecycle (PID file, port singleton lock, signal handling).
 //! - [`database`]: SQLite persistence (sessions, channels, status).
-//! - [`platform`]: Chat platform adapters (Feishu, Telegram, QQ).
+//! - [`platform`]: Chat platform adapters (Feishu, Telegram).
 //! - [`types`]: Shared type re-exports.
 //! - [`update`]: GitHub Releases version checker and auto-upgrade.
 //! - [`uninstall`]: Uninstall logic (binaries, autostart, PATH, data).

@@ -7,10 +7,10 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::model::{AgentProfiles, FeishuConfig, GatewayConfig, QqConfig, TelegramConfig};
+use super::model::{AgentProfiles, FeishuConfig, GatewayConfig, TelegramConfig};
 use super::secrets::{is_masked_secret, mask_secret};
 use crate::platform::Platform;
-use crate::platform::{feishu::FeishuPlatform, qq::QqPlatform, telegram::TelegramPlatform};
+use crate::platform::{feishu::FeishuPlatform, telegram::TelegramPlatform};
 use crate::session::channel_model::SessionSource;
 use crate::session::pairing::GLOBAL_PAIRING_MANAGER;
 use tracing::error;
@@ -167,44 +167,6 @@ const TELEGRAM_FIELDS: &[PlatformFieldDef] = &[
     },
 ];
 
-const QQ_FIELDS: &[PlatformFieldDef] = &[
-    PlatformFieldDef {
-        key: "enabled",
-        kind: PlatformFieldKind::Bool,
-        label_key: "enabled",
-        hint_key: None,
-        wizard: false,
-    },
-    PlatformFieldDef {
-        key: "require_pairing",
-        kind: PlatformFieldKind::Bool,
-        label_key: "require_pairing",
-        hint_key: Some("require_pairing_hint"),
-        wizard: false,
-    },
-    PlatformFieldDef {
-        key: "sandbox",
-        kind: PlatformFieldKind::Bool,
-        label_key: "qq_sandbox",
-        hint_key: None,
-        wizard: false,
-    },
-    PlatformFieldDef {
-        key: "app_id",
-        kind: PlatformFieldKind::Text,
-        label_key: "app_id",
-        hint_key: None,
-        wizard: true,
-    },
-    PlatformFieldDef {
-        key: "app_secret",
-        kind: PlatformFieldKind::Secret,
-        label_key: "app_secret",
-        hint_key: None,
-        wizard: true,
-    },
-];
-
 pub const PLATFORM_DEFS: &[PlatformDef] = &[
     PlatformDef {
         id: "feishu",
@@ -257,32 +219,6 @@ pub const PLATFORM_DEFS: &[PlatformDef] = &[
         apply_settings: apply_telegram_settings,
         mask_secrets_in_json: mask_telegram_secrets_json,
         spawn: spawn_telegram,
-    },
-    PlatformDef {
-        id: "qq",
-        display_name: "QQ",
-        session_source: SessionSource::Qq,
-        transport: PlatformTransport::WsJson,
-        capabilities: PlatformCapabilities {
-            mcp_send_file: true,
-            interactive_ll: false,
-            interactive_agent_picker: false,
-            interactive_model_picker: false,
-        },
-        config: PlatformConfigHooks {
-            is_enabled: qq_is_enabled,
-            set_enabled: qq_set_enabled,
-            require_pairing: qq_require_pairing,
-            set_require_pairing: qq_set_require_pairing,
-            diff_config: diff_qq_config,
-            restart_paths: &["qq.enabled", "qq.app_id", "qq.app_secret", "qq.sandbox"],
-            live_paths: &["qq.require_pairing"],
-        },
-        settings_fields: QQ_FIELDS,
-        config_to_json: qq_config_to_json,
-        apply_settings: apply_qq_settings,
-        mask_secrets_in_json: mask_qq_secrets_json,
-        spawn: spawn_qq,
     },
 ];
 
@@ -388,7 +324,6 @@ fn fields_schema_json(def: &PlatformDef) -> Value {
 pub fn mask_platform_secrets_in_config(config: &mut GatewayConfig) {
     config.platforms.feishu.app_secret = mask_secret(&config.platforms.feishu.app_secret);
     config.platforms.telegram.bot_token = mask_secret(&config.platforms.telegram.bot_token);
-    config.platforms.qq.app_secret = mask_secret(&config.platforms.qq.app_secret);
 }
 
 pub fn apply_platforms_from_json(
@@ -404,7 +339,7 @@ pub fn apply_platforms_from_json(
     }
 }
 
-/// Legacy WebUI saves may still POST top-level `feishu` / `telegram` / `qq`.
+/// Legacy WebUI saves may still POST top-level `feishu` / `telegram`.
 pub fn apply_legacy_platform_sections_from_json(
     config: &mut GatewayConfig,
     body: &Value,
@@ -630,90 +565,15 @@ fn spawn_telegram(ctx: PlatformSpawnCtx<'_>) -> Result<Box<dyn Platform>> {
     )))
 }
 
-// --- QQ config hooks ---
-
-fn qq_is_enabled(c: &GatewayConfig) -> bool {
-    c.platforms.qq.enabled
-}
-fn qq_set_enabled(c: &mut GatewayConfig, v: bool) {
-    c.platforms.qq.enabled = v;
-}
-fn qq_require_pairing(c: &GatewayConfig) -> bool {
-    c.platforms.qq.require_pairing
-}
-fn qq_set_require_pairing(c: &mut GatewayConfig, v: bool) {
-    c.platforms.qq.require_pairing = v;
-}
-fn qq_config_to_json(c: &GatewayConfig) -> Value {
-    serde_json::to_value(&c.platforms.qq).unwrap_or(Value::Null)
-}
-fn apply_qq_settings(
-    config: &mut GatewayConfig,
-    section: &Value,
-    _is_masked: &dyn Fn(&str, &str) -> bool,
-) {
-    let Ok(mut incoming) = serde_json::from_value::<QqConfig>(section.clone()) else {
-        return;
-    };
-    if is_masked_secret(&incoming.app_secret, &config.platforms.qq.app_secret) {
-        incoming.app_secret = config.platforms.qq.app_secret.clone();
-    }
-    config.platforms.qq = incoming;
-}
-fn mask_qq_secrets_json(value: &mut Value) {
-    if let Some(secret) = value
-        .get("app_secret")
-        .and_then(|v| v.as_str())
-        .map(mask_secret)
-    {
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("app_secret".to_string(), json!(secret));
-        }
-    }
-}
-fn diff_qq_config(
-    before: &GatewayConfig,
-    after: &GatewayConfig,
-    restart: &mut Vec<String>,
-    live: &mut Vec<String>,
-) {
-    let b = &before.platforms.qq;
-    let a = &after.platforms.qq;
-    if b.enabled != a.enabled {
-        restart.push("qq.enabled".to_string());
-    }
-    if b.app_id != a.app_id {
-        restart.push("qq.app_id".to_string());
-    }
-    if b.app_secret != a.app_secret {
-        restart.push("qq.app_secret".to_string());
-    }
-    if b.sandbox != a.sandbox {
-        restart.push("qq.sandbox".to_string());
-    }
-    if b.require_pairing != a.require_pairing {
-        live.push("qq.require_pairing".to_string());
-    }
-}
-fn spawn_qq(ctx: PlatformSpawnCtx<'_>) -> Result<Box<dyn Platform>> {
-    Ok(Box::new(QqPlatform::new(
-        ctx.config.platforms.qq.clone(),
-        ctx.default_dir,
-        ctx.agent_profiles,
-        ctx.show_thinking,
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn registry_lists_all_integrated_platforms() {
-        assert_eq!(PLATFORM_DEFS.len(), 3);
+        assert_eq!(PLATFORM_DEFS.len(), 2);
         assert!(def_by_id("feishu").is_some());
         assert!(def_by_id("telegram").is_some());
-        assert!(def_by_id("qq").is_some());
     }
 
     #[test]

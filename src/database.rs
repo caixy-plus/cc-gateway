@@ -383,7 +383,6 @@ fn source_to_str(source: &SessionSource) -> &'static str {
         SessionSource::WebUI => "webui",
         SessionSource::Feishu => "feishu",
         SessionSource::Telegram => "telegram",
-        SessionSource::Qq => "qq",
     }
 }
 
@@ -392,7 +391,6 @@ fn str_to_source(s: &str) -> SessionSource {
         "webui" => SessionSource::WebUI,
         "feishu" => SessionSource::Feishu,
         "telegram" => SessionSource::Telegram,
-        "qq" => SessionSource::Qq,
         other => {
             warn!(
                 "Unknown SessionSource '{}' in DB, defaulting to WebUI",

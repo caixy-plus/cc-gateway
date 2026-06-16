@@ -989,11 +989,21 @@ impl FeishuPlatform {
                 };
                 (title, message, true)
             }
-            AgentHistoryOutcome::Deleted { message, success } => (
-                crate::t!("feishu.card_session_deleted_title"),
-                message,
-                success,
-            ),
+            AgentHistoryOutcome::Deleted { message, .. } => {
+                // 1. Update the existing card to a simple "deleted" confirmation.
+                let result_card = crate::platform::feishu::cards::build_result_card(
+                    crate::t!("feishu.card_session_deleted_title"),
+                    &message,
+                    true,
+                );
+                if let Some(mid) = open_message_id {
+                    let _ = self.update_interactive_card(mid, &result_card).await;
+                }
+                // 2. Send a NEW card with the updated session list.
+                self.render_history_card_from_current_data(None, receive_id_type, receive_id)
+                    .await;
+                return;
+            }
             AgentHistoryOutcome::Error { message } => {
                 let title = match action {
                     AgentHistoryAction::StartNew { .. } => {
@@ -1014,6 +1024,50 @@ impl FeishuPlatform {
         } else {
             let _ = self
                 .send_text_message(receive_id_type, receive_id, &text)
+                .await;
+        }
+    }
+
+    /// Refresh button callback: re-list sessions and update the card in-place.
+    /// Query current agent sessions for this chat and build + send or update a history card.
+    async fn render_history_card_from_current_data(
+        &self,
+        open_message_id: Option<&str>,
+        receive_id_type: &str,
+        receive_id: &str,
+    ) {
+        let runtime = match self.channels.get(receive_id) {
+            Some(rt) => rt,
+            None => return,
+        };
+        let sessions = GLOBAL_CHANNEL_SESSIONS
+            .list_agent_sessions_by_channel(&runtime.channel_session.id, Some(10));
+        if sessions.is_empty() {
+            if let Some(mid) = open_message_id {
+                let _ = self
+                    .update_interactive_card(
+                        mid,
+                        &crate::platform::feishu::cards::build_result_card(
+                            crate::t!("feishu.card_session_deleted_title"),
+                            crate::t!("feishu.no_sessions"),
+                            true,
+                        ),
+                    )
+                    .await;
+            }
+            return;
+        }
+        let card = crate::platform::feishu::cards::build_session_history_card(
+            &sessions,
+            runtime.channel_session.id.as_str(),
+            receive_id_type,
+            receive_id,
+        );
+        if let Some(mid) = open_message_id {
+            let _ = self.update_interactive_card(mid, &card).await;
+        } else {
+            let _ = self
+                .send_interactive_card(receive_id_type, receive_id, &card)
                 .await;
         }
     }

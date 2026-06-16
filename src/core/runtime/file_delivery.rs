@@ -36,7 +36,6 @@ impl McpContext {
 pub enum McpDeliveryTarget {
     Feishu(FeishuFileTarget),
     Telegram(TelegramFileTarget),
-    Qq(QqFileTarget),
     WebUi(crate::web::files::WebUiFileTarget),
 }
 
@@ -53,14 +52,6 @@ pub struct TelegramFileTarget {
     pub bot_token: String,
     pub chat_id: String,
     pub proxy: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QqFileTarget {
-    pub app_id: String,
-    pub app_secret: String,
-    pub sandbox: bool,
-    pub chat: crate::platform::qq::QqFileChatTarget,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +84,6 @@ impl FileDelivery for McpDeliveryTarget {
         match self {
             McpDeliveryTarget::Feishu(target) => target.send_file(file).await,
             McpDeliveryTarget::Telegram(target) => target.send_file(file).await,
-            McpDeliveryTarget::Qq(target) => target.send_file(file).await,
             McpDeliveryTarget::WebUi(target) => target.send_file(file).await,
         }
     }
@@ -360,28 +350,6 @@ impl FileDelivery for TelegramFileTarget {
             file_name,
             external_id: None,
             raw: body.get("result").cloned(),
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl FileDelivery for QqFileTarget {
-    async fn send_file(&self, file: OutboundFile) -> Result<SentFile> {
-        let client = crate::platform::qq::QqApiClient::new(
-            self.app_id.clone(),
-            self.app_secret.clone(),
-            self.sandbox,
-        );
-        let message_id = client
-            .send_rich_media_file(&self.chat, &file.file_name, &file.file_type, &file.bytes)
-            .await
-            .with_context(|| format!("QQ send_file failed for {}", file.path.display()))?;
-        Ok(SentFile {
-            platform: "qq".to_string(),
-            message_id,
-            file_name: file.file_name,
-            external_id: None,
-            raw: None,
         })
     }
 }

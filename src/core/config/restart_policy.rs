@@ -122,28 +122,4 @@ mod tests {
             .restart_fields
             .contains(&"feishu.enabled".to_string()));
     }
-
-    #[test]
-    fn qq_sandbox_change_requires_restart() {
-        let before = GatewayConfig::default();
-        let mut after = before.clone();
-        after.platforms.qq.sandbox = true;
-        let assessment = assess_config_changes(&before, &after);
-        assert!(assessment.requires_restart);
-        assert!(assessment
-            .restart_fields
-            .contains(&"qq.sandbox".to_string()));
-    }
-
-    #[test]
-    fn qq_require_pairing_change_is_live_only() {
-        let before = GatewayConfig::default();
-        let mut after = before.clone();
-        after.platforms.qq.require_pairing = false;
-        let assessment = assess_config_changes(&before, &after);
-        assert!(!assessment.requires_restart);
-        assert!(assessment
-            .live_fields
-            .contains(&"qq.require_pairing".to_string()));
-    }
 }

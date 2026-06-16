@@ -8,7 +8,7 @@
 //!   (cli path, default_args, mode, permission).
 //! - [`AgentProfiles`]: `agent.default` + `agent.providers` mapping, corresponding to the agent list
 //!   in WebUI "Settings".
-//! - [`FeishuConfig`] / [`TelegramConfig`] / [`QqConfig`]: Configurations for the three chat platforms.
+//! - [`FeishuConfig`] / [`TelegramConfig`]: Configurations for the two chat platforms.
 //!
 //! By design, "registration info" ([`super::agent_registry`], hardcoded) is separated from "runtime configuration"
 //! (this module, from the user's `config.json`). They are associated via provider id.
@@ -26,7 +26,6 @@ use serde::{Deserialize, Serialize};
 pub struct PlatformsMap {
     pub feishu: FeishuConfig,
     pub telegram: TelegramConfig,
-    pub qq: QqConfig,
 }
 
 /// Top-level configuration of the gateway, corresponding to the complete structure deserialized from `~/.cc-gateway/config.json`.
@@ -39,7 +38,6 @@ pub struct GatewayConfig {
     pub log: LogConfig,
     /// Agent profiles: default provider + runtime configuration for each provider.
     pub agent: AgentProfiles,
-    /// Three chat platforms (Feishu / Telegram / QQ).
     pub platforms: PlatformsMap,
     /// Default working directory (used when creating a session and no work_dir is explicitly passed).
     pub default_dir: String,
@@ -189,17 +187,6 @@ pub struct TelegramConfig {
     /// Optional HTTP/SOCKS proxy for Telegram Bot API only (e.g. `http://127.0.0.1:7890`).
     pub proxy: String,
     /// Require WebUI admin approval before allowing new chats to interact.
-    pub require_pairing: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct QqConfig {
-    pub enabled: bool,
-    pub app_id: String,
-    pub app_secret: String,
-    /// Use QQ sandbox API hosts when true.
-    pub sandbox: bool,
     pub require_pairing: bool,
 }
 
@@ -519,9 +506,6 @@ impl GatewayConfig {
     pub fn runtime_defaults() -> Self {
         let mut config = Self::default();
         config.agent = crate::config::agent_registry::runtime_agent_profiles();
-        config.platforms.qq.enabled = false;
-        config.platforms.qq.app_id.clear();
-        config.platforms.qq.app_secret.clear();
         config.platforms.feishu.enabled = false;
         config.platforms.feishu.app_id.clear();
         config.platforms.feishu.app_secret.clear();
@@ -542,17 +526,6 @@ impl Default for TelegramConfig {
     }
 }
 
-impl Default for QqConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            app_id: "${QQ_APP_ID}".to_string(),
-            app_secret: "${QQ_APP_SECRET}".to_string(),
-            sandbox: false,
-            require_pairing: true,
-        }
-    }
-}
 
 impl Default for FeishuConfig {
     fn default() -> Self {

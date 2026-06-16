@@ -262,8 +262,7 @@ pub fn build_model_picker_card(
     })
 }
 
-/// Build a session-history card with resume / new-session / delete buttons.
-/// Matches main branch `build_session_history_card`.
+/// Build a session-history card with resume / new-session / delete buttons and a footer refresh button.
 pub fn build_session_history_card(
     sessions: &[crate::session::channel_model::AgentSession],
     chat_id: &str,

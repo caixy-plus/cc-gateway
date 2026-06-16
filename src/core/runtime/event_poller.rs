@@ -121,7 +121,7 @@ pub struct BufferPolicy {
 }
 
 impl BufferPolicy {
-    /// Feishu/Telegram/QQ/WebUI — batch small chunks to reduce message spam.
+    /// Feishu/Telegram/WebUI — batch small chunks to reduce message spam.
     pub fn for_chat_platform(flush_interval: std::time::Duration, max_chars: usize) -> Self {
         Self {
             flush_interval,

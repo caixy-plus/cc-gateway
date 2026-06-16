@@ -124,7 +124,7 @@ fn resolve_agent_session_for_event(
 ) -> Option<crate::session::channel_model::AgentSession> {
     // event.session_id may be:
     // - WebUI: AgentSession.id
-    // - Feishu/Telegram/QQ: chat_id (ChannelSession.channel_id)
+    // - Feishu/Telegram: chat_id (ChannelSession.channel_id)
     // Try all lookup strategies.
     if let Some(s) = GLOBAL_CHANNEL_SESSIONS.get_agent_session(&event.session_id) {
         return Some(s);

@@ -1,4 +1,4 @@
-//! Plain-text rendering of [`ChatCommandOutcome`] for transports without cards/keyboards (WebUI chat, QQ, etc.).
+//! Plain-text rendering of [`ChatCommandOutcome`] for transports without cards/keyboards (WebUI chat, etc.).
 
 use crate::command::agents;
 use crate::command::models;
@@ -19,8 +19,7 @@ pub fn format_history(sessions: &[AgentSession]) -> String {
         return t!("builtin.no_sessions").to_string();
     }
     let china_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
-    let mut lines = vec![t!("builtin.agent_history_hint").to_string()];
-    lines.insert(0, t!("telegram.session_history_subtitle").to_string());
+    let mut lines = vec![t!("telegram.session_history_subtitle").to_string()];
     for (idx, session) in sessions.iter().enumerate() {
         let status_dot = if session.active {
             "\u{1F7E2}"

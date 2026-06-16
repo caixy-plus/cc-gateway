@@ -18,7 +18,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "cc-gateway")]
 #[command(
-    about = "Gateway for controlling local agent CLIs via Feishu/Lark, Telegram, QQ, and WebUI"
+    about = "Gateway for controlling local agent CLIs via Feishu/Lark, Telegram, and WebUI"
 )]
 #[command(version)]
 struct Args {

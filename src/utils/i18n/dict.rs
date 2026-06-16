@@ -342,10 +342,6 @@ pub fn t(key: &str) -> &str {
             Language::En => "  - Feishu is enabled but app_id/app_secret are empty.",
             Language::ZhCN => "  - 飞书已启用，但 app_id/app_secret 为空。",
         },
-        "wizard.warn_qq_incomplete" => match lang {
-            Language::En => "QQ bot credentials are incomplete; enable after filling app_id and app_secret.",
-            Language::ZhCN => "QQ 机器人凭证不完整，请补全 app_id 与 app_secret 后再启用。",
-        },
         "wizard.warn_telegram_incomplete" => match lang {
             Language::En => "  - Telegram is enabled but bot_token is empty.",
             Language::ZhCN => "  - Telegram 已启用，但 bot_token 为空。",
@@ -1144,49 +1140,9 @@ pub fn t(key: &str) -> &str {
             Language::En => "Bot is shutting down, sessions exited.",
             Language::ZhCN => "机器人正在关闭，会话已退出。",
         },
-        "qq.choose_agent" => match lang {
-            Language::En => "Choose default agent (reply with number or name):",
-            Language::ZhCN => "选择默认智能体（回复序号或名称）：",
-        },
-        "qq.use_agents_hint" => match lang {
-            Language::En => "Tip: /agents <name> sets the default for this chat.",
-            Language::ZhCN => "提示：/agents <名称> 可设置本聊天默认智能体。",
-        },
-        "qq.choose_directory" => match lang {
-            Language::En => "Choose working directory: {DIR}",
-            Language::ZhCN => "选择工作目录：{DIR}",
-        },
-        "qq.shutdown_notice" => match lang {
-            Language::En => "QQ bot is shutting down, sessions exited.",
-            Language::ZhCN => "QQ 机器人正在关闭，会话已退出。",
-        },
-        "qq.permission_request" => match lang {
-            Language::En => "Permission request: `{NAME}` (ID: `{ID}`). QQ does not support in-chat approval — use WebUI, Feishu, or Telegram.",
-            Language::ZhCN => "权限请求: `{NAME}` (ID: `{ID}`)。QQ 暂不支持在聊天内批准，请使用 WebUI、飞书或 Telegram。",
-        },
-        "qq.sent_file_caption" => match lang {
-            Language::En => "File: {NAME}",
-            Language::ZhCN => "文件：{NAME}",
-        },
-        "qq.send_file_group_unsupported" => match lang {
-            Language::En => "This file type cannot be sent in QQ groups (images/videos/voice only). Use private chat (C2C) or send a PNG/JPG.",
-            Language::ZhCN => "该文件类型无法发到 QQ 群（群聊仅支持图片/视频/语音富媒体）。请私聊发送，或改用 PNG/JPG 图片。",
-        },
-        "qq.send_image_format_unsupported" => match lang {
-            Language::En => "QQ inline images must be PNG or JPG (per QQ Bot API). Convert the file or send it as a document in private chat.",
-            Language::ZhCN => "QQ 内联图片仅支持 PNG/JPG（官方富媒体规范）。请转换格式，或在私聊中以文件形式发送。",
-        },
-        "qq.send_image_group_unsupported" => match lang {
-            Language::En => "This image format cannot be shown inline in QQ groups (PNG/JPG only). Use private chat or convert to PNG/JPG.",
-            Language::ZhCN => "该图片格式无法在 QQ 群内联展示（群聊仅支持 PNG/JPG）。请私聊发送或转换为 PNG/JPG。",
-        },
         "feishu.image_too_large" => match lang {
             Language::En => "Image exceeds Feishu upload limit ({MB} MB). Use a smaller file or send as a document via the file API.",
             Language::ZhCN => "图片超过飞书上传限制（{MB} MB）。请缩小文件，或通过文件接口发送。",
-        },
-        "qq.group_chat_unsupported" => match lang {
-            Language::En => "QQ group chat is not supported. Please DM (C2C) the bot instead.",
-            Language::ZhCN => "暂不支持 QQ 群聊通道，请改为私聊（C2C）机器人。",
         },
         "telegram.permission_request" => match lang {
             Language::En => "Permission request: `{NAME}`\nID: `{ID}`",

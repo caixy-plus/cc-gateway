@@ -1259,7 +1259,16 @@ impl TelegramPlatform {
                 let _ = self.edit_message_text(chat_id, message_id, &message).await;
             }
             AgentHistoryOutcome::Deleted { message, .. } => {
+                // 1. Edit the existing message to just the deletion confirmation.
                 let _ = self.edit_message_text(chat_id, message_id, &message).await;
+                // 2. Send a NEW message with the refreshed session list + keyboard.
+                let sessions = GLOBAL_CHANNEL_SESSIONS
+                    .list_agent_sessions_by_channel(&req.channel_id, Some(10));
+                let markup = self.history_reply_markup(chat_id_str, &sessions);
+                let text = Self::history_message_text(&sessions);
+                let _ = self
+                    .send_message_with_markup(chat_id, &text, markup)
+                    .await;
             }
             AgentHistoryOutcome::Error { message } => {
                 let _ = self

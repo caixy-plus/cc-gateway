@@ -92,7 +92,7 @@ pub struct AgentCapabilities {
     /// Whether `/memory` initialization is supported (Claude-exclusive).
     pub memory_init: bool,
     /// Whether the provider is tied to a specific chat platform (currently only Cursor is restricted to
-    /// "only usable on one of Feishu / Telegram / QQ"; other providers are platform-independent).
+    /// "only usable on one of Feishu / Telegram"; other providers are platform-independent).
     pub platform_bound: bool,
     /// Discovery mechanism used by `/models`.
     pub list_models: ListModelsSource,

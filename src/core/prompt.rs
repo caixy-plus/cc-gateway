@@ -7,7 +7,7 @@ use std::path::Path;
 ///
 /// Describes the gateway's purpose, available commands, and MCP Bash tool availability.
 pub fn load_default_prompt() -> String {
-    r#"You are interacting with cc-gateway, a gateway for controlling local agent CLIs via Feishu/Lark, Telegram, QQ, and WebUI.
+    r#"You are interacting with cc-gateway, a gateway for controlling local agent CLIs via Feishu/Lark, Telegram, and WebUI.
 
 Purpose:
 - cc-gateway bridges external chat platforms and WebUI to agent CLI sessions on the host.

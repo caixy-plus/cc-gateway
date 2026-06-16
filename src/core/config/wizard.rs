@@ -193,7 +193,6 @@ fn configure_bot_step(config: &mut GatewayConfig, warnings: &mut Vec<String>) ->
         let msg = match def.id {
             "feishu" => t!("wizard.warn_feishu_incomplete").to_string(),
             "telegram" => t!("wizard.warn_telegram_incomplete").to_string(),
-            "qq" => t!("wizard.warn_qq_incomplete").to_string(),
             other => format!("Platform {other}: required fields are empty"),
         };
         warnings.push(msg);
@@ -329,6 +328,5 @@ mod tests {
         );
         assert!(!config.platforms.feishu.enabled);
         assert!(!config.platforms.telegram.enabled);
-        assert!(!config.platforms.qq.enabled);
     }
 }

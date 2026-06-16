@@ -2,7 +2,7 @@
 //!
 //! # Flow
 //!
-//! 1. The user sends a text message in Feishu / Telegram / QQ / WebUI;
+//! 1. The user sends a text message in Feishu / Telegram / WebUI;
 //! 2. [`CommandRouter::route`] evaluates the text to determine if it is a gateway control command (e.g., `/help`, `/agent`,
 //!    `/cd`, `/ll`, `/models`, `/allow`, `/deny`, etc.) or a regular text message;
 //! 3. It returns a [`CommandAction`] semantic action;
@@ -47,7 +47,7 @@ pub enum CommandAction {
     /// `/pwd`: Print the current working directory.
     PrintWorkingDir,
     /// `/ll [path]`: List directory; Feishu renders a card, Telegram renders an inline keyboard,
-    /// while QQ and WebUI render plain text.
+    /// while WebUI renders plain text.
     ListDir { path: Option<PathBuf> },
     /// `/mkdir <name>`: Create a new directory.
     MakeDir(PathBuf),

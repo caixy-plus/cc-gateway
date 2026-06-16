@@ -94,7 +94,7 @@ pub async fn handle_events() -> Sse<impl Stream<Item = Result<SseEvent, Infallib
 
 #[derive(Deserialize)]
 pub struct ListSessionsQuery {
-    /// Filter by platform id: `webui`, `feishu`, `telegram`, `qq`, or `all`.
+    /// Filter by platform id: `webui`, `feishu`, `telegram`, or `all`.
     pub(crate) platform: Option<String>,
     pub(crate) source: Option<String>,
     #[serde(alias = "channelId")]
@@ -153,7 +153,7 @@ pub async fn handle_list_sessions(
             let is_webui = channel
                 .map(|c| c.source == crate::session::channel_model::SessionSource::WebUI)
                 .unwrap_or(true);
-            // Avoid leaking test identifiers (e.g. `qq u:test-openid`) in the WebUI list.
+            // Avoid leaking test identifiers (e.g. `test-openid`) in the WebUI list.
             // Non-WebUI sessions are view-only in WebUI; keep their titles generic when they look like test data.
             let display_title = if is_webui {
                 s.title.clone()

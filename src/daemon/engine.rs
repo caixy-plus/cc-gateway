@@ -4,7 +4,7 @@
 //!
 //! 1. Starting background tasks such as the log cleaner and history recorder;
 //! 2. Initializing the SQLite database and restoring channels, sessions, and pairing states from disk;
-//! 3. Starting the chat platforms enabled by the user (Feishu, Telegram, QQ);
+//! 3. Starting the chat platforms enabled by the user (Feishu, Telegram);
 //! 4. Starting the HTTP and WebUI server (binding to a singleton port to ensure only one daemon instance runs);
 //! 5. Waiting for `SIGTERM`, `SIGINT`, or a "critical component crash" signal to gracefully shut down all platforms.
 

@@ -9,7 +9,7 @@ use crate::config::model::AgentProfiles;
 use crate::runtime::mcp_server::McpContext;
 use crate::t;
 
-const LIST_LIMIT: usize = 10;
+pub(crate) const LIST_LIMIT: usize = 10;
 
 #[derive(Clone)]
 pub struct AgentHistoryEnv {
