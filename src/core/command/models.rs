@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde_json::Value;
 
 use crate::config::model::{AgentConfig, AgentProvider};
 
@@ -23,26 +21,14 @@ pub fn switch_hint_for_provider(provider: &AgentProvider) -> String {
     crate::t!("models.switch_hint_index").to_string()
 }
 
-/// Stable Claude Code aliases used only when CLI/settings discovery returns nothing.
-/// Version-pinned ids (`claude-opus-4-8`, …) are intentionally omitted — users can
-/// `/models <id>` directly; Claude Code validates the `--model` argument on respawn.
-pub fn claude_model_alias_fallback() -> &'static [&'static str] {
-    &[
-        "default",
-        "best",
-        "opus",
-        "sonnet",
-        "haiku",
-        "fable",
-        "opusplan",
-        "sonnet[1m]",
-        "opus[1m]",
-    ]
-}
-
-/// @deprecated alias for tests — prefer [`claude_model_alias_fallback`].
-pub fn curated_claude_models() -> &'static [&'static str] {
-    claude_model_alias_fallback()
+/// Selectable Claude model names shown by `/models` (aliases Claude Code accepts via `--model`).
+///
+/// Version-pinned ids (`claude-opus-4-8`, …) and the `sonnet[1m]` / `opus[1m]` 1M-context variants
+/// are intentionally omitted — the 1M variants are overage/entitlement gated and make Claude exit at
+/// startup on accounts that lack them. Anything not listed can still be passed directly
+/// (`/models <id>`); Claude Code validates the `--model` argument on respawn.
+pub fn claude_models() -> &'static [&'static str] {
+    &["default", "opus", "sonnet", "haiku", "fable"]
 }
 
 /// Human-readable line for the active model in `/models` output.
@@ -95,69 +81,17 @@ pub async fn list_models_via_cli(
     }
 }
 
-/// Gateway-maintained / discovered model catalog for providers without a stable list CLI.
-pub fn list_discovered_models(provider: &AgentProvider, work_dir: &str) -> Vec<String> {
+/// Gateway-maintained model catalog for providers without a stable list CLI.
+///
+/// Claude Code has no model-list subcommand (`claude models` is parsed as a *prompt* and runs a
+/// billable inference turn), so the list is the static [`claude_models`] catalog — never shelling
+/// out to the CLI or scanning settings files.
+pub fn list_discovered_models(provider: &AgentProvider) -> Vec<String> {
     match provider {
-        AgentProvider::Claude => list_claude_models(work_dir),
+        AgentProvider::Claude => claude_models().iter().map(|s| s.to_string()).collect(),
         _ => vec![],
     }
 }
-
-/// Discover Claude models from `availableModels` in `.claude/settings*.json`, falling back to a
-/// stable alias list when none are configured.
-///
-/// Claude Code has no model-list CLI subcommand (`claude models` is parsed as a *prompt* and runs a
-/// billable inference turn), so discovery is settings-only — never shelling out to the CLI.
-pub fn list_claude_models(work_dir: &str) -> Vec<String> {
-    let mut set = BTreeSet::new();
-    set.extend(models_from_claude_settings(work_dir));
-
-    if set.is_empty() {
-        set.extend(claude_model_alias_fallback().iter().map(|s| s.to_string()));
-    }
-
-    set.into_iter().collect()
-}
-
-fn claude_settings_candidates(work_dir: &str) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if !work_dir.trim().is_empty() {
-        let project = PathBuf::from(work_dir);
-        paths.push(project.join(".claude").join("settings.json"));
-        paths.push(project.join(".claude").join("settings.local.json"));
-    }
-    if let Some(home) = dirs::home_dir() {
-        paths.push(home.join(".claude").join("settings.json"));
-        paths.push(home.join(".claude").join("settings.local.json"));
-    }
-    paths
-}
-
-fn models_from_claude_settings(work_dir: &str) -> Vec<String> {
-    let mut set = BTreeSet::new();
-    for path in claude_settings_candidates(work_dir) {
-        merge_available_models_from_settings_file(&path, &mut set);
-    }
-    set.into_iter().collect()
-}
-
-fn merge_available_models_from_settings_file(path: &Path, out: &mut BTreeSet<String>) {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&content) else {
-        return;
-    };
-    let Some(arr) = value.get("availableModels").and_then(|v| v.as_array()) else {
-        return;
-    };
-    for item in arr {
-        if let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
-            out.insert(s.to_string());
-        }
-    }
-}
-
 
 /// Resolve `/models <arg>` for providers that pass the model straight through (Claude `--model`).
 ///
@@ -190,16 +124,6 @@ pub fn resolve_model_switch_arg(
     }
 }
 
-/// @deprecated — use [`list_discovered_models`].
-pub fn list_curated_models(provider: &AgentProvider) -> Vec<String> {
-    match provider {
-        AgentProvider::Claude => claude_model_alias_fallback()
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        _ => vec![],
-    }
-}
 
 fn looks_like_model_token(token: &str) -> bool {
     let t = token.trim();
@@ -377,26 +301,12 @@ gemini-3-flash
     }
 
     #[test]
-    fn claude_alias_fallback_includes_core_aliases() {
-        let models = claude_model_alias_fallback();
+    fn claude_models_includes_core_aliases_without_1m_variants() {
+        let models = claude_models();
         assert!(models.contains(&"opus"));
         assert!(models.contains(&"sonnet"));
+        assert!(!models.iter().any(|m| m.ends_with("[1m]")));
         assert!(!models.iter().any(|m| m.starts_with("claude-opus-4")));
-    }
-
-    #[test]
-    fn reads_available_models_from_claude_settings_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&settings_dir).unwrap();
-        std::fs::write(
-            settings_dir.join("settings.json"),
-            r#"{"availableModels":["sonnet","claude-sonnet-4-6","haiku"]}"#,
-        )
-        .unwrap();
-        let models = models_from_claude_settings(dir.path().to_str().unwrap());
-        assert!(models.contains(&"sonnet".to_string()));
-        assert!(models.contains(&"claude-sonnet-4-6".to_string()));
     }
 
     #[test]
@@ -419,10 +329,10 @@ gemini-3-flash
     }
 
     #[test]
-    fn list_curated_models_for_claude() {
-        let models = list_curated_models(&AgentProvider::Claude);
+    fn list_discovered_models_for_claude() {
+        let models = list_discovered_models(&AgentProvider::Claude);
         assert!(models.contains(&"opus".to_string()));
-        assert!(list_curated_models(&AgentProvider::Pi).is_empty());
+        assert!(list_discovered_models(&AgentProvider::Pi).is_empty());
     }
 
     #[test]

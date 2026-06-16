@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use crate::command::models::claude_model_alias_fallback;
+use crate::command::models::claude_models;
 use crate::config::model::AgentProvider;
 use crate::db;
 use crate::session::channel_command::{ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome};
@@ -88,11 +88,12 @@ async fn claude_models_lists_curated_aliases() -> Result<()> {
     };
     assert!(
         options.contains(&"sonnet".to_string()),
-        "discovered list should include sonnet fallback, got {options:?}"
+        "model list should include sonnet, got {options:?}"
     );
-    assert!(
-        options.len() >= claude_model_alias_fallback().len(),
-        "list should include alias fallback entries"
+    assert_eq!(
+        options.len(),
+        claude_models().len(),
+        "list should be the static claude_models catalog"
     );
     Ok(())
 }

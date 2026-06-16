@@ -713,12 +713,11 @@ impl AgentController {
             );
         }
         let config = self.config.config_for_provider(Some(provider.clone()))?;
-        let work_dir = self.get_work_dir().await;
 
         match caps.list_models {
             crate::config::agent_registry::ListModelsSource::NotSupported => Ok(vec![]),
             crate::config::agent_registry::ListModelsSource::Curated => {
-                Ok(models::list_discovered_models(&provider, &work_dir))
+                Ok(models::list_discovered_models(&provider))
             }
             crate::config::agent_registry::ListModelsSource::InSessionRpc => {
                 let mut s = self.session.write().await;
