@@ -1,6 +1,7 @@
 use axum::{extract::Json, extract::State, http::StatusCode};
 use serde::Deserialize;
 use serde_json::json;
+use std::path::PathBuf;
 
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 
@@ -16,6 +17,13 @@ pub struct LlRequest {
     pub(crate) session_id: Option<String>,
     pub(crate) path: Option<String>,
     pub(crate) show_hidden: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct MkdirRequest {
+    pub(crate) session_id: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) name: String,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +165,53 @@ pub async fn handle_cd(Json(req): Json<CdRequest>) -> (StatusCode, String) {
     (StatusCode::OK, body.to_string())
 }
 
+pub async fn handle_mkdir(Json(req): Json<MkdirRequest>) -> (StatusCode, String) {
+    let name = req.name.trim();
+    let invalid_name = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || PathBuf::from(name).is_absolute();
+    if invalid_name {
+        let body = json!({
+            "error_key": "webui.failed_create_dir",
+            "error": "Invalid directory name"
+        });
+        return (StatusCode::BAD_REQUEST, body.to_string());
+    }
+
+    let base_path = req.path.unwrap_or_else(|| ".".to_string());
+    let base_dir = match resolve_requested_dir(req.session_id.as_deref(), &base_path).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let body = json!({ "error_key": "webui.failed_create_dir", "error": e.to_string() });
+            return (StatusCode::BAD_REQUEST, body.to_string());
+        }
+    };
+
+    let target = PathBuf::from(&base_dir).join(name);
+    let target_str = target.to_string_lossy().to_string();
+    if let Err(e) = crate::runtime::controller::ensure_under_home(&target_str) {
+        let body = json!({ "error_key": "webui.failed_create_dir", "error": e.to_string() });
+        return (StatusCode::BAD_REQUEST, body.to_string());
+    }
+
+    match std::fs::create_dir(&target) {
+        Ok(()) => {
+            let body = json!({ "dir": target_str });
+            (StatusCode::OK, body.to_string())
+        }
+        Err(e) => {
+            let body = json!({
+                "error_key": "webui.failed_create_dir",
+                "error": format!("Failed to create directory '{}': {}", target_str, e)
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, body.to_string())
+        }
+    }
+}
+
 pub async fn handle_cd_default(
     State(state): State<super::session::AppState>,
     Json(req): Json<SessionCmdRequest>,
@@ -180,6 +235,49 @@ pub async fn handle_help() -> (StatusCode, String) {
         { "cmd": "/agents", "desc": "Set this channel default agent" },
         { "cmd": "/pwd", "desc": "Show current working directory" },
         { "cmd": "/ll", "desc": "List directory contents" },
+        { "cmd": "/mkdir <name>", "desc": "Create a directory" },
     ]);
     (StatusCode::OK, commands.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mkdir_creates_child_directory_under_base() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let base = temp.path().join("base");
+        std::fs::create_dir(&base).unwrap();
+
+        let (status, body) = handle_mkdir(Json(MkdirRequest {
+            session_id: None,
+            path: Some(base.to_string_lossy().to_string()),
+            name: "new-project".to_string(),
+        }))
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(base.join("new-project").is_dir());
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            value["dir"].as_str().unwrap(),
+            base.join("new-project").to_string_lossy()
+        );
+    }
+
+    #[tokio::test]
+    async fn mkdir_rejects_path_segments() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+
+        let (status, body) = handle_mkdir(Json(MkdirRequest {
+            session_id: None,
+            path: Some(temp.path().to_string_lossy().to_string()),
+            name: "../outside".to_string(),
+        }))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(!temp.path().join("outside").exists());
+    }
 }

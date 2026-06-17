@@ -55,10 +55,16 @@ fn build_update_check_body(
     }))
 }
 
-pub async fn handle_version() -> (StatusCode, String) {
+pub async fn handle_version() -> impl axum::response::IntoResponse {
     let version = env!("CARGO_PKG_VERSION");
-    let body = json!({ "version": version });
-    (StatusCode::OK, body.to_string())
+    // Serve as real `application/json` (Axum `Json`) and forbid caching: a JSON
+    // body mislabeled `text/plain` with no cache directives can be stale-cached
+    // or mangled by Firefox's heuristic cache / intermediary proxies, which makes
+    // the WebUI footer render `vunknown`.
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        axum::Json(json!({ "version": version })),
+    )
 }
 
 /// Returns true when the release body is just an auto-generated "Full Changelog" link.
@@ -260,5 +266,34 @@ mod tests {
             args,
             vec!["update", "--yes", "--config", "/tmp/cc-gateway/custom.json"]
         );
+    }
+
+    // The WebUI footer renders the version as `v{version}`; when the JSON body is
+    // mislabeled `text/plain` or served stale from a cache/proxy, the frontend
+    // parse yields an empty object and the footer shows `vunknown` (notably in
+    // Firefox's heuristic cache). Guard the content-type and cache directives.
+    #[tokio::test]
+    async fn version_response_is_json_and_not_cached() {
+        use axum::body::to_bytes;
+        use axum::response::IntoResponse;
+
+        let resp = handle_version().await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
+
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
     }
 }

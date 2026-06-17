@@ -1,7 +1,6 @@
 use axum::{
-    middleware,
+    Router, middleware,
     routing::{delete, get, post},
-    Router,
 };
 use tower_http::cors::CorsLayer;
 
@@ -34,6 +33,7 @@ pub fn create_app_with_config_path(
         .route("/api/cmd/ll", post(handlers::cmd::handle_ll))
         .route("/api/cmd/pwd", post(handlers::cmd::handle_pwd))
         .route("/api/cmd/cd", post(handlers::cmd::handle_cd))
+        .route("/api/cmd/mkdir", post(handlers::cmd::handle_mkdir))
         .route(
             "/api/cmd/cd_default",
             post(handlers::cmd::handle_cd_default),
