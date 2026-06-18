@@ -53,12 +53,12 @@ cargo run -- webui        # Open WebUI (requires built/embedded frontend for ful
   - `MINOR` ranges **0–19**. When it reaches **19**, the next bump rolls over to `0` and increments `MAJOR`.
   - Example: `1.5.9` → `1.6.0`; `1.19.9` → `2.0.0`.
 - **Release notes must be bilingual** (only when the user requests a release): when creating a GitHub Release (or editing one), write release notes with each bullet in both Chinese and English, separated by ` / `. Format: `- **中文描述** / English description — 中文细节 / English details.` This applies to both manually created and CI-created releases. If CI creates the release with auto-generated notes, edit it afterwards via `gh release edit`. Never leave only the auto-generated "Full Changelog" link as the sole body — the WebUI shows release notes directly to users, and empty notes waste the update-check feature.
-- **Update user docs with the code**: adding or materially changing an **agent provider** or **chat platform** is not complete until the [user-facing documentation](#user-facing-documentation-keep-in-sync) checklist below is satisfied (English + Chinese where paired files exist). Do not ship integration-only PRs without the matching `docs/` and README updates.
+- **Update user docs with the code**: adding or materially changing an **agent provider** or **chat platform** is not complete until the [user-facing documentation](#user-facing-documentation-keep-in-sync) checklist below is satisfied (English + Chinese where paired files exist). Removing or tightening user-visible behavior uses the same doc’s [retire/remove/tighten](docs/doc-sync-checklist.md#retire-remove-or-tighten) sweep. Do not ship integration-only PRs without the matching `docs/` and README updates.
 - **Chat platform integration**: follow [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md) (feature parity matrix + A–E checklist). Copy into PRs; check every required row.
 
 ## User-facing documentation (keep in sync)
 
-Treat documentation as part of the feature: adding or materially changing an **agent provider** or **chat platform** is not complete until the per-file sync tables are satisfied (EN + zh-CN where paired). **Full checklist → [docs/doc-sync-checklist.md](docs/doc-sync-checklist.md)** (new-provider table, new-platform table, bilingual/single-source/install-output conventions).
+Treat documentation as part of the feature: adding or materially changing an **agent provider** or **chat platform** is not complete until the per-file sync tables are satisfied (EN + zh-CN where paired). **Full checklist → [docs/doc-sync-checklist.md](docs/doc-sync-checklist.md)** (new-provider table, new-platform table, **retire/remove/tighten sweep**, bilingual/single-source/install-output conventions).
 
 ## Architecture
 
