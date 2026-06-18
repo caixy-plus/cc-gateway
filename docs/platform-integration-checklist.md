@@ -6,25 +6,25 @@ English | [简体中文](platform-integration-checklist.zh-CN.md)
 
 ## Feature parity reference (current platforms)
 
-| Capability | Feishu | Telegram | QQ |
-|------------|--------|----------|-----|
-| `Platform` trait (`run` / `shutdown`) | Yes | Yes | Yes |
-| Config + `runtime_defaults()` | Yes | Yes | Yes |
-| Daemon spawn via `platform_registry` | Yes | Yes | Yes |
-| `SessionSource` + DB `source` string | Yes | Yes | Yes |
-| Pairing (`require_pairing`) | Yes | Yes | Yes |
-| `ChatCommandExecutor` + `CommandRouter` | Yes | Yes | Yes |
-| `EventPollSink` (stream replies) | Yes | Yes | Yes |
-| **MCP `send_file`** | Yes | Yes | Yes (C2C rich media only; group chat unsupported) |
-| `McpContext` on channel commands | Yes | Yes | Yes |
-| Deliver-bus text (`spawn_deliver_listener`) | Yes | Yes | Yes |
-| WebUI config + `/api/platforms` | Yes | Yes | Yes |
-| Init wizard bot step | Yes | Yes | Yes |
-| i18n (`<platform>.*`) | Yes | Yes | Yes |
-| Inbound media → agent path | Yes | Yes | **Yes** (C2C attachments) |
-| Interactive `/ll` / `/agents` UI | Cards | Inline keyboard | Text list |
-| Permission prompts UI | Cards / callback | Inline buttons | Text + request id |
-| Unknown slash (no session) | Custom help | Help text | Router default |
+| Capability | Feishu | Telegram |
+|------------|--------|----------|
+| `Platform` trait (`run` / `shutdown`) | Yes | Yes |
+| Config + `runtime_defaults()` | Yes | Yes |
+| Daemon spawn via `platform_registry` | Yes | Yes |
+| `SessionSource` + DB `source` string | Yes | Yes |
+| Pairing (`require_pairing`) | Yes | Yes |
+| `ChatCommandExecutor` + `CommandRouter` | Yes | Yes |
+| `EventPollSink` (stream replies) | Yes | Yes |
+| **MCP `send_file`** | Yes | Yes |
+| `McpContext` on channel commands | Yes | Yes |
+| Deliver-bus text (`spawn_deliver_listener`) | Yes | Yes |
+| WebUI config + `/api/platforms` | Yes | Yes |
+| Init wizard bot step | Yes | Yes |
+| i18n (`<platform>.*`) | Yes | Yes |
+| Inbound media → agent path | Yes | Yes |
+| Interactive `/ll` / `/agents` UI | Cards | Inline keyboard |
+| Permission prompts UI | Cards / callback | Inline buttons |
+| Unknown slash (no session) | Custom help | Help text |
 
 Document any intentional **No** in your platform’s `docs/bots/<id>.md`.
 

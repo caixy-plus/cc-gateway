@@ -43,7 +43,7 @@ flowchart TD
 | **L. Tests** | Same-file `#[cfg(test)]` in touched modules; optional `src/tests/<name>_*.rs` for end-to-end spawn/MCP flows | Unit tests (defaults, argv normalization, MCP matrix, `/agent` parsing) live **at the bottom of the `.rs` under test** — do not `pub` helpers for cross-file unit tests. Add `src/tests/` only when you need fake CLIs, DB, or session globals; register in `src/tests.rs`. Prefer TDD: failing test → minimal impl. |
 | **U. Documentation** | See § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) | `docs/config` (+ zh-CN), `README` (+ zh-CN), refresh “Current providers” in this section. |
 
-Platforms (Feishu/Telegram/QQ/WebUI) generally **do not** need per-provider code: they use `AgentProfiles`, `CommandRouter`, and `AgentController`. Feishu agent picker options come from `command::agents::available_providers()` via `build_agent_picker_card` — no card change unless UX needs a new layout.
+Platforms (Feishu/Telegram/WebUI) generally **do not** need per-provider code: they use `AgentProfiles`, `CommandRouter`, and `AgentController`. Feishu agent picker options come from `command::agents::available_providers()` via `build_agent_picker_card` — no card change unless UX needs a new layout.
 
 ## 3. Agent registry & WebUI (no per-provider frontend edits)
 
@@ -93,7 +93,7 @@ On load, `config/loader.rs` runs `upgrade_config_json` (migrates flat `agent.<id
 1. `cargo test agent_registry router smoke_core webui_session` (+ new module tests).
 2. `cc-gateway init` wizard lists the new binary; `enabled` / `apply_init_agent_enablement` behave as expected.
 3. Interactive: `/agents` → set default; `/agent <alias> [args]` in a work dir; message round-trip, `/stop`, permission prompts.
-4. Feishu/Telegram: `/agent` picker, start session, MCP `send_file` round-trip. QQ: same flow but **no** `send_file` until `McpDeliveryTarget::Qq` exists.
+4. Feishu/Telegram: `/agent` picker, start session, MCP `send_file` round-trip.
 5. WebUI: `GET /api/agents` lists the new provider; Settings → Agent shows it without frontend code changes (after `./install_local.sh` or release build).
 6. **Docs**: § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) checklist done (config + README + this file).
 

@@ -6,25 +6,25 @@
 
 ## 功能对齐参考（当前平台）
 
-| 能力 | 飞书 | Telegram | QQ |
-|------|------|----------|-----|
-| `Platform`（`run` / `shutdown`） | 有 | 有 | 有 |
-| 配置 + `runtime_defaults()` | 有 | 有 | 有 |
-| Daemon 经 `platform_registry` 启动 | 有 | 有 | 有 |
-| `SessionSource` + DB `source` | 有 | 有 | 有 |
-| 配对（`require_pairing`） | 有 | 有 | 有 |
-| `ChatCommandExecutor` + `CommandRouter` | 有 | 有 | 有 |
-| `EventPollSink`（流式回复） | 有 | 有 | 有 |
-| **MCP `send_file`** | 有 | 有 | 有（仅 C2C 富媒体；群聊不支持） |
-| 命令路径 `McpContext` | 有 | 有 | 有 |
-| Deliver-bus 文本推送 | 有 | 有 | 有 |
-| WebUI 配置 + `/api/platforms` | 有 | 有 | 有 |
-| Init 向导机器人步骤 | 有 | 有 | 有 |
-| i18n（`<platform>.*`） | 有 | 有 | 有 |
-| 入站媒体转 agent | 有 | 有 | **有**（C2C 附件） |
-| `/ll`、`/agents` 交互 | 卡片 | 内联按钮 | 纯文本 |
-| 权限确认 UI | 卡片/回调 | 内联按钮 | 文本 + request id |
-| 无会话时未知命令 | 定制帮助 | 帮助文本 | 路由默认 |
+| 能力 | 飞书 | Telegram |
+|------|------|----------|
+| `Platform`（`run` / `shutdown`） | 有 | 有 |
+| 配置 + `runtime_defaults()` | 有 | 有 |
+| Daemon 经 `platform_registry` 启动 | 有 | 有 |
+| `SessionSource` + DB `source` | 有 | 有 |
+| 配对（`require_pairing`） | 有 | 有 |
+| `ChatCommandExecutor` + `CommandRouter` | 有 | 有 |
+| `EventPollSink`（流式回复） | 有 | 有 |
+| **MCP `send_file`** | 有 | 有 |
+| 命令路径 `McpContext` | 有 | 有 |
+| Deliver-bus 文本推送 | 有 | 有 |
+| WebUI 配置 + `/api/platforms` | 有 | 有 |
+| Init 向导机器人步骤 | 有 | 有 |
+| i18n（`<platform>.*`） | 有 | 有 |
+| 入站媒体转 agent | 有 | 有 |
+| `/ll`、`/agents` 交互 | 卡片 | 内联按钮 |
+| 权限确认 UI | 卡片/回调 | 内联按钮 |
+| 无会话时未知命令 | 定制帮助 | 帮助文本 |
 
 若有意的 **无**，须在 `docs/bots/<id>.zh-CN.md` 中说明。
 

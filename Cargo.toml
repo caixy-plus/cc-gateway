@@ -3,10 +3,10 @@ name = "cc-gateway"
 version = "1.12.5"
 edition = "2021"
 authors = ["caixinyun"]
-description = "Gateway for local agent CLIs (Claude, Cursor, OpenCode, …) via Feishu/Lark, Telegram, QQ, and WebUI"
+description = "Gateway for local agent CLIs (Claude, Cursor, OpenCode, …) via Feishu/Lark, Telegram, and WebUI"
 license = "MIT"
 repository = "https://github.com/caixy-plus/cc-gateway"
-keywords = ["claude", "claude-code", "feishu", "lark", "telegram", "qq", "opencode", "gateway"]
+keywords = ["claude", "claude-code", "feishu", "lark", "telegram", "opencode", "gateway"]
 categories = ["command-line-utilities", "development-tools"]
 
 [lib]

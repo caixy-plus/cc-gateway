@@ -47,7 +47,7 @@ description: Applies standard Rust coding conventions and best practices. Use wh
 | `core` | `src/core.rs` | `agent`, `command`, `config`, `history`, `prompt`, `runtime`, `session` |
 | `api` | `src/api.rs` | `web` (Axum handlers, SSE) |
 | `database` | `src/database.rs` | SQLite persistence (`pub use database as db` in `lib.rs`) |
-| `platform` | `src/platform.rs` | Feishu / Telegram / QQ |
+| `platform` | `src/platform.rs` | Feishu / Telegram |
 | `daemon`, `utils` | `src/<name>.rs` + `src/<name>/` | lifecycle, i18n |
 | `types` | `src/types.rs` | `pub use` of shared config/session types |
 

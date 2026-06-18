@@ -224,12 +224,14 @@ pub async fn handle_create_session(
             return (StatusCode::INTERNAL_SERVER_ERROR, body.to_string());
         }
     };
-    let title = req.title.unwrap_or_else(|| "WebUI Session".to_string());
     let work_dir = req
         .work_dir
         .filter(|dir| dir.trim() != "~")
         .unwrap_or_else(|| state.default_dir.clone());
     let expanded = shellexpand::tilde(&work_dir).to_string();
+    let title = req
+        .title
+        .map_or_else(|| derive_title_from_dir(&expanded), |t| t);
 
     let default_provider = state.agent_settings.default.to_string();
     match GLOBAL_CHANNEL_SESSIONS.create_agent_session_only(
@@ -664,6 +666,15 @@ fn sanitize_display_name(name: &str) -> String {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("file")
+        .to_string()
+}
+
+fn derive_title_from_dir(dir: &str) -> String {
+    std::path::Path::new(dir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("WebUI Session")
         .to_string()
 }
 

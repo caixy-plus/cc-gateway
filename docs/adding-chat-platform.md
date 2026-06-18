@@ -2,9 +2,9 @@
 
 > Back: [CLAUDE.md](../CLAUDE.md). Companion: [Adding a New Agent Provider](adding-agent-provider.md), [Platform Reference Docs](platform-reference.md), [platform-integration-checklist](platform-integration-checklist.md).
 
-Use this checklist when integrating a new chat bot (Feishu/Lark, Telegram, QQ, Discord, Slack, etc.). **Full checklist (do not skip items):** [platform-integration-checklist.md](platform-integration-checklist.md).
+Use this checklist when integrating a new chat bot (Feishu/Lark, Telegram, Discord, Slack, etc.). **Full checklist (do not skip items):** [platform-integration-checklist.md](platform-integration-checklist.md).
 
-Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling), **QQ** (OpenAPI v2 Gateway WebSocket). Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) drives daemon startup, connection status, `GET /api/platforms`, pairing flags, config restart policy, and `SessionSource` mapping — add a `PlatformDef` entry plus `src/platform/<name>/`. Typed per-platform sections live under **`platforms.<id>`** in `config.json`; WebUI Settings render from `GET /api/platforms` field schema (Phase 2). **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) and [Platform Reference Docs](platform-reference.md).
+Current platforms: **Feishu** (pbbp2 WebSocket + cards), **Telegram** (Bot API long-polling). Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) drives daemon startup, connection status, `GET /api/platforms`, pairing flags, config restart policy, and `SessionSource` mapping — add a `PlatformDef` entry plus `src/platform/<name>/`. Typed per-platform sections live under **`platforms.<id>`** in `config.json`; WebUI Settings render from `GET /api/platforms` field schema (Phase 2). **Also complete** § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) and [Platform Reference Docs](platform-reference.md).
 
 ## 1. Architecture (what you are building)
 
@@ -47,7 +47,6 @@ flowchart LR
 |-------|-----------|------|
 | **WebSocket + custom framing** | `platform/feishu/ws.rs`, `platform/proto/` | Vendor pushes events over WS (Feishu pbbp2 protobuf) |
 | **HTTP long-polling** | `platform/telegram.rs` | Simple Bot API `getUpdates` loop |
-| **WebSocket (JSON opcodes)** | `platform/qq/ws.rs` | Vendor Gateway (QQ Bot API v2: Hello / Identify / Dispatch) |
 | **Webhook server** | (not in tree yet) | Vendor POSTs to your HTTP endpoint; run handler inside `Platform::run` |
 
 Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` only.
@@ -70,11 +69,11 @@ Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` onl
 | **L. Agent events** | Platform poll loop | `core/runtime/event_poller.rs` + `EventPollSink` impl (see `TelegramEventSink`) to stream `AgentEvent` → chat messages. |
 | **M. MCP `send_file`** | `src/core/runtime/file_delivery.rs`, `core/runtime/mcp_server.rs`, platform `mcp_context_for_*` | New `McpDeliveryTarget` variant + `FileDelivery` impl; `with_mcp_context` on inbound. Update MCP matrix + `docs/bots/<platform>.md` limits. |
 | **N. Deliver bus** | `platform.rs` | `spawn_deliver_listener("<name>", \|chat_id, text\| …)` if WebUI/daemon pushes files into chats. |
-| **O. Interactive UX** | e.g. `feishu/cards.rs`, Telegram inline keyboards | Map `ChatCommandOutcome` to platform UI: Feishu cards, Telegram inline keyboards, QQ plain text. Inbound slash commands use shared `route_and_execute` (not pre-intercepted). |
+| **O. Interactive UX** | e.g. `feishu/cards.rs`, Telegram inline keyboards | Map `ChatCommandOutcome` to platform UI: Feishu cards, Telegram inline keyboards, plain text where needed. Inbound slash commands use shared `route_and_execute` (not pre-intercepted). |
 | **P. Web API** | `src/api/web/handlers/config.rs` | Mask secrets in `handle_get_config`; merge body in `handle_save_config`; include in `handle_get_platforms` when `enabled`; extend `handle_set_require_pairing` allowlist. |
 | **Q. Init wizard** | `src/core/config/wizard.rs` | `configure_bot_step`: menu entry, enable flag, credential prompts, incomplete warnings. |
 | **R. i18n** | `src/utils/i18n/dict.rs` | Prefix `<name>.` for help, errors, shutdown notice, permission titles, command menu labels. |
-| **S. Tests** | Same-file `#[cfg(test)]` in platform modules; optional `src/tests/<name>_*.rs` | Card/layout and parsing unit tests stay in the platform `.rs` (e.g. `feishu/cards.rs`, `qq/api.rs`). Use `src/tests/` only for full chat/session flows with mocks; register in `src/tests.rs`. Do not widen visibility on handlers/helpers for unit tests. |
+| **S. Tests** | Same-file `#[cfg(test)]` in platform modules; optional `src/tests/<name>_*.rs` | Card/layout and parsing unit tests stay in the platform `.rs` (e.g. `feishu/cards.rs`). Use `src/tests/` only for full chat/session flows with mocks; register in `src/tests.rs`. Do not widen visibility on handlers/helpers for unit tests. |
 | **T. Platform Reference Docs** | [platform-reference.md](platform-reference.md) | **Required:** add a new `## <Platform>` subsection with console + auth + transport + events + send APIs (table of URLs). Mirror links in `docs/bots/<platform>.md` **References**. |
 | **U. User documentation** | See § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) | **Required:** new `docs/bots/<platform>.md` + `.zh-CN.md`, update `docs/bots/README`, `docs/config`, `docs/usage`, README, `scripts/install-docs.*`. |
 
@@ -82,15 +81,15 @@ Pick one transport; keep vendor JSON/API types inside `src/platform/<name>/` onl
 
 ## 4. Platform-specific hooks (common)
 
-| Feature | Feishu | Telegram | QQ | Your platform |
-|---------|--------|----------|-----|----------------|
-| Pairing gate | `require_pairing` + WebUI approve | same | same | Call `GLOBAL_PAIRING_MANAGER` before handling |
-| `/ll` directory UI | Interactive card + callbacks | Inline keyboard | Text list | Map `ChatCommandOutcome::ListDir` |
-| `/agent` picker | Card buttons `set_agent` | Inline keyboard | Text list | Map `ChatCommandOutcome::SelectAgent` |
-| Permission prompts | Card / text + callback | Inline buttons | Text + request id | Map `PermissionRequest` events |
-| **MCP `send_file`** | Yes (`FeishuFileTarget`) | Yes (`TelegramFileTarget`) | Yes (`QqFileTarget`, C2C only) | `McpDeliveryTarget` + `with_mcp_context` |
-| Shutdown notice | `feishu.shutdown_notice` i18n | `telegram.shutdown_notice` | `qq.shutdown_notice` | Send on daemon `Platform::shutdown` |
-| Unknown slash (no session) | `feishu.unknown_command` | Telegram help text | (shared builtins) | Reply with available commands |
+| Feature | Feishu | Telegram | Your platform |
+|---------|--------|----------|---------------|
+| Pairing gate | `require_pairing` + WebUI approve | same | Call `GLOBAL_PAIRING_MANAGER` before handling |
+| `/ll` directory UI | Interactive card + callbacks | Inline keyboard | Map `ChatCommandOutcome::ListDir` |
+| `/agent` picker | Card buttons `set_agent` | Inline keyboard | Map `ChatCommandOutcome::SelectAgent` |
+| Permission prompts | Card / text + callback | Inline buttons | Map `PermissionRequest` events |
+| **MCP `send_file`** | Yes (`FeishuFileTarget`) | Yes (`TelegramFileTarget`) | `McpDeliveryTarget` + `with_mcp_context` |
+| Shutdown notice | `feishu.shutdown_notice` i18n | `telegram.shutdown_notice` | Send on daemon `Platform::shutdown` |
+| Unknown slash (no session) | `feishu.unknown_command` | Telegram help text | Reply with available commands |
 
 ## 5. Frontend checklist (`../cc-gateway-webui`)
 
@@ -123,13 +122,6 @@ Bot settings live under **`platforms.<id>`** (not top-level keys). Canonical ful
       "enabled": false,
       "bot_token": "${TELEGRAM_BOT_TOKEN}",
       "require_pairing": true
-    },
-    "qq": {
-      "enabled": false,
-      "app_id": "${QQ_APP_ID}",
-      "app_secret": "${QQ_APP_SECRET}",
-      "sandbox": false,
-      "require_pairing": true
     }
   }
 }
@@ -146,7 +138,7 @@ Bot settings live under **`platforms.<id>`** (not top-level keys). Canonical ful
 1. `cargo test <platform>_` modules + `config_model` + `restart_policy`.
 2. `cc-gateway init` or WebUI: enable platform, save config, restart daemon.
 3. WebUI **Pairing**: approve a test chat when `require_pairing` is on.
-4. End-to-end: send message → agent reply; `/agent`, `/cd`, `/ll`, `/quit`; permission allow/deny; MCP `send_file` on Feishu/Telegram (skip for QQ until implemented).
+4. End-to-end: send message → agent reply; `/agent`, `/cd`, `/ll`, `/quit`; permission allow/deny; MCP `send_file` on Feishu/Telegram.
 5. `GET /api/platforms` shows `connecting` → `connected`; shutdown sends user-visible notice.
 6. `./install_local.sh` if WebUI settings changed.
 7. **Docs**: § [User-facing documentation](../CLAUDE.md#user-facing-documentation-keep-in-sync) checklist done; **Platform Reference Docs** subsection added; run install (or `print_install_docs`) and confirm the new guide URL appears.
@@ -159,4 +151,4 @@ Bot settings live under **`platforms.<id>`** (not top-level keys). Canonical ful
 
 ## 10. Future improvement
 
-Register the platform in **`platform_registry.rs`** (`PLATFORM_DEFS`: id, `SessionSource`, transport, capabilities, config hooks, `spawn`). Grep existing `feishu` / `telegram` / `qq` for remaining match arms (WebUI config POST, wizard prompts, MCP delivery, platform module).
+Register the platform in **`platform_registry.rs`** (`PLATFORM_DEFS`: id, `SessionSource`, transport, capabilities, config hooks, `spawn`). Grep existing `feishu` / `telegram` for remaining match arms (WebUI config POST, wizard prompts, MCP delivery, platform module).

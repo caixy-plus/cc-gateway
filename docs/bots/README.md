@@ -6,7 +6,6 @@ cc-gateway can bridge local agent sessions to multiple chat bots at once. Each p
 |----------|-------|-------------|-----------------|---------------|
 | Feishu / Lark | [feishu.md](feishu.md) | WebSocket (pbbp2) | Yes | `platforms.feishu` |
 | Telegram | [telegram.md](telegram.md) | HTTP long-polling (`getUpdates`) | Yes | `platforms.telegram` |
-| QQ (official bot) | [qq.md](qq.md) | WebSocket Gateway (OpenAPI v2) | Yes (C2C only) | `platforms.qq` |
 
 中文文档：[README.zh-CN.md](README.zh-CN.md)
 
@@ -35,15 +34,14 @@ The daemon starts **every** platform with `"enabled": true` under `platforms` in
 {
   "platforms": {
     "feishu": { "enabled": true, "app_id": "...", "app_secret": "...", "require_pairing": true },
-    "telegram": { "enabled": true, "bot_token": "...", "require_pairing": true },
-    "qq": { "enabled": false, "app_id": "", "app_secret": "", "sandbox": false, "require_pairing": true }
+    "telegram": { "enabled": true, "bot_token": "...", "require_pairing": true }
   }
 }
 ```
 
-Legacy top-level `feishu` / `telegram` / `qq` keys are upgraded to `platforms.*` on load and written back — see [config.md](../config.md).
+Legacy top-level `feishu` / `telegram` keys are upgraded to `platforms.*` on load and written back — see [config.md](../config.md).
 
-Changing `enabled`, credentials, or `qq.sandbox` requires a **daemon restart**. Changing `require_pairing` alone applies live after saving config in the WebUI (no restart).
+Changing `enabled` or credentials requires a **daemon restart**. Changing `require_pairing` alone applies live after saving config in the WebUI (no restart).
 
 ## Shared gateway commands
 

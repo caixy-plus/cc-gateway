@@ -13,7 +13,7 @@ src/
 ├── core/                # agent, command, config, history, prompt, runtime, session
 ├── api/web/             # Axum HTTP + WebUI handlers
 ├── database.rs          # SQLite (crate alias `db`)
-├── platform/            # Feishu, Telegram, QQ
+├── platform/            # Feishu, Telegram
 ├── daemon/              # PID, engine, lifecycle
 ├── utils/               # env helpers + i18n
 ├── types.rs             # shared type re-exports
@@ -31,7 +31,7 @@ src/
 ## Daemon Lifecycle (`src/daemon/`)
 
 - **`daemon.rs`**: PID-file-based daemon management with triple singleton lock: port binding (configurable via `port`), `.daemon-starting.lock` for `start()` atomicity, and PID file `flock` held for daemon lifetime. `start()` spawns a detached child running `cc-gateway _daemon`. `stop()` sends SIGTERM (Unix) or `taskkill` (Windows). `run()` loads config, writes PID file, and starts `DaemonEngine`.
-- **`daemon/engine.rs`**: Core async engine. Starts all enabled `Platform` integrations (`feishu.enabled`, `telegram.enabled`, `qq.enabled`) concurrently, then waits for shutdown signal (SIGTERM/SIGINT). On shutdown, calls `platform.shutdown()` on each enabled platform to gracefully terminate all active chat sessions.
+- **`daemon/engine.rs`**: Core async engine. Starts all enabled `Platform` integrations (`feishu.enabled`, `telegram.enabled`) concurrently, then waits for shutdown signal (SIGTERM/SIGINT). On shutdown, calls `platform.shutdown()` on each enabled platform to gracefully terminate all active chat sessions.
 
 ## Agent Runtime (`src/core/agent/` + `src/core/runtime/`)
 
@@ -46,7 +46,7 @@ src/
 
 ## Command Routing (`src/core/command/` + `src/core/session/`)
 
-All inbound chat (Feishu / Telegram / QQ / WebUI message API) shares one pipeline:
+All inbound chat (Feishu / Telegram / WebUI message API) shares one pipeline:
 
 1. **`CommandRouter::route`** — parse text → `CommandAction` (gateway controls vs forward-to-agent).
 2. **`ChatCommandExecutor::execute`** — run side effects (session start/stop, `/cd`, `/models`, permissions, forward).
@@ -65,22 +65,21 @@ Entry points:
 
 ## Platform Layer (`src/platform/`)
 
-See **[Adding a New Chat Platform (Bot)](../CLAUDE.md#adding-a-new-chat-platform-bot)** for the full integration checklist. User-facing setup guides: `docs/bots/` (Feishu, Telegram, QQ — EN + zh-CN).
+See **[Adding a New Chat Platform (Bot)](../CLAUDE.md#adding-a-new-chat-platform-bot)** for the full integration checklist. User-facing setup guides: `docs/bots/` (Feishu, Telegram — EN + zh-CN).
 
 - **`platform.rs`**: Defines the `Platform` trait (`run()` and `shutdown()`). All platform integrations implement this trait so `DaemonEngine` is platform-agnostic.
 - **`platform/feishu.rs`**: WebSocket client for Feishu's pbbp2 protocol (protobuf frames). Inbound text uses shared `chat_flow::route_and_execute` → `ChatCommandOutcome` (cards for `/ll`, `ListDir`, permissions, etc.). Card callbacks with `cmd == "cd"` are handled in `feishu/ws.rs`. Each chat gets its own isolated agent subprocess.
 - **`platform/telegram.rs`**: Telegram Bot API integration using long-polling `getUpdates`. Shared command pipeline; `/ll` and `/agents` render as **inline keyboards**. Streams agent events back via `sendMessage`.
-- **`platform/qq.rs`**: QQ 开放平台官方机器人（OpenAPI v2 + Gateway WebSocket）。**仅 C2C 私聊**；`GROUP_AT_MESSAGE_CREATE` 回复 `qq.group_chat_unsupported`。频道 id：`u:{openid}`。`/ll` 等为纯文本。**入站附件**（C2C）经 `inbound_media` 转发。**MCP `send_file`**: `McpDeliveryTarget::Qq`（C2C 富媒体）。生产 API：`https://api.sgroup.qq.com`；`qq.sandbox: true` 使用沙箱域名。
 - **`platform/proto.rs`**: Protobuf frame codec for Feishu pbbp2 (METHOD_CONTROL / METHOD_DATA, SERVICE_IM / SERVICE_CARD).
 
 ### Platform Reference Docs
 
-Official vendor API / console links for building or debugging `src/platform/<name>/` (Feishu, Telegram, QQ), plus the **MCP `send_file` by platform** matrix → **[platform-reference.md](platform-reference.md)**. **When adding a chat platform you must update that file** (and mirror the links under **References** in `docs/bots/<platform>.md` + `.zh-CN.md`). End-user setup is `docs/bots/<platform>.md`, not this reference.
+Official vendor API / console links for building or debugging `src/platform/<name>/` (Feishu, Telegram), plus the **MCP `send_file` by platform** matrix → **[platform-reference.md](platform-reference.md)**. **When adding a chat platform you must update that file** (and mirror the links under **References** in `docs/bots/<platform>.md` + `.zh-CN.md`). End-user setup is `docs/bots/<platform>.md`, not this reference.
 
 ## Configuration (`src/core/config/`)
 
 - **`core/config/loader.rs`**: Loads `~/.cc-gateway/config.json` with `${VAR}` substitution; `upgrade_config_json` (flat `agent.<id>` → `agent.providers.<id>`, top-level platforms) + `validate_agent_profile_keys` + `normalize_profiles`; **persists** the file when legacy layout or missing registry provider entries were upgraded.
-- **`core/config/model.rs`**: `GatewayConfig` with `log`, `agent` (`default` + `providers` map), `platforms` (`feishu` / `telegram` / `qq` sections), plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
+- **`core/config/model.rs`**: `GatewayConfig` with `log`, `agent` (`default` + `providers` map), `platforms` (`feishu` / `telegram` sections), plus top-level fields like `port`, `default_dir`, `show_thinking`, `media_retention_days`.
 - **`core/config/wizard.rs`**: Interactive setup via `cc-gateway init` (also editable in WebUI Settings).
 
 ## Web Server (`src/api/web/`)
@@ -96,7 +95,7 @@ Official vendor API / console links for building or debugging `src/platform/<nam
 ## Session Management (`src/core/session/`)
 
 - **`core/session/channel_manager.rs`**: `ChannelManager` (`GLOBAL_CHANNEL_SESSIONS`) holds channels, agent sessions, and active runtimes (controller + router) in memory.
-- **`core/session/channel_model.rs`**: `ChannelSession`, `AgentSession`, `SessionSource` (`WebUI` / `Feishu` / `Telegram` / `QQ`).
+- **`core/session/channel_model.rs`**: `ChannelSession`, `AgentSession`, `SessionSource` (`WebUI` / `Feishu` / `Telegram`).
 - **Persistence**: Channels and agent sessions persist to SQLite (`src/database.rs`, crate alias `db`). On daemon restart, previously active agent subprocesses are gone; records remain for resume/history.
 
 ## History Recording

@@ -14,7 +14,7 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 |------|------|
 | `log` | 守护进程日志级别、路径、轮转 |
 | `agent` | `default` 默认 provider id + `providers` 映射（每个**已注册** id 一条：`claude`、`codex`、`cursor`、`opencode`、`kimi`、`gemini`、`qoder`、`pi` …） |
-| `platforms` | 聊天平台（`feishu`、`telegram`、`qq`）——**不要**再写在顶层 |
+| `platforms` | 聊天平台（`feishu`、`telegram`）——**不要**再写在顶层 |
 | `default_dir`、`show_thinking`、`media_retention_days`、`session_retention_per_channel` | 会话 / UI 默认项 |
 | `port`、`bind_address`、`allowed_ips`、`webui_token` | HTTP / WebUI |
 
@@ -81,13 +81,6 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
       "bot_token": "${TELEGRAM_BOT_TOKEN}",
       "proxy": "",
       "require_pairing": true
-    },
-    "qq": {
-      "enabled": false,
-      "app_id": "${QQ_APP_ID}",
-      "app_secret": "${QQ_APP_SECRET}",
-      "sandbox": false,
-      "require_pairing": true
     }
   },
   "default_dir": "~/Workspace",
@@ -129,7 +122,7 @@ cc-gateway 使用 JSON 配置文件，路径为 `~/.cc-gateway/config.json`。
 | `media_retention_days` | u64 | `30` | 媒体文件保留天数 |
 | `session_retention_per_channel` | u64 | `30` | 每频道保留的智能体会话数（10–100） |
 
-> **注意：** 守护进程会同时启动所有 `enabled: true` 的平台（飞书、Telegram、QQ 可任意组合）。
+> **注意：** 守护进程会同时启动所有 `enabled: true` 的平台（飞书、Telegram 可任意组合）。
 
 ### `agent`
 
@@ -155,7 +148,7 @@ CLI 可执行文件名**不在**此配置；由 agent 注册表解析（`claude`
 
 ### `platforms`
 
-以平台 id 为键（`feishu`、`telegram`、`qq` 等）。旧版顶层 `feishu` / `telegram` / `qq` 会在加载时自动迁入 `platforms`。WebUI **设置** 与 `GET /api/platforms` 按注册表字段 schema 渲染。
+以平台 id 为键（`feishu`、`telegram` 等）。旧版顶层 `feishu` / `telegram` 会在加载时自动迁入 `platforms`。WebUI **设置** 与 `GET /api/platforms` 按注册表字段 schema 渲染。
 
 #### `platforms.feishu`
 
@@ -179,18 +172,6 @@ CLI 可执行文件名**不在**此配置；由 agent 注册表解析（`claude`
 
 仅支持 **长轮询**（`getUpdates`）。**配置指南：** [bots/telegram.zh-CN.md](bots/telegram.zh-CN.md)
 
-#### `platforms.qq`
-
-| 字段 | 类型 | 默认值 | 说明 |
-|-------|------|---------|------|
-| `enabled` | bool | `false` | 启用 QQ 官方机器人 |
-| `app_id` | string | `"${QQ_APP_ID}"` | 机器人 AppID |
-| `app_secret` | string | `"${QQ_APP_SECRET}"` | 客户端密钥 |
-| `sandbox` | bool | `false` | `true` 使用沙箱 API |
-| `require_pairing` | bool | `true` | 新频道须 WebUI 配对 |
-
-使用 **WebSocket Gateway**（OpenAPI v2）。**配置指南：** [bots/qq.zh-CN.md](bots/qq.zh-CN.md)
-
 ### `default_dir`
 
 - 频道/会话的**初始**工作目录（`/ll` 在首次 `/cd` 前从此处列出子目录）。
@@ -200,7 +181,7 @@ CLI 可执行文件名**不在**此配置；由 agent 注册表解析（`claude`
 
 | 变更项 | 生效方式 |
 |--------|----------|
-| 各平台凭证、`enabled`、`qq.sandbox` | 需 **重启守护进程** |
+| 各平台凭证、`enabled` | 需 **重启守护进程** |
 | 各平台 `require_pairing` | WebUI 保存后 **立即生效** |
 | `port`、`bind_address`、`agent`、`log` 等 | 需 **重启守护进程** |
 
@@ -210,5 +191,4 @@ CLI 可执行文件名**不在**此配置；由 agent 注册表解析（`claude`
 |------|------|
 | 飞书 / Lark | [bots/feishu.zh-CN.md](bots/feishu.zh-CN.md) |
 | Telegram | [bots/telegram.zh-CN.md](bots/telegram.zh-CN.md) |
-| QQ | [bots/qq.zh-CN.md](bots/qq.zh-CN.md) |
 | 总览与配对 | [bots/README.zh-CN.md](bots/README.zh-CN.md) |

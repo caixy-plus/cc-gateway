@@ -805,6 +805,107 @@ async fn webui_create_session_treats_tilde_as_config_default_dir() -> Result<()>
 }
 
 #[tokio::test]
+async fn webui_create_session_uses_work_dir_basename_when_title_omitted() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("my-project");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: env.home().to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let (status, body) = handle_create_session(
+        State(state),
+        Json(CreateSessionRequest {
+            title: None,
+            work_dir: Some(work_dir.to_string_lossy().to_string()),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(body["session"]["title"].as_str().unwrap(), "my-project");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn webui_create_session_keeps_explicit_title() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("ignored-for-title");
+    std::fs::create_dir_all(&work_dir)?;
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let (status, body) = handle_create_session(
+        State(state),
+        Json(CreateSessionRequest {
+            title: Some("Custom Title".to_string()),
+            work_dir: Some(work_dir.to_string_lossy().to_string()),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(body["session"]["title"].as_str().unwrap(), "Custom Title");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn webui_create_session_truncates_long_explicit_title() -> Result<()> {
+    let env = TestEnv::new();
+    db::init_schema()?;
+    let work_dir = env.home().join("title-truncate");
+    std::fs::create_dir_all(&work_dir)?;
+    let long_title = "a".repeat(
+        crate::session::channel_model::MAX_AGENT_SESSION_TITLE_CHARS + 50,
+    );
+    let state = AppState {
+        agent_settings: env.fake_agent_profiles(),
+        show_thinking: false,
+        default_dir: work_dir.to_string_lossy().to_string(),
+        daemon_config_path: None,
+        allowed_ips: vec![],
+        webui_token: None,
+    };
+
+    let (status, body) = handle_create_session(
+        State(state),
+        Json(CreateSessionRequest {
+            title: Some(long_title),
+            work_dir: Some(work_dir.to_string_lossy().to_string()),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body)?;
+    let title = body["session"]["title"].as_str().unwrap();
+    assert!(title.ends_with("..."));
+    assert_eq!(
+        title.chars().count(),
+        crate::session::channel_model::MAX_AGENT_SESSION_TITLE_CHARS
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn webui_delete_session_rejects_active_session_without_stopping_it() -> Result<()> {
     let env = TestEnv::new();
     db::init_schema()?;

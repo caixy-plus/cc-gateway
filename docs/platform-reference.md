@@ -47,21 +47,6 @@ Also refresh [Adding a New Chat Platform](adding-chat-platform.md) (“Current p
 
 **cc-gateway:** HTTP long-polling only (no webhook in tree). User guide: [bots/telegram.md](bots/telegram.md).
 
-## QQ (`platform/qq/`)
-
-| Topic | URL |
-|-------|-----|
-| Developer portal (console) | https://q.qq.com/ |
-| API v2 wiki (home) | https://bot.q.qq.com/wiki/develop/api-v2/ |
-| WebSocket gateway (opcodes, Identify/Resume) | https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/reference.html |
-| Events / intents | https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html |
-| Get WSS URL (`GET /gateway` / `gateway/bot`) | https://bot.q.qq.com/wiki/develop/api-v2/openapi/wss/url_get.html |
-| Messages (send/receive) | https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/ |
-| Rich media (`send_file` / inbound) | https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/rich-media.html |
-| Access token (`getAppAccessToken`) | Implemented against `https://bots.qq.com/app/getAppAccessToken` (see `platform/qq/api.rs`) |
-
-**cc-gateway:** OpenAPI v2 WebSocket Gateway (`platform/qq/ws.rs`); **C2C chat only** (group @ → `qq.group_chat_unsupported`); C2C inbound attachments via `extract_inbound_attachments`. Production API `https://api.sgroup.qq.com`, sandbox `https://sandbox.api.sandbox.qq.com`. User guide: [bots/qq.md](bots/qq.md).
-
 ## MCP `send_file` by platform
 
 Agents can call the gateway MCP tool **`send_file`** (see `core/runtime/mcp_server.rs`) to push a local file into the **active chat**. This requires:
@@ -74,7 +59,6 @@ Agents can call the gateway MCP tool **`send_file`** (see `core/runtime/mcp_serv
 |----------|-----------------|-------|
 | **Feishu** | Yes | Images: `im/v1/images` (`image_type=message`) + `msg_type=image` with `image_key` (inline preview). Other files: `im/v1/files` + `msg_type=file`. Upload limits: images **10 MB**, files **30 MB** (Feishu API). |
 | **Telegram** | Yes | Images: [`sendPhoto`](https://core.telegram.org/bots/api#sendphoto) multipart `photo`. Other files: `sendDocument`. |
-| **QQ** | **Yes** (C2C only) | Rich media upload + `msg_type` 7. **Inline images:** `file_type=1`, **PNG/JPG only**. C2C: images, video, voice, generic files. **Group chat not supported** for messaging. |
 | **WebUI** | Yes | `McpDeliveryTarget::WebUi` — files land in chat via `GET /api/media/{id}`; user upload via `POST /api/sessions/{id}/upload` |
 | **CLI only** | N/A | No chat delivery target |
 

@@ -2,17 +2,17 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Gateway for controlling local agent CLIs (Claude Code, Codex, Cursor, Pi, OpenCode, Kimi, Gemini, Qoder, …) via **Feishu/Lark**, **Telegram**, **QQ**, and **WebUI**.
+Gateway for controlling local agent CLIs (Claude Code, Codex, Cursor, Pi, OpenCode, Kimi, Gemini, Qoder, …) via **Feishu/Lark**, **Telegram**, and **WebUI**.
 
 ## Features
 
 - **Remote control** — Use chat bots on your phone to drive agents running on your machine
-- **Multi-platform** — Feishu/Lark, Telegram, and QQ official bots; enable any combination
+- **Multi-platform** — Feishu/Lark and Telegram official bots; enable any combination
 - **Multi-provider** — Pluggable agent backends (`claude`, `codex`, `cursor`, `pi`, `opencode`, `kimi`, `gemini`, `qoder`, …); pick per chat with `/agents`
 - **Per-chat isolation** — Each chat/channel gets its own agent subprocess; messages never mix across chats
 - **Pairing** — Optional WebUI approval for new chats before they can use the bot (recommended)
 - **WebUI** — Browser dashboard for sessions, pairing, settings, and live events
-- **Directory tools** — `/ll` (Feishu card, Telegram inline keyboard, text list on QQ/WebUI)
+- **Directory tools** — `/ll` (Feishu card, Telegram inline keyboard, text list on WebUI)
 - **Daemon mode** — `start` / `stop` / `restart` / `log`; single instance via port binding
 
 ## Installation
@@ -60,7 +60,6 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
    |----------|--------|-------------|
    | Feishu / Lark | `platforms.feishu.enabled`, `app_id`, `app_secret` | [docs/bots/feishu.md](docs/bots/feishu.md) |
    | Telegram | `platforms.telegram.enabled`, `bot_token` | [docs/bots/telegram.md](docs/bots/telegram.md) |
-   | QQ | `platforms.qq.enabled`, `app_id`, `app_secret`, `sandbox` | [docs/bots/qq.md](docs/bots/qq.md) |
 
    Set `default_dir` to the workspace root remote users should browse (e.g. `~/Workspace`). Multiple platforms can run at once.
 
@@ -76,7 +75,7 @@ Or manually: `cargo build --release` (see [CLAUDE.md](CLAUDE.md) for WebUI embed
    cc-gateway webui
    ```
 
-4. **Chat from WebUI or a connected bot** — use `/agent` in the WebUI message box or in Feishu/Telegram/QQ after pairing.
+4. **Chat from WebUI or a connected bot** — use `/agent` in the WebUI message box or in Feishu/Telegram after pairing.
 
 5. **Stop when done**
 
@@ -115,7 +114,7 @@ Available in WebUI and connected bots (after pairing if enabled):
 | `/agents [provider]` | Set this channel's default agent |
 | `/agent-history [n]` | List recent sessions; resume by index |
 | `/pwd` | Show current working directory |
-| `/ll` | Pick directory (Feishu card / Telegram inline keyboard / text on QQ & WebUI) |
+| `/ll` | Pick directory (Feishu card / Telegram inline keyboard / text on WebUI) |
 | `/mkdir <name>` | Create a directory |
 | `/show-thinking` / `/hide-thinking` | Toggle Thinking output |
 | `/stop` / `/clear` / `/status` | Control active generation and session state (where supported) |
@@ -143,7 +142,6 @@ Install scripts print these links again at the end of setup.
 ```
 User (Feishu/Lark)  <--->  cc-gateway daemon  <--->  Agent CLIs (local)
 User (Telegram)     <--->  cc-gateway daemon  <--->  claude / cursor / pi / …
-User (QQ)           <--->  cc-gateway daemon
 User (WebUI)        <--->  cc-gateway daemon
 ```
 

@@ -119,3 +119,49 @@ impl AgentSession {
         }
     }
 }
+
+/// Maximum characters stored in `agent_sessions.title` (Unicode scalar values).
+pub(crate) const MAX_AGENT_SESSION_TITLE_CHARS: usize = 100;
+
+/// Trim and cap title length for safe SQLite persistence and UI display.
+pub(crate) fn truncate_agent_session_title(title: &str) -> String {
+    let trimmed = title.trim();
+    let len = trimmed.chars().count();
+    if len <= MAX_AGENT_SESSION_TITLE_CHARS {
+        return trimmed.to_string();
+    }
+    if MAX_AGENT_SESSION_TITLE_CHARS <= 3 {
+        return trimmed
+            .chars()
+            .take(MAX_AGENT_SESSION_TITLE_CHARS)
+            .collect();
+    }
+    let keep = MAX_AGENT_SESSION_TITLE_CHARS - 3;
+    format!("{}...", trimmed.chars().take(keep).collect::<String>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_agent_session_title_keeps_short_values() {
+        assert_eq!(truncate_agent_session_title("my-project"), "my-project");
+    }
+
+    #[test]
+    fn truncate_agent_session_title_caps_long_values_with_ellipsis() {
+        let long = "a".repeat(MAX_AGENT_SESSION_TITLE_CHARS + 50);
+        let truncated = truncate_agent_session_title(&long);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().count(), MAX_AGENT_SESSION_TITLE_CHARS);
+    }
+
+    #[test]
+    fn truncate_agent_session_title_respects_unicode_char_boundaries() {
+        let long = "目录".repeat(200);
+        let truncated = truncate_agent_session_title(&long);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().count(), MAX_AGENT_SESSION_TITLE_CHARS);
+    }
+}

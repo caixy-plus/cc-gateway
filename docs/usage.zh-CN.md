@@ -2,7 +2,7 @@
 
 ## WebUI 与聊天机器人
 
-通过守护进程 + WebUI 或已接入的平台（飞书、Telegram、QQ）与智能体对话。平台配置见 [bots/README.zh-CN.md](bots/README.zh-CN.md)。
+通过守护进程 + WebUI 或已接入的平台（飞书、Telegram）与智能体对话。平台配置见 [bots/README.zh-CN.md](bots/README.zh-CN.md)。
 
 ```sh
 cc-gateway init
@@ -10,7 +10,7 @@ cc-gateway start
 cc-gateway webui
 ```
 
-网关命令（`/agent`、`/cd`、`/ll` 等）在 WebUI 与各机器人聊天中可用。飞书 `/ll` 为交互卡片；Telegram `/ll` 与 `/agents` 为 **内联键盘**；QQ、WebUI 为文本列表。
+网关命令（`/agent`、`/cd`、`/ll` 等）在 WebUI 与各机器人聊天中可用。飞书 `/ll` 为交互卡片；Telegram `/ll` 与 `/agents` 为 **内联键盘**；WebUI 为文本列表。
 
 ### WebUI 收发文件
 
@@ -26,7 +26,7 @@ cc-gateway webui
 cc-gateway start
 ```
 
-将 cc-gateway 作为后台守护进程启动。守护进程会同时监听所有已启用平台的消息（飞书、Telegram、QQ 可同时运行）。
+将 cc-gateway 作为后台守护进程启动。守护进程会同时监听所有已启用平台的消息（飞书、Telegram 可同时运行）。
 
 ### 停止
 
@@ -82,17 +82,6 @@ cc-gateway log -n 500       # 显示最后 500 行
 3. 使用相同的网关命令
 
 每个聊天都有独立的智能体子进程。Telegram 仅使用长轮询 (`getUpdates`)。**`/ll`**、**`/agents`** 使用 **内联键盘**（非纯文本列表）。
-
-## QQ 机器人
-
-配置步骤：[bots/qq.zh-CN.md](bots/qq.zh-CN.md)。守护进程运行且 QQ 已配置后:
-
-1. **仅支持私聊（C2C）：** 直接与机器人对话。**群 @ 消息暂不支持**，机器人会回复不支持提示。
-2. 网关命令与 WebUI 相同（`/agent`、`/cd`、`/help` 等）。
-3. `/ll`、选智能体等为 **纯文本**（无卡片或内联键盘）。
-4. **入站附件**（C2C 图片/文件）在会话激活时会下载并转发给智能体。
-
-每个 QQ C2C 频道（`u:{openid}`）独立会话。修改 QQ 凭证或 `sandbox` 后需重启守护进程。
 
 ## 小贴士
 

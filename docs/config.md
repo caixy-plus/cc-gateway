@@ -14,7 +14,7 @@ Top-level layout:
 |---------|---------|
 | `log` | Daemon log level, path, rotation |
 | `agent` | `default` provider id + `providers` map (one object per **registered** id: `claude`, `codex`, `cursor`, `opencode`, `kimi`, `gemini`, `qoder`, `pi`, …) |
-| `platforms` | Bot integrations (`feishu`, `telegram`, `qq`) — **not** top-level keys |
+| `platforms` | Bot integrations (`feishu`, `telegram`) — **not** top-level keys |
 | `default_dir`, `show_thinking`, `media_retention_days`, `session_retention_per_channel` | Session / UI defaults |
 | `port`, `bind_address`, `allowed_ips`, `webui_token` | HTTP / WebUI |
 
@@ -81,13 +81,6 @@ Typical `~/.cc-gateway/config.json` after `init` or auto-migration:
       "bot_token": "${TELEGRAM_BOT_TOKEN}",
       "proxy": "",
       "require_pairing": true
-    },
-    "qq": {
-      "enabled": false,
-      "app_id": "${QQ_APP_ID}",
-      "app_secret": "${QQ_APP_SECRET}",
-      "sandbox": false,
-      "require_pairing": true
     }
   },
   "default_dir": "~/Workspace",
@@ -129,7 +122,7 @@ On **daemon / WebUI load**, cc-gateway upgrades legacy on-disk shapes (top-level
 | `media_retention_days` | u64 | `30` | Days to keep downloaded media |
 | `session_retention_per_channel` | u64 | `30` | Max agent sessions kept per channel (10–100) |
 
-> **Note:** The daemon starts **all platforms whose `enabled` flag is `true`** at once (Feishu, Telegram, QQ, or any combination).
+> **Note:** The daemon starts **all platforms whose `enabled` flag is `true`** at once (Feishu, Telegram, or any combination).
 
 ### `agent`
 
@@ -155,7 +148,7 @@ Override per session: `/agent [provider] <extra args>`.
 
 ### `platforms`
 
-Object keyed by platform id (`feishu`, `telegram`, `qq`, …). Legacy top-level `feishu` / `telegram` / `qq` keys are upgraded automatically on load. WebUI **Settings** and `GET /api/platforms` use the registry field schema for each integrated platform.
+Object keyed by platform id (`feishu`, `telegram`, …). Legacy top-level `feishu` / `telegram` keys are upgraded automatically on load. WebUI **Settings** and `GET /api/platforms` use the registry field schema for each integrated platform.
 
 #### `platforms.feishu`
 
@@ -179,18 +172,6 @@ Object keyed by platform id (`feishu`, `telegram`, `qq`, …). Legacy top-level 
 
 Uses **long-polling** (`getUpdates`) only. **Setup guide:** [bots/telegram.md](bots/telegram.md)
 
-#### `platforms.qq`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable QQ official bot |
-| `app_id` | string | `"${QQ_APP_ID}"` | QQ bot AppID |
-| `app_secret` | string | `"${QQ_APP_SECRET}"` | Client secret |
-| `sandbox` | bool | `false` | Use sandbox API hosts when `true` |
-| `require_pairing` | bool | `true` | Require WebUI approval for new channels |
-
-Uses **WebSocket Gateway** (OpenAPI v2). **Setup guide:** [bots/qq.md](bots/qq.md)
-
 ### `default_dir`
 
 - **Initial** working directory when a channel/session starts (also the starting point for `/ll` before any `/cd`).
@@ -200,7 +181,7 @@ Uses **WebSocket Gateway** (OpenAPI v2). **Setup guide:** [bots/qq.md](bots/qq.m
 
 | Change | Effect |
 |--------|--------|
-| `platforms.*` credentials, `enabled`, `qq.sandbox` | **Restart daemon** required |
+| `platforms.*` credentials, `enabled` | **Restart daemon** required |
 | `require_pairing` on any platform | Applied **live** when saved from WebUI |
 | `port`, `bind_address`, `agent`, `log`, … | **Restart daemon** required |
 
@@ -210,5 +191,4 @@ Uses **WebSocket Gateway** (OpenAPI v2). **Setup guide:** [bots/qq.md](bots/qq.m
 |----------|-------|
 | Feishu / Lark | [bots/feishu.md](bots/feishu.md) |
 | Telegram | [bots/telegram.md](bots/telegram.md) |
-| QQ | [bots/qq.md](bots/qq.md) |
 | Overview + pairing | [bots/README.md](bots/README.md) |

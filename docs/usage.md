@@ -2,7 +2,7 @@
 
 ## WebUI and chat bots
 
-Use the daemon plus WebUI or a connected platform (Feishu, Telegram, QQ) to talk to agents. See [docs/bots/README.md](bots/README.md) for platform setup.
+Use the daemon plus WebUI or a connected platform (Feishu, Telegram) to talk to agents. See [docs/bots/README.md](bots/README.md) for platform setup.
 
 ```sh
 cc-gateway init
@@ -10,7 +10,7 @@ cc-gateway start
 cc-gateway webui
 ```
 
-Gateway commands (`/agent`, `/cd`, `/ll`, …) work in WebUI and in bot chats. `/ll` is an interactive card on Feishu, **inline keyboard** buttons on Telegram, and a plain text list on QQ/WebUI.
+Gateway commands (`/agent`, `/cd`, `/ll`, …) work in WebUI and in bot chats. `/ll` is an interactive card on Feishu, **inline keyboard** buttons on Telegram, and a plain text list on WebUI.
 
 ### Files in WebUI
 
@@ -26,7 +26,7 @@ The daemon enforces a single instance by binding to a local port (`port` in conf
 cc-gateway start
 ```
 
-Starts cc-gateway as a background daemon. The daemon listens for messages from all enabled platforms (Feishu, Telegram, and QQ can run simultaneously).
+Starts cc-gateway as a background daemon. The daemon listens for messages from all enabled platforms (Feishu and Telegram can run simultaneously).
 
 ### Stop
 
@@ -82,17 +82,6 @@ Setup: [bots/telegram.md](bots/telegram.md). Once the daemon is running with Tel
 3. Use the same gateway commands as in WebUI
 
 Each chat gets its own isolated agent subprocess. Telegram uses long-polling (`getUpdates`) only. **`/ll`** and **`/agents`** use **inline keyboard** buttons (not plain text).
-
-## QQ Bot
-
-Setup: [bots/qq.md](bots/qq.md). Once the daemon is running with QQ configured:
-
-1. **Private (C2C) only:** DM the bot directly. **Group @ messages are not supported** — the bot replies with an unsupported notice.
-2. Use the same gateway commands (`/agent`, `/cd`, `/help`, …).
-3. `/ll` and agent selection are **plain text** (no cards or inline keyboards).
-4. **Inbound attachments** (C2C images/files) are downloaded and forwarded to the agent when a session is active.
-
-Each QQ C2C channel (`u:{openid}`) has its own isolated agent session. Restart the daemon after changing QQ credentials or `sandbox`.
 
 ## Tips
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cc-gateway is a Rust gateway that exposes local agent sessions to remote users via chat bot platforms (Feishu/Lark, Telegram, QQ) and WebUI. It spawns provider CLIs (e.g. `claude`, `codex-acp`, Cursor `agent acp`, `opencode acp`, `kimi acp`, `gemini --acp`, `qoderclicn --acp`), communicates over stdin/stdout, and bridges messages between the provider and external interfaces.
+cc-gateway is a Rust gateway that exposes local agent sessions to remote users via chat bot platforms (Feishu/Lark, Telegram) and WebUI. It spawns provider CLIs (e.g. `claude`, `codex-acp`, Cursor `agent acp`, `opencode acp`, `kimi acp`, `gemini --acp`, `qoderclicn --acp`), communicates over stdin/stdout, and bridges messages between the provider and external interfaces.
 
 ## Project Structure
 
@@ -64,7 +64,7 @@ Treat documentation as part of the feature: adding or materially changing an **a
 
 Full module-by-module reference (entry points, daemon lifecycle, agent runtime, command routing, platform layer, config, web server, session management, history, DB, provider session-id & resume) → **[docs/architecture.md](docs/architecture.md)**.
 
-Quick orientation: all inbound chat (Feishu / Telegram / QQ / WebUI) shares one pipeline — `CommandRouter::route` → `ChatCommandExecutor::execute` → per-channel presentation, entered via `core/session/chat_flow::route_and_execute`. Provider sessions dispatch through the `AgentBackend` trait (`core/agent/backend.rs`): Claude = stream-json, ACP providers via `acp_session.rs`, Pi = JSON-RPC.
+Quick orientation: all inbound chat (Feishu / Telegram / WebUI) shares one pipeline — `CommandRouter::route` → `ChatCommandExecutor::execute` → per-channel presentation, entered via `core/session/chat_flow::route_and_execute`. Provider sessions dispatch through the `AgentBackend` trait (`core/agent/backend.rs`): Claude = stream-json, ACP providers via `acp_session.rs`, Pi = JSON-RPC.
 
 ## Adding a New Agent Provider
 
@@ -72,7 +72,7 @@ Full checklist for wiring a new CLI/agent — integration styles (stream-json / 
 
 ## Adding a New Chat Platform (Bot)
 
-Full checklist for integrating a new chat bot — architecture, transport choice, backend steps **A–U**, platform-specific hooks, frontend (`../cc-gateway-webui`), config shape, init wizard, verification, naming — lives in **[docs/adding-chat-platform.md](docs/adding-chat-platform.md)**. Companion: [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md) (feature-parity matrix + A–E checklist) and [docs/platform-reference.md](docs/platform-reference.md) (vendor API links + MCP `send_file` matrix). Current platforms: **Feishu**, **Telegram**, **QQ**. Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) centralizes daemon spawn, status, APIs, pairing, and restart policy — still add typed config + `src/platform/<name>/` per checklist. Also complete § [User-facing documentation](#user-facing-documentation-keep-in-sync).
+Full checklist for integrating a new chat bot — architecture, transport choice, backend steps **A–U**, platform-specific hooks, frontend (`../cc-gateway-webui`), config shape, init wizard, verification, naming — lives in **[docs/adding-chat-platform.md](docs/adding-chat-platform.md)**. Companion: [docs/platform-integration-checklist.md](docs/platform-integration-checklist.md) (feature-parity matrix + A–E checklist) and [docs/platform-reference.md](docs/platform-reference.md) (vendor API links + MCP `send_file` matrix). Current platforms: **Feishu**, **Telegram**. Phase 1 **`platform_registry`** (`src/core/config/platform_registry.rs`) centralizes daemon spawn, status, APIs, pairing, and restart policy — still add typed config + `src/platform/<name>/` per checklist. Also complete § [User-facing documentation](#user-facing-documentation-keep-in-sync).
 
 ## Key Patterns
 
