@@ -2,6 +2,7 @@
 pub(crate) mod api;
 pub(crate) mod auth_middleware;
 pub(crate) mod cards;
+pub(crate) mod event_sink;
 pub(crate) mod inbound;
 pub(crate) mod interaction;
 pub(crate) mod media;
@@ -9,6 +10,7 @@ pub(crate) mod media;
 pub(crate) mod runtime;
 pub(crate) mod ws;
 
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,6 +20,7 @@ use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
+use tokio::task::AbortHandle;
 use tracing::warn;
 
 use crate::config::model::{AgentProfiles, FeishuConfig};
@@ -51,7 +54,12 @@ pub(crate) struct FeishuChannelRuntime {
     pub(crate) active_agent: Option<ActiveAgentRuntime>,
     pub(crate) receive_id_type: String,
     pub(crate) receive_id: String,
-    pub(crate) poll_lock: Arc<Mutex<()>>,
+    /// Background [`crate::runtime::session_poller::spawn_session_poller`] for the active agent.
+    pub(crate) poll_handle: Arc<Mutex<Option<AbortHandle>>>,
+    /// User message ids waiting for the next agent turn to finish (typing indicator).
+    pub(crate) pending_turns: Arc<Mutex<VecDeque<String>>>,
+    /// Latest message sender; used for permission cards on the persistent poller path.
+    pub(crate) sender_open_id: Arc<RwLock<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,7 +79,9 @@ impl FeishuChannelRuntime {
             active_agent: None,
             receive_id_type,
             receive_id,
-            poll_lock: Arc::new(Mutex::new(())),
+            poll_handle: Arc::new(Mutex::new(None)),
+            pending_turns: Arc::new(Mutex::new(VecDeque::new())),
+            sender_open_id: Arc::new(RwLock::new(String::new())),
         }
     }
 

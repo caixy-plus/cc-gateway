@@ -14,6 +14,7 @@ use crate::session::channel_command::{
 };
 use crate::session::channel_manager::GLOBAL_CHANNEL_SESSIONS;
 use crate::session::chat_flow;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Output buffering policy (Feishu)
@@ -21,6 +22,99 @@ use crate::session::chat_flow;
 
 const FEISHU_FLUSH_INTERVAL_MS: u64 = 200;
 const FEISHU_MAX_BUFFER_CHARS: usize = 2000;
+
+impl FeishuPlatform {
+    async fn forward_text_to_agent(
+        &self,
+        runtime: &crate::platform::feishu::FeishuChannelRuntime,
+        active: &crate::session::channel_manager::ActiveAgentRuntime,
+        text: &str,
+        sender_open_id: &str,
+    ) -> Result<()> {
+        *runtime.sender_open_id.write().await = sender_open_id.to_string();
+        GLOBAL_CHANNEL_SESSIONS
+            .send_to_controller(&active.controller, text)
+            .await?;
+        GLOBAL_CHANNEL_SESSIONS.touch_agent_session(&active.agent_session.id);
+        self.ensure_agent_poller(runtime, active).await;
+        Ok(())
+    }
+
+    async fn ensure_agent_poller(
+        &self,
+        runtime: &crate::platform::feishu::FeishuChannelRuntime,
+        active: &crate::session::channel_manager::ActiveAgentRuntime,
+    ) {
+        use crate::platform::feishu::event_sink::FeishuEventSink;
+        use crate::runtime::session_poller::{
+            spawn_session_poller, ensure_poller, SessionPollerConfig, TurnCompleteHook,
+        };
+
+        let platform = self.clone();
+        let receive_id_type = runtime.receive_id_type.clone();
+        let receive_id = runtime.receive_id.clone();
+        let chat_id_str = runtime.channel_session.channel_id.clone();
+        let sender_open_id = runtime.sender_open_id.clone();
+        let pending_turns = runtime.pending_turns.clone();
+        let controller = active.controller.clone();
+        let session_id = active.agent_session.id.clone();
+
+        let on_turn_complete: TurnCompleteHook = Arc::new(move |success| {
+            let platform = platform.clone();
+            let pending_turns = pending_turns.clone();
+            tokio::spawn(async move {
+                let message_id = pending_turns.lock().await.pop_front();
+                if let Some(message_id) = message_id {
+                    platform.on_processing_complete(&message_id, success).await;
+                }
+            });
+        });
+
+        ensure_poller(&runtime.poll_handle, || {
+            let receive_id_type = receive_id_type.clone();
+            let receive_id = receive_id.clone();
+            let chat_id_str = chat_id_str.clone();
+            let sender_open_id = sender_open_id.clone();
+            let platform = self.clone();
+            let on_turn_complete = on_turn_complete.clone();
+            spawn_session_poller(
+                controller,
+                SessionPollerConfig {
+                    log_label: "Feishu",
+                    session_id: session_id.clone(),
+                    flush_interval: std::time::Duration::from_millis(FEISHU_FLUSH_INTERVAL_MS),
+                    max_buffer_chars: FEISHU_MAX_BUFFER_CHARS,
+                },
+                move || FeishuEventSink {
+                    platform: platform.clone(),
+                    receive_id_type: receive_id_type.clone(),
+                    receive_id: receive_id.clone(),
+                    chat_id_str: chat_id_str.clone(),
+                    sender_open_id: sender_open_id.clone(),
+                },
+                Some(on_turn_complete),
+            )
+        })
+        .await;
+    }
+
+    async fn sync_agent_poller_after_context(
+        &self,
+        runtime: &crate::platform::feishu::FeishuChannelRuntime,
+        active: Option<&crate::session::channel_manager::ActiveAgentRuntime>,
+    ) {
+        use crate::runtime::session_poller::abort_poller;
+
+        if let Some(active) = active {
+            self.ensure_agent_poller(runtime, active).await;
+            return;
+        }
+        abort_poller(&runtime.poll_handle).await;
+        while let Some(message_id) = runtime.pending_turns.lock().await.pop_front() {
+            self.on_processing_complete(&message_id, true).await;
+        }
+    }
+}
 
 impl FeishuPlatform {
     /// Dispatch a decoded protobuf data-frame payload (JSON bytes).
@@ -287,9 +381,14 @@ impl FeishuPlatform {
                 }
             };
 
+        let active_after = context.active_agent.clone();
         if let Some(mut entry) = self.channels.get_mut(&chat_id) {
-            entry.active_agent = context.active_agent.clone();
+            entry.active_agent = active_after.clone();
             entry.set_work_dir(context.channel_work_dir.clone());
+        }
+        if let Some(entry) = self.channels.get(&chat_id) {
+            self.sync_agent_poller_after_context(&entry, active_after.as_ref())
+                .await;
         }
 
         match outcome {
@@ -409,141 +508,14 @@ impl FeishuPlatform {
                 self.on_processing_complete(&message_id, true).await;
             }
             ChatCommandOutcome::ForwardToAgent { active, text } => {
-                let _guard = runtime.poll_lock.lock().await;
-                struct FeishuEventSink<'a> {
-                    platform: &'a FeishuPlatform,
-                    receive_id_type: String,
-                    receive_id: String,
-                    chat_id_str: String,
-                    sender_open_id: String,
-                }
-
-                #[async_trait::async_trait]
-                impl<'a> crate::runtime::event_poller::EventPollSink for FeishuEventSink<'a> {
-                    async fn flush(&mut self, text: &str, is_done: bool) -> Result<()> {
-                        let _ = is_done;
-                        if text.trim().is_empty() {
-                            return Ok(());
-                        }
-                        self.platform
-                            .send_text_message(&self.receive_id_type, &self.receive_id, text)
-                            .await?;
-                        crate::web::state::broadcast_event(
-                            &self.chat_id_str,
-                            "feishu",
-                            &self.chat_id_str,
-                            "assistant",
-                            text,
-                        );
-                        Ok(())
-                    }
-
-                    async fn on_permission_request(
-                        &mut self,
-                        request_id: &str,
-                        tool_name: &str,
-                        input: Option<&serde_json::Value>,
-                    ) -> Result<()> {
-                        self.platform.pending_permissions.insert(
-                            request_id.to_string(),
-                            crate::platform::feishu::PendingPermissionContext {
-                                request_id: request_id.to_string(),
-                                tool_name: tool_name.to_string(),
-                                chat_id: self.chat_id_str.clone(),
-                                sender_open_id: self.sender_open_id.clone(),
-                                input: input.cloned(),
-                                created_at: std::time::Instant::now(),
-                            },
-                        );
-                        let card = crate::platform::feishu::cards::build_permission_card(
-                            request_id,
-                            tool_name,
-                            &self.chat_id_str,
-                        );
-                        self.platform
-                            .send_interactive_card(&self.receive_id_type, &self.receive_id, &card)
-                            .await?;
-                        crate::web::state::broadcast_event(
-                            &self.chat_id_str,
-                            "feishu",
-                            &self.chat_id_str,
-                            "system",
-                            &crate::t_fmt!(
-                                "feishu.permission_request_text",
-                                NAME = tool_name,
-                                ID = request_id
-                            ),
-                        );
-                        Ok(())
-                    }
-
-                    async fn on_confirm_request(
-                        &mut self,
-                        request_id: &str,
-                        prompt: &str,
-                        options: &[String],
-                    ) -> Result<()> {
-                        let card = crate::platform::feishu::cards::build_select_card(
-                            request_id,
-                            prompt,
-                            options,
-                            &self.chat_id_str,
-                        );
-                        self.platform
-                            .send_interactive_card(&self.receive_id_type, &self.receive_id, &card)
-                            .await?;
-                        Ok(())
-                    }
-
-                    async fn on_select_request(
-                        &mut self,
-                        request_id: &str,
-                        prompt: &str,
-                        options: &[String],
-                    ) -> Result<()> {
-                        let card = crate::platform::feishu::cards::build_select_card(
-                            request_id,
-                            prompt,
-                            options,
-                            &self.chat_id_str,
-                        );
-                        self.platform
-                            .send_interactive_card(&self.receive_id_type, &self.receive_id, &card)
-                            .await?;
-                        Ok(())
-                    }
-
-                    async fn on_question_request(
-                        &mut self,
-                        _request_id: &str,
-                        _questions: &[crate::runtime::controller::QuestionItem],
-                    ) -> Result<()> {
-                        Ok(())
-                    }
-                }
-
-                let sink = FeishuEventSink {
-                    platform: self,
-                    receive_id_type: receive_id_type.clone(),
-                    receive_id: receive_id.clone(),
-                    chat_id_str: chat_id.clone(),
-                    sender_open_id: msg.sender_open_id.clone(),
-                };
-                // Feishu: time-first flush (200ms), buffer max 2000 chars.
-                let mut sink = crate::runtime::event_poller::BufferedSink::new(
-                    sink,
-                    std::time::Duration::from_millis(FEISHU_FLUSH_INTERVAL_MS),
-                    FEISHU_MAX_BUFFER_CHARS,
-                );
-
-                match GLOBAL_CHANNEL_SESSIONS
-                    .send_and_poll_active_runtime_buffered(&active, &text, &mut sink)
+                runtime.pending_turns.lock().await.push_back(message_id.clone());
+                match self
+                    .forward_text_to_agent(&runtime, &active, &text, &msg.sender_open_id)
                     .await
                 {
-                    Ok(()) => {
-                        self.on_processing_complete(&message_id, true).await;
-                    }
+                    Ok(()) => {}
                     Err(e) => {
+                        runtime.pending_turns.lock().await.pop_back();
                         let _ = self
                             .send_text_message(
                                 &receive_id_type,
@@ -961,6 +933,9 @@ impl FeishuPlatform {
             if let Some(mut entry) = self.channels.get_mut(chat_id) {
                 entry.active_agent = Some(active.clone());
                 entry.set_work_dir(active.agent_session.work_dir.clone());
+            }
+            if let Some(entry) = self.channels.get(chat_id) {
+                self.ensure_agent_poller(&entry, active).await;
             }
         }
         self.deliver_agent_history_outcome(

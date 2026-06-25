@@ -12,11 +12,11 @@ use std::convert::Infallible;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
-use tracing::info;
 
 use crate::config::model::{AgentProfiles, AgentProvider};
 use crate::runtime::controller::AgentController;
-use crate::runtime::event_poller::{AgentEventPoller, EventPollSink};
+use crate::runtime::event_poller::EventPollSink;
+use crate::runtime::session_poller::{spawn_session_poller, SessionPollerConfig};
 use crate::session::channel_command::{
     ChatCommandContext, ChatCommandExecutor, ChatCommandOutcome,
 };
@@ -1043,51 +1043,22 @@ impl EventPollSink for WebUIEventSink {
 }
 
 /// Spawn a long-running poller task for a WebUI session.
-/// The task loops as long as the Claude session remains active,
-/// handling multiple user messages without re-spawning.
 fn spawn_webui_poller_task(
-    channel_id: String,
+    _channel_id: String,
     session_id: String,
     controller: std::sync::Arc<Mutex<AgentController>>,
 ) -> tokio::task::AbortHandle {
-    let handle = tokio::spawn(async move {
-        info!("[WebUI] Poller task started for session {}", session_id);
-        loop {
-            let poller = {
-                let ctrl = controller.lock().await;
-                if !ctrl.is_session_active().await {
-                    info!(
-                        "[WebUI] Session {} no longer active, poller exiting",
-                        session_id
-                    );
-                    break;
-                }
-                AgentEventPoller::from_controller(&ctrl)
-            };
-
-            let sink = WebUIEventSink {
-                session_id: session_id.clone(),
-            };
-            // WebUI: local/SSE, allow higher flush frequency.
-            let mut sink = crate::runtime::event_poller::BufferedSink::new(
-                sink,
-                std::time::Duration::from_millis(WEBUI_FLUSH_INTERVAL_MS),
-                WEBUI_MAX_BUFFER_CHARS,
-            );
-            if let Err(e) = poller.run_buffered(&mut sink).await {
-                tracing::warn!("[WebUI] Poller error for session {}: {}", session_id, e);
-            }
-
-            // After Done, check if session is still active (next message may arrive)
-            let still_active = {
-                let ctrl = controller.lock().await;
-                ctrl.is_session_active().await
-            };
-            if !still_active {
-                break;
-            }
-        }
-        info!("[WebUI] Poller task for channel {} ended", channel_id);
-    });
-    handle.abort_handle()
+    spawn_session_poller(
+        controller,
+        SessionPollerConfig {
+            log_label: "WebUI",
+            session_id: session_id.clone(),
+            flush_interval: std::time::Duration::from_millis(WEBUI_FLUSH_INTERVAL_MS),
+            max_buffer_chars: WEBUI_MAX_BUFFER_CHARS,
+        },
+        move || WebUIEventSink {
+            session_id: session_id.clone(),
+        },
+        None,
+    )
 }

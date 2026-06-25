@@ -6,9 +6,17 @@ use tracing::debug;
 
 use crate::runtime::controller::{AgentController, ControllerEvent};
 
-/// After `Done`, keep draining the event channel briefly so late ACP `session/update`
-/// chunks (Cursor/OpenCode ACP) are not dropped when the prompt RPC returns early.
-const LATE_EVENT_GRACE: Duration = Duration::from_millis(2000);
+/// After `Done`, keep reading until the event channel has been quiet for this long.
+/// Resets on every late chunk so trailing stream text is not dropped when the prompt
+/// RPC returns before the final stdout notification (ACP) or when chat platforms use
+/// one-shot polling (Feishu/Telegram) instead of WebUI's persistent poller loop.
+const POST_DONE_QUIET_PERIOD: Duration = Duration::from_millis(400);
+
+/// Upper bound for post-`Done` draining so a wedged channel cannot block forever.
+const POST_DONE_MAX_DRAIN: Duration = Duration::from_millis(5000);
+
+/// Back-compat alias for tests that override the post-Done drain cap.
+const LATE_EVENT_GRACE: Duration = POST_DONE_MAX_DRAIN;
 
 /// Last-resort guard: stop polling if the controller emits no events at all for this long.
 /// Provider-level watchdogs fire first (ACP prompt idle watchdog: 10 min), so this only
@@ -159,6 +167,11 @@ impl<T: EventPollSink + Send> BufferedSink<T> {
     #[cfg(test)]
     pub fn into_inner(self) -> T {
         self.inner
+    }
+
+    /// Flush any buffered assistant text for this turn (used at turn boundaries).
+    pub(crate) async fn finalize_turn(&mut self) -> Result<()> {
+        self.flush_buffer(true).await
     }
 
     async fn flush_buffer(&mut self, is_done: bool) -> Result<()> {
@@ -327,6 +340,11 @@ impl AgentEventPoller {
         }
     }
 
+    #[cfg(test)]
+    fn from_receiver(event_rx: std::sync::Arc<Mutex<mpsc::UnboundedReceiver<ControllerEvent>>>) -> Self {
+        Self { event_rx }
+    }
+
     /// Run the poll loop with time-based buffering.
     ///
     /// Guarantees that once any text is buffered, it will be delivered at least
@@ -362,6 +380,7 @@ impl AgentEventPoller {
                         Ok(ev) => ev,
                         Err(_) => {
                             if effective == silence_deadline {
+                                sink.finalize_turn().await?;
                                 sink.flush(
                                     &format!("Error: {}", crate::t!("agent.turn_stalled")),
                                     false,
@@ -380,6 +399,7 @@ impl AgentEventPoller {
                     match tokio::time::timeout_at(silence_deadline, rx.recv()).await {
                         Ok(ev) => ev,
                         Err(_) => {
+                            sink.finalize_turn().await?;
                             sink.flush(
                                 &format!("Error: {}", crate::t!("agent.turn_stalled")),
                                 false,
@@ -471,11 +491,15 @@ impl AgentEventPoller {
                     sink.flush(&format!("Error: {}", friendly), false).await?;
                 }
                 Some(ControllerEvent::Done) | None => {
-                    sink.flush_buffer(true).await?;
-                    sink.flush("", true).await?;
-                    self.drain_late_events(sink, &mut thinking_placeholder_sent, late_event_grace)
-                        .await?;
-                    sink.flush_buffer(true).await?;
+                    sink.finalize_turn().await?;
+                    self.drain_post_done_until_quiet(
+                        sink,
+                        &mut thinking_placeholder_sent,
+                        POST_DONE_QUIET_PERIOD,
+                        late_event_grace,
+                    )
+                    .await?;
+                    sink.finalize_turn().await?;
                     break;
                 }
             }
@@ -485,32 +509,46 @@ impl AgentEventPoller {
         Ok(())
     }
 
-    async fn drain_late_events<T: EventPollSink + Send>(
+    /// After the first `Done`, keep draining until the channel is quiet or `max_drain` elapses.
+    async fn drain_post_done_until_quiet<T: EventPollSink + Send>(
         &self,
         sink: &mut BufferedSink<T>,
         thinking_placeholder_sent: &mut bool,
-        late_event_grace: Duration,
+        quiet_period: Duration,
+        max_drain: Duration,
     ) -> Result<()> {
-        let deadline = std::time::Instant::now() + late_event_grace;
+        let drain_started = Instant::now();
+        let mut last_event_at = Instant::now();
         loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
+            if drain_started.elapsed() >= max_drain {
+                break;
+            }
+            let quiet_for = last_event_at.elapsed();
+            if quiet_for >= quiet_period {
+                break;
+            }
+            let wait = quiet_period.saturating_sub(quiet_for);
+            let remaining_cap = max_drain.saturating_sub(drain_started.elapsed());
+            let recv_timeout = wait.min(remaining_cap);
+            if recv_timeout.is_zero() {
                 break;
             }
             let late_event = {
                 let mut rx = self.event_rx.lock().await;
-                match tokio::time::timeout(remaining, rx.recv()).await {
+                match tokio::time::timeout(recv_timeout, rx.recv()).await {
                     Ok(ev) => ev,
-                    Err(_) => break,
+                    Err(_) => continue,
                 }
             };
             match late_event {
                 None => break,
                 Some(ControllerEvent::Done) => continue,
                 Some(ControllerEvent::Text(text)) => {
-                    sink.flush(&text, false).await?;
+                    last_event_at = Instant::now();
+                    sink.flush(&text, true).await?;
                 }
                 Some(ControllerEvent::Thinking(text)) => {
+                    last_event_at = Instant::now();
                     if text.trim().is_empty() {
                         if !*thinking_placeholder_sent {
                             sink.on_thinking(crate::t!("builtin.thinking_placeholder"))
@@ -527,11 +565,13 @@ impl AgentEventPoller {
                     }
                 }
                 Some(ControllerEvent::ToolUse(name, input)) => {
+                    last_event_at = Instant::now();
                     let input = truncate_with_ellipsis(&input, TOOL_MESSAGE_MAX_CHARS);
                     let text = format!("\n[Tool: {}]\n{}\n", name, input);
-                    sink.flush(&text, false).await?;
+                    sink.flush(&text, true).await?;
                 }
                 Some(ControllerEvent::ToolResult(text, is_error)) => {
+                    last_event_at = Instant::now();
                     let prefix = if is_error {
                         "Tool error"
                     } else {
@@ -539,11 +579,12 @@ impl AgentEventPoller {
                     };
                     let text = truncate_with_ellipsis(&text, TOOL_MESSAGE_MAX_CHARS);
                     let formatted = format!("\n[{}]\n{}\n", prefix, text);
-                    sink.flush(&formatted, false).await?;
+                    sink.flush(&formatted, true).await?;
                 }
                 Some(ControllerEvent::Error(text)) => {
+                    last_event_at = Instant::now();
                     let friendly = crate::command::agents::friendly_spawn_error(&text);
-                    sink.flush(&format!("Error: {}", friendly), false).await?;
+                    sink.flush(&format!("Error: {}", friendly), true).await?;
                 }
                 Some(
                     ControllerEvent::PermissionRequest { .. }
@@ -598,5 +639,118 @@ mod tests {
             .unwrap();
         assert_eq!(first, "段落一。\n\n");
         assert_eq!(buf.inner, "段落二继续");
+    }
+
+    #[tokio::test]
+    async fn post_done_drain_delivers_late_text_after_done() {
+        use std::sync::Arc;
+        use tokio::sync::mpsc;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let poller = AgentEventPoller::from_receiver(Arc::new(Mutex::new(rx)));
+
+        tokio::spawn(async move {
+            let _ = tx.send(ControllerEvent::Text("hello ".to_string()));
+            let _ = tx.send(ControllerEvent::Done);
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let _ = tx.send(ControllerEvent::Text("world".to_string()));
+        });
+
+        let policy = BufferPolicy {
+            flush_interval: Duration::from_millis(10),
+            max_chars: 10_000,
+            min_time_flush_chars: 10_000,
+        };
+        let mut sink = BufferedSink::with_policy(CollectSink::default(), policy);
+        poller
+            .run_buffered_with_grace(&mut sink, Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        let chunks = sink.into_inner().chunks.join("");
+        assert!(
+            chunks.contains("hello") && chunks.contains("world"),
+            "expected buffered + late tail in one turn, got: {chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_done_drain_waits_for_quiet_after_last_late_event() {
+        use std::sync::Arc;
+        use tokio::sync::mpsc;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let poller = AgentEventPoller::from_receiver(Arc::new(Mutex::new(rx)));
+
+        tokio::spawn(async move {
+            let _ = tx.send(ControllerEvent::Done);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let _ = tx.send(ControllerEvent::Text("a".to_string()));
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let _ = tx.send(ControllerEvent::Text("b".to_string()));
+        });
+
+        let policy = BufferPolicy {
+            flush_interval: Duration::from_millis(10),
+            max_chars: 10_000,
+            min_time_flush_chars: 0,
+        };
+        let mut sink = BufferedSink::with_policy(CollectSink::default(), policy);
+        poller
+            .run_buffered_with_grace(&mut sink, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let chunks = sink.into_inner().chunks.join("");
+        assert_eq!(chunks, "ab");
+    }
+
+    #[derive(Default)]
+    struct CollectSink {
+        chunks: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl EventPollSink for CollectSink {
+        async fn flush(&mut self, text: &str, _is_done: bool) -> Result<()> {
+            if !text.trim().is_empty() {
+                self.chunks.push(text.to_string());
+            }
+            Ok(())
+        }
+
+        async fn on_permission_request(
+            &mut self,
+            _request_id: &str,
+            _tool_name: &str,
+            _input: Option<&Value>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn on_confirm_request(
+            &mut self,
+            _request_id: &str,
+            _prompt: &str,
+            _options: &[String],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn on_select_request(
+            &mut self,
+            _request_id: &str,
+            _prompt: &str,
+            _options: &[String],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn on_question_request(
+            &mut self,
+            _request_id: &str,
+            _questions: &[crate::runtime::controller::QuestionItem],
+        ) -> Result<()> {
+            Ok(())
+        }
     }
 }

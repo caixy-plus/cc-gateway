@@ -57,6 +57,13 @@ use crate::runtime::mcp_server::McpContext;
 const PROMPT_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 const PROMPT_IDLE_TICK: Duration = Duration::from_secs(10);
 
+/// After `session/prompt` RPC completes, wait this long with no stdout activity before
+/// emitting `Done`, so a response line that precedes the final `session/update` on stdout
+/// does not end the gateway poll before trailing text is forwarded.
+const ACP_POST_PROMPT_QUIET: Duration = Duration::from_millis(300);
+const ACP_POST_PROMPT_QUIET_MAX: Duration = Duration::from_secs(2);
+const ACP_POST_PROMPT_QUIET_TICK: Duration = Duration::from_millis(25);
+
 /// Context passed to custom ACP notification callbacks of the provider.
 ///
 /// Contains the event sender, pending permission request maps, atomic indicators for turn completion and presence of content,
@@ -544,8 +551,27 @@ impl<H: AcpHooks> GenericAcpSession<H> {
         }
         tokio::spawn(async move {
             use std::sync::atomic::Ordering;
-            match await_prompt_response(rx, last_activity, PROMPT_IDLE_TIMEOUT, PROMPT_IDLE_TICK)
-                .await
+            async fn finish_acp_turn(
+                event_tx: &mpsc::UnboundedSender<AgentEvent>,
+                turn_done: &AtomicBool,
+                last_activity: &Arc<StdMutex<Instant>>,
+            ) {
+                await_activity_quiet(
+                    last_activity,
+                    ACP_POST_PROMPT_QUIET,
+                    ACP_POST_PROMPT_QUIET_MAX,
+                    ACP_POST_PROMPT_QUIET_TICK,
+                )
+                .await;
+                emit_acp_turn_done(event_tx, turn_done);
+            }
+            match await_prompt_response(
+                rx,
+                last_activity.clone(),
+                PROMPT_IDLE_TIMEOUT,
+                PROMPT_IDLE_TICK,
+            )
+            .await
             {
                 PromptWait::Completed(Ok(result)) => {
                     if !turn_had_content.load(Ordering::SeqCst) {
@@ -560,15 +586,15 @@ impl<H: AcpHooks> GenericAcpSession<H> {
                         );
                         let _ = event_tx.send(AgentEvent::Error(msg));
                     }
-                    emit_acp_turn_done(&event_tx, &turn_done);
+                    finish_acp_turn(&event_tx, &turn_done, &last_activity).await;
                 }
                 PromptWait::Completed(Err(err)) => {
                     let _ = event_tx.send(AgentEvent::Error(err));
-                    emit_acp_turn_done(&event_tx, &turn_done);
+                    finish_acp_turn(&event_tx, &turn_done, &last_activity).await;
                 }
                 PromptWait::ChannelClosed => {
                     let _ = event_tx.send(AgentEvent::Error(closed_err));
-                    emit_acp_turn_done(&event_tx, &turn_done);
+                    finish_acp_turn(&event_tx, &turn_done, &last_activity).await;
                 }
                 PromptWait::IdleTimeout => {
                     tracing::warn!(
@@ -578,7 +604,7 @@ impl<H: AcpHooks> GenericAcpSession<H> {
                     let _ = event_tx.send(AgentEvent::Error(
                         crate::t!("agent.acp_prompt_idle_timeout").to_string(),
                     ));
-                    emit_acp_turn_done(&event_tx, &turn_done);
+                    finish_acp_turn(&event_tx, &turn_done, &last_activity).await;
                 }
             }
         });
@@ -874,6 +900,26 @@ pub(crate) async fn await_prompt_response(
                 }
             }
         }
+    }
+}
+
+/// Wait until ACP stdout notifications have been idle for `quiet_period`.
+pub(crate) async fn await_activity_quiet(
+    last_activity: &Arc<StdMutex<Instant>>,
+    quiet_period: Duration,
+    max_wait: Duration,
+    tick: Duration,
+) {
+    let started = Instant::now();
+    loop {
+        let idle = last_activity
+            .lock()
+            .map(|at| at.elapsed())
+            .unwrap_or(Duration::ZERO);
+        if idle >= quiet_period || started.elapsed() >= max_wait {
+            return;
+        }
+        tokio::time::sleep(tick).await;
     }
 }
 
@@ -1311,6 +1357,34 @@ mod tests {
 
     fn activity_at_now() -> Arc<StdMutex<Instant>> {
         Arc::new(StdMutex::new(Instant::now()))
+    }
+
+    #[tokio::test]
+    async fn await_activity_quiet_waits_for_silence_after_late_traffic() {
+        let activity = activity_at_now();
+        let activity_refresher = activity.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            if let Ok(mut at) = activity_refresher.lock() {
+                *at = Instant::now();
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            if let Ok(mut at) = activity_refresher.lock() {
+                *at = Instant::now();
+            }
+        });
+        let started = Instant::now();
+        await_activity_quiet(
+            &activity,
+            Duration::from_millis(50),
+            Duration::from_secs(2),
+            Duration::from_millis(5),
+        )
+        .await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(100),
+            "should wait for quiet period after trailing stdout activity"
+        );
     }
 
     #[tokio::test]

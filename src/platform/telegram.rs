@@ -2,9 +2,11 @@ use anyhow::Result;
 use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::task::AbortHandle;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
@@ -72,8 +74,10 @@ const TG_REACTION_FAILURE: &str = "❌";
 pub(crate) struct TelegramChannelRuntime {
     pub(crate) channel_session: crate::session::channel_model::ChannelSession,
     pub(crate) active_agent: Option<ActiveAgentRuntime>,
-    /// Ensures only one poll loop runs per chat at a time.
-    poll_lock: Arc<Mutex<()>>,
+    /// Background [`crate::runtime::session_poller::spawn_session_poller`] for the active agent.
+    pub(crate) poll_handle: Arc<Mutex<Option<AbortHandle>>>,
+    /// User messages waiting for the next agent turn to finish (typing indicator).
+    pub(crate) pending_turns: Arc<Mutex<VecDeque<(i64, i64)>>>,
 }
 
 #[derive(Clone)]
@@ -114,7 +118,8 @@ impl TelegramChannelRuntime {
         Self {
             channel_session,
             active_agent: None,
-            poll_lock: Arc::new(Mutex::new(())),
+            poll_handle: Arc::new(Mutex::new(None)),
+            pending_turns: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -124,15 +129,15 @@ impl TelegramChannelRuntime {
     }
 }
 
-/// Telegram-specific sink for AgentEventPoller.
-struct TelegramEventSink<'a> {
-    platform: &'a TelegramPlatform,
+/// Telegram-specific sink for the persistent session poller.
+struct TelegramEventSink {
+    platform: TelegramPlatform,
     chat_id: i64,
     chat_id_str: String,
 }
 
 #[async_trait::async_trait]
-impl<'a> EventPollSink for TelegramEventSink<'a> {
+impl EventPollSink for TelegramEventSink {
     async fn flush(&mut self, text: &str, is_done: bool) -> Result<()> {
         let _ = is_done;
         if text.trim().is_empty() {
@@ -253,6 +258,91 @@ pub struct TelegramPlatform {
     callback_counter: Arc<AtomicU64>,
     /// Keys: `{chat_id}:{message_id}` for typing reactions added by this bot.
     pending_reactions: Arc<DashMap<String, ()>>,
+}
+
+impl TelegramPlatform {
+    async fn forward_text_to_agent(
+        &self,
+        runtime: &TelegramChannelRuntime,
+        active: &ActiveAgentRuntime,
+        text: &str,
+    ) -> Result<()> {
+        GLOBAL_CHANNEL_SESSIONS
+            .send_to_controller(&active.controller, text)
+            .await?;
+        GLOBAL_CHANNEL_SESSIONS.touch_agent_session(&active.agent_session.id);
+        self.ensure_agent_poller(runtime, active).await;
+        Ok(())
+    }
+
+    async fn ensure_agent_poller(&self, runtime: &TelegramChannelRuntime, active: &ActiveAgentRuntime) {
+        use crate::runtime::session_poller::{
+            ensure_poller, spawn_session_poller, SessionPollerConfig, TurnCompleteHook,
+        };
+
+        let chat_id = runtime
+            .channel_session
+            .channel_id
+            .parse::<i64>()
+            .unwrap_or(0);
+        let chat_id_str = runtime.channel_session.channel_id.clone();
+        let platform = self.clone();
+        let pending_turns = runtime.pending_turns.clone();
+        let controller = active.controller.clone();
+        let session_id = active.agent_session.id.clone();
+
+        let on_turn_complete: TurnCompleteHook = Arc::new(move |success| {
+            let platform = platform.clone();
+            let pending_turns = pending_turns.clone();
+            tokio::spawn(async move {
+                if let Some((chat_id, message_id)) = pending_turns.lock().await.pop_front() {
+                    platform
+                        .on_processing_complete(chat_id, message_id, success)
+                        .await;
+                }
+            });
+        });
+
+        ensure_poller(&runtime.poll_handle, || {
+            let platform = self.clone();
+            let chat_id_str = chat_id_str.clone();
+            let on_turn_complete = on_turn_complete.clone();
+            spawn_session_poller(
+                controller,
+                SessionPollerConfig {
+                    log_label: "Telegram",
+                    session_id: session_id.clone(),
+                    flush_interval: Duration::from_millis(TG_FLUSH_INTERVAL_MS),
+                    max_buffer_chars: TG_MAX_BUFFER_CHARS,
+                },
+                move || TelegramEventSink {
+                    platform: platform.clone(),
+                    chat_id,
+                    chat_id_str: chat_id_str.clone(),
+                },
+                Some(on_turn_complete),
+            )
+        })
+        .await;
+    }
+
+    async fn sync_agent_poller_after_context(
+        &self,
+        runtime: &TelegramChannelRuntime,
+        active: Option<&ActiveAgentRuntime>,
+    ) {
+        use crate::runtime::session_poller::abort_poller;
+
+        if let Some(active) = active {
+            self.ensure_agent_poller(runtime, active).await;
+            return;
+        }
+        abort_poller(&runtime.poll_handle).await;
+        while let Some((chat_id, message_id)) = runtime.pending_turns.lock().await.pop_front() {
+            self.on_processing_complete(chat_id, message_id, true)
+                .await;
+        }
+    }
 }
 
 impl TelegramPlatform {
@@ -834,9 +924,14 @@ impl TelegramPlatform {
         let outcome =
             chat_flow::route_and_execute(&router, &executor, &mut context, &content).await?;
 
+        let active_after = context.active_agent.clone();
         if let Some(mut rt) = self.channels.get_mut(&chat_id_str) {
-            rt.active_agent = context.active_agent.clone();
+            rt.active_agent = active_after.clone();
             rt.channel_session.work_dir = context.channel_work_dir.clone();
+        }
+        if let Some(rt) = self.channels.get(&chat_id_str) {
+            self.sync_agent_poller_after_context(&rt, active_after.as_ref())
+                .await;
         }
 
         match outcome {
@@ -913,26 +1008,24 @@ impl TelegramPlatform {
             ChatCommandOutcome::ForwardToAgent { active, text } => {
                 let user_message_id = msg.message_id;
                 self.on_processing_start(chat_id, user_message_id).await;
-                let poll_result = async {
-                    let _guard = runtime.poll_lock.lock().await;
-                    let sink = TelegramEventSink {
-                        platform: self,
+                runtime
+                    .pending_turns
+                    .lock()
+                    .await
+                    .push_back((chat_id, user_message_id));
+                if let Err(e) = self
+                    .forward_text_to_agent(&runtime, &active, &text)
+                    .await
+                {
+                    runtime.pending_turns.lock().await.pop_back();
+                    self.on_processing_complete(chat_id, user_message_id, false)
+                        .await;
+                    self.send_message(
                         chat_id,
-                        chat_id_str: chat_id_str.clone(),
-                    };
-                    let mut sink = crate::runtime::event_poller::BufferedSink::new(
-                        sink,
-                        std::time::Duration::from_millis(TG_FLUSH_INTERVAL_MS),
-                        TG_MAX_BUFFER_CHARS,
-                    );
-                    GLOBAL_CHANNEL_SESSIONS
-                        .send_and_poll_active_runtime_buffered(&active, &text, &mut sink)
-                        .await
+                        &crate::t_fmt!("feishu.error_generic", ERR = e),
+                    )
+                    .await?;
                 }
-                .await;
-                self.on_processing_complete(chat_id, user_message_id, poll_result.is_ok())
-                    .await;
-                poll_result?;
             }
         }
 
@@ -1207,6 +1300,7 @@ impl TelegramPlatform {
             drop(entry);
 
             if let Some(chat_id_i64) = runtime.shutdown_notice_chat_id() {
+                crate::runtime::session_poller::abort_poller(&runtime.poll_handle).await;
                 let _ = self
                     .send_message(chat_id_i64, crate::t!("telegram.shutdown_notice"))
                     .await;
@@ -1254,7 +1348,10 @@ impl TelegramPlatform {
             } => {
                 if let Some(mut rt) = self.channels.get_mut(chat_id_str) {
                     rt.channel_session.work_dir = active.agent_session.work_dir.clone();
-                    rt.active_agent = Some(active);
+                    rt.active_agent = Some(active.clone());
+                }
+                if let Some(rt) = self.channels.get(chat_id_str) {
+                    self.ensure_agent_poller(&rt, &active).await;
                 }
                 let _ = self.edit_message_text(chat_id, message_id, &message).await;
             }

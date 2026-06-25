@@ -498,6 +498,7 @@ impl FeishuPlatform {
             drop(entry);
 
             if let Some(target) = runtime.shutdown_notice_target() {
+                crate::runtime::session_poller::abort_poller(&runtime.poll_handle).await;
                 let _ = self
                     .send_text_message(
                         &target.receive_id_type,
